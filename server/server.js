@@ -141,6 +141,40 @@ app.post('/api/login', (req, res) => {
   );
 });
 
+// 修改密码
+app.post('/api/change-password', (req, res) => {
+  const { userId, oldPassword, newPassword } = req.body;
+  
+  if (!userId || !oldPassword || !newPassword) {
+    return res.status(400).json({ error: '请提供用户ID、旧密码和新密码' });
+  }
+  
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: '新密码至少需要6位' });
+  }
+  
+  db.get('SELECT * FROM users WHERE id = ?', [userId], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(401).json({ error: '用户不存在' });
+    
+    const isOldPasswordValid = bcrypt.compareSync(oldPassword, row.password);
+    if (!isOldPasswordValid) {
+      return res.status(401).json({ error: '旧密码错误' });
+    }
+    
+    const hashedPassword = bcrypt.hashSync(newPassword, 10);
+    
+    db.run(
+      'UPDATE users SET password = ? WHERE id = ?',
+      [hashedPassword, userId],
+      function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: '密码修改成功' });
+      }
+    );
+  });
+});
+
 // 获取用户所有数据
 app.get('/api/sync/:userId', (req, res) => {
   const { userId } = req.params;

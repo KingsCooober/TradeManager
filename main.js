@@ -9,6 +9,50 @@
 // <script src="charts.js"></script>
 // <script src="main.js"></script>
 
+// ===== 工具函数 =====
+
+// 防抖函数
+function debounce(func, wait) {
+  var timeout;
+  return function executedFunction(...args) {
+    var later = function() {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+// 自动保存函数（带防抖，500ms延迟）
+var autoSave = debounce(function() {
+  if (typeof save === 'function') {
+    save().then(function() {
+      console.log('本地保存完成');
+      
+      // 如果已登录，自动同步到服务器 SQLite 数据库
+      if (typeof syncModule !== 'undefined' && syncModule.isLoggedIn()) {
+        syncModule.syncToServer().then(function(success) {
+          if (success) {
+            console.log('已同步到服务器 SQLite 数据库');
+          } else {
+            console.warn('服务器同步失败，将在下次尝试');
+          }
+        }).catch(function(err) {
+          console.error('服务器同步失败:', err);
+        });
+      }
+    }).catch(function(err) {
+      console.error('本地保存失败:', err);
+    });
+  }
+}, 500);
+
+// 触发自动保存
+function triggerAutoSave() {
+  autoSave();
+}
+
 // ===== 统计数据更新 =====
 function updateStats() {
   var closed = trades.filter(function(t) {
@@ -125,10 +169,10 @@ function updateAll() {
 
   // 重新计算并更新
   calcPosition();
-  renderTable();
+  renderTableWithSelects();
   updateStats();
-  drawEquityCurve();
-  drawPositionPie();
+  if (typeof drawEquityCurve === 'function') drawEquityCurve();
+  if (typeof drawPositionPie === 'function') drawPositionPie();
 }
 
 // ===== 入金出金弹窗函数 =====
@@ -137,69 +181,23 @@ function updateAll() {
 function initModalDatePicker() {
   var today = getToday();
   
-  // 入金日期选择器
-  var depositPicker = document.getElementById('depositDatePicker');
-  if (depositPicker) {
-    depositPicker.innerHTML = createModalDateSelects('depositDate', today);
+  // 设置入金日期默认值
+  var depositDateInput = document.getElementById('depositDate');
+  if (depositDateInput) {
+    depositDateInput.value = today;
   }
   
-  // 出金日期选择器
-  var withdrawPicker = document.getElementById('withdrawDatePicker');
-  if (withdrawPicker) {
-    withdrawPicker.innerHTML = createModalDateSelects('withdrawDate', today);
+  // 设置出金日期默认值
+  var withdrawDateInput = document.getElementById('withdrawDate');
+  if (withdrawDateInput) {
+    withdrawDateInput.value = today;
   }
-}
-
-// 创建弹窗用日期选择器下拉
-function createModalDateSelects(baseId, currentValue) {
-  var td = currentValue || getToday();
-  var y = td.substring(0, 4);
-  var m = td.substring(5, 7);
-  var d = td.substring(8, 10);
-
-  var years = getYearRange();
-  var yearsHtml = years.map(function(year) {
-    return '<option value="' + year + '"' + (year === y ? ' selected' : '') + '>' + year + '年</option>';
-  }).join('');
-
-  var monthsHtml = '';
-  for (var i = 1; i <= 12; i++) {
-    var val = i < 10 ? '0' + i : i;
-    monthsHtml += '<option value="' + val + '"' + (i === parseInt(m) ? ' selected' : '') + '>' + i + '月</option>';
-  }
-
-  var daysHtml = '';
-  for (var i = 1; i <= 31; i++) {
-    var val = i < 10 ? '0' + i : i;
-    daysHtml += '<option value="' + val + '"' + (i === parseInt(d) ? ' selected' : '') + '>' + i + '日</option>';
-  }
-
-  return '<select id="' + baseId + '_year" class="date-select date-year" style="flex:1" onchange="syncModalDate(\'' + baseId + '\')">' + yearsHtml + '</select>' +
-    '<select id="' + baseId + '_month" class="date-select date-month" style="flex:1" onchange="syncModalDate(\'' + baseId + '\')">' + monthsHtml + '</select>' +
-    '<select id="' + baseId + '_day" class="date-select date-day" style="flex:1" onchange="syncModalDate(\'' + baseId + '\')">' + daysHtml + '</select>';
-}
-
-// 同步弹窗日期选择器到隐藏输入框
-function syncModalDate(baseId) {
-  var year = document.getElementById(baseId + '_year').value;
-  var month = document.getElementById(baseId + '_month').value;
-  var day = document.getElementById(baseId + '_day').value;
-  var dateValue = year + '-' + month + '-' + day;
-  document.getElementById(baseId).value = dateValue;
 }
 
 function showDepositModal() {
   document.getElementById('depositModal').style.display = 'flex';
   document.getElementById('depositAmount').value = '';
-  var today = getToday();
-  document.getElementById('depositDate').value = today;
-  // 更新下拉选择器
-  var yearSel = document.getElementById('depositDate_year');
-  var monthSel = document.getElementById('depositDate_month');
-  var daySel = document.getElementById('depositDate_day');
-  if (yearSel) yearSel.value = today.substring(0, 4);
-  if (monthSel) monthSel.value = today.substring(5, 7);
-  if (daySel) daySel.value = today.substring(8, 10);
+  document.getElementById('depositDate').value = getToday();
 }
 
 function closeDepositModal() {
@@ -216,6 +214,10 @@ function confirmDeposit() {
   addDeposit(amt, date).then(function() {
     updateAll();
     closeDepositModal();
+    // 自动保存到数据库（带防抖）
+    if (typeof triggerAutoSave === 'function') {
+      triggerAutoSave();
+    }
   }).catch(function(err) {
     console.error('入金失败:', err);
     alert('入金记录失败');
@@ -225,15 +227,7 @@ function confirmDeposit() {
 function showWithdrawModal() {
   document.getElementById('withdrawModal').style.display = 'flex';
   document.getElementById('withdrawAmount').value = '';
-  var today = getToday();
-  document.getElementById('withdrawDate').value = today;
-  // 更新下拉选择器
-  var yearSel = document.getElementById('withdrawDate_year');
-  var monthSel = document.getElementById('withdrawDate_month');
-  var daySel = document.getElementById('withdrawDate_day');
-  if (yearSel) yearSel.value = today.substring(0, 4);
-  if (monthSel) monthSel.value = today.substring(5, 7);
-  if (daySel) daySel.value = today.substring(8, 10);
+  document.getElementById('withdrawDate').value = getToday();
 }
 
 function closeWithdrawModal() {
@@ -250,6 +244,10 @@ function confirmWithdraw() {
   addWithdrawal(amt, date).then(function() {
     updateAll();
     closeWithdrawModal();
+    // 自动保存到数据库（带防抖）
+    if (typeof triggerAutoSave === 'function') {
+      triggerAutoSave();
+    }
   }).catch(function(err) {
     console.error('出金失败:', err);
     alert('出金记录失败');
@@ -456,12 +454,100 @@ function handleRegister() {
 }
 
 function handleLogout() {
+  // 关闭管理员面板（如果打开）
+  var adminPanel = document.getElementById('adminPanel');
+  if (adminPanel) adminPanel.style.display = 'none';
+  
   // 退出时先清空本地数据，回到未登录的空白状态
   clearLocalDataAndRefresh();
   syncModule.logout();
   syncModule.updateSyncUI();
   updateHeaderSyncUI();
   syncModule.showSyncStatus('已退出登录', 'info');
+}
+
+// ===== 修改密码功能 =====
+function openChangePasswordModal() {
+  var modal = document.getElementById('changePasswordModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeChangePasswordModal() {
+  var modal = document.getElementById('changePasswordModal');
+  if (modal) modal.style.display = 'none';
+  // 清空输入
+  document.getElementById('changePwdOld').value = '';
+  document.getElementById('changePwdNew').value = '';
+  document.getElementById('changePwdConfirm').value = '';
+}
+
+function handleChangePassword() {
+  const oldPassword = document.getElementById('changePwdOld').value;
+  const newPassword = document.getElementById('changePwdNew').value;
+  const confirmPassword = document.getElementById('changePwdConfirm').value;
+  
+  // 验证输入
+  if (!oldPassword || !newPassword || !confirmPassword) {
+    alert('请填写所有字段');
+    return;
+  }
+  
+  if (newPassword.length < 6) {
+    alert('新密码至少需要6位');
+    return;
+  }
+  
+  if (newPassword !== confirmPassword) {
+    alert('两次输入的新密码不一致');
+    return;
+  }
+  
+  if (!syncModule.isLoggedIn()) {
+    alert('请先登录');
+    return;
+  }
+  
+  const user = syncModule.getCurrentUser();
+  const serverUrl = syncModule.getServerUrl();
+  
+  console.log('[修改密码] 用户信息:', user);
+  console.log('[修改密码] 服务器地址:', serverUrl);
+  
+  fetch(serverUrl + '/api/change-password', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      userId: user.id,
+      oldPassword: oldPassword,
+      newPassword: newPassword
+    })
+  })
+  .then(res => {
+    console.log('[修改密码] HTTP状态码:', res.status);
+    return res.text();
+  })
+  .then(rawText => {
+    console.log('[修改密码] 原始响应:', rawText);
+    try {
+      const data = JSON.parse(rawText);
+      if (data.error) {
+        alert('修改失败: ' + data.error);
+      } else {
+        alert('密码修改成功，请重新登录');
+        closeChangePasswordModal();
+        handleLogout();
+      }
+    } catch (parseErr) {
+      console.error('解析响应失败:', parseErr);
+      alert('服务器响应格式错误: ' + rawText.substring(0, 100));
+    }
+  })
+  .catch(err => {
+    console.error('修改密码失败:', err);
+    alert('修改密码失败，请稍后重试\n错误: ' + err.message);
+  });
 }
 
 // 仅从服务器下载数据（用于登录/注册后，不上传）
@@ -794,6 +880,8 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAccountParams();
     loadFunds();
     initModalDatePicker();
+    initCalcDate();
+    initCalcSelectButtons();
     updateAll();
     console.log('应用初始化完成');
     
@@ -807,6 +895,8 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAccountParams();
     loadFunds();
     initModalDatePicker();
+    initCalcDate();
+    initCalcSelectButtons();
     updateAll();
   });
 });

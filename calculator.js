@@ -10,6 +10,309 @@ function onActualLotsInput() {
   calcPosition();
 }
 
+// 初始化开仓日期为当天
+function initCalcDate() {
+  var dateInput = document.getElementById('calcOpenDate');
+  if (dateInput) {
+    dateInput.value = getToday();
+  }
+}
+
+// 更新日期（可选扩展）
+function updateCalcDate() {
+  // 可以在这里添加日期验证等逻辑
+}
+
+// 设置买点类型
+function setBuyType(buyType) {
+  var hiddenInput = document.getElementById('calcBuyType');
+  if (hiddenInput) {
+    hiddenInput.value = buyType;
+  }
+  
+  // 更新下拉框显示值
+  var selectEl = document.getElementById('buyTypeSelect');
+  var valueEl = selectEl ? selectEl.querySelector('.custom-select-value') : null;
+  if (valueEl) {
+    // 根据值获取显示文本
+    var options = document.querySelectorAll('#buyTypeOptions li');
+    options.forEach(function(opt) {
+      if (opt.dataset.value === buyType) {
+        valueEl.textContent = opt.textContent;
+      }
+    });
+  }
+  
+  // 更新选项选中状态
+  var optionEls = document.querySelectorAll('#buyTypeOptions li');
+  optionEls.forEach(function(opt) {
+    opt.classList.remove('selected');
+    if (opt.dataset.value === buyType) {
+      opt.classList.add('selected');
+    }
+  });
+  
+  calcPosition();
+}
+
+// 初始化自定义下拉框
+function initCustomSelect() {
+  var selectEl = document.getElementById('buyTypeSelect');
+  var optionsEl = document.getElementById('buyTypeOptions');
+  var options = optionsEl ? optionsEl.querySelectorAll('li') : [];
+  var selectedIndex = 0;
+  
+  // 点击下拉框展开/收起
+  if (selectEl) {
+    selectEl.addEventListener('click', function(e) {
+      e.stopPropagation();
+      toggleSelect();
+    });
+  }
+  
+  // 点击选项
+  options.forEach(function(option, index) {
+    option.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var value = this.dataset.value;
+      setBuyType(value);
+      closeSelect();
+    });
+    
+    // 鼠标悬停时更新选中索引（用于键盘导航）
+    option.addEventListener('mouseenter', function() {
+      selectedIndex = index;
+    });
+  });
+  
+  // 键盘操作
+  if (selectEl) {
+    selectEl.addEventListener('keydown', function(e) {
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          selectedIndex = Math.min(selectedIndex + 1, options.length - 1);
+          updateSelectedHighlight();
+          // 如果下拉框未展开，自动展开
+          if (!optionsEl.classList.contains('open')) {
+            openSelect();
+          }
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          selectedIndex = Math.max(selectedIndex - 1, 0);
+          updateSelectedHighlight();
+          break;
+        case 'Enter':
+          e.preventDefault();
+          if (optionsEl.classList.contains('open')) {
+            // 确认选择
+            options[selectedIndex].click();
+          } else {
+            openSelect();
+          }
+          break;
+        case 'Escape':
+          e.preventDefault();
+          closeSelect();
+          break;
+      }
+    });
+  }
+  
+  // 点击外部关闭下拉框
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.custom-select-wrapper')) {
+      closeSelect();
+    }
+  });
+  
+  function toggleSelect() {
+    if (optionsEl.classList.contains('open')) {
+      closeSelect();
+    } else {
+      openSelect();
+    }
+  }
+  
+  function openSelect() {
+    selectEl.classList.add('open');
+    optionsEl.classList.add('open');
+    // 聚焦到下拉框以便键盘操作
+    selectEl.focus();
+  }
+  
+  function closeSelect() {
+    selectEl.classList.remove('open');
+    optionsEl.classList.remove('open');
+  }
+  
+  function updateSelectedHighlight() {
+    options.forEach(function(opt, index) {
+      opt.classList.remove('hover-highlight');
+      if (index === selectedIndex) {
+        opt.classList.add('hover-highlight');
+        // 滚动到可见区域
+        opt.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+}
+
+// 设置方向
+function setDirection(dir) {
+  var hiddenInput = document.getElementById('calcDir');
+  if (hiddenInput) {
+    hiddenInput.value = dir;
+  }
+  
+  // 更新下拉框显示值
+  var selectEl = document.getElementById('dirSelect');
+  var valueEl = selectEl ? selectEl.querySelector('.custom-select-value') : null;
+  if (valueEl) {
+    valueEl.textContent = dir;
+  }
+  
+  // 更新选项选中状态
+  var optionEls = document.querySelectorAll('#dirOptions li');
+  optionEls.forEach(function(opt) {
+    opt.classList.remove('selected');
+    if (opt.dataset.value === dir) {
+      opt.classList.add('selected');
+    }
+  });
+  
+  // 更新下拉框样式（多/空不同颜色）
+  if (selectEl) {
+    selectEl.classList.remove('dir-long', 'dir-short');
+    selectEl.classList.add(dir === '多' ? 'dir-long' : 'dir-short');
+  }
+  
+  calcPosition();
+}
+
+// 初始化计算器选择控件
+function initCalcSelectButtons() {
+  // 初始化买点类型默认选中
+  setBuyType('15分钟回踩');
+  
+  // 初始化方向默认选中
+  setDirection('多');
+  
+  // 初始化买点类型下拉框
+  initCustomSelect('buyType');
+  
+  // 初始化方向下拉框
+  initCustomSelect('dir');
+}
+
+// 初始化自定义下拉框（支持多个下拉框）
+function initCustomSelect(type) {
+  var selectId = type === 'dir' ? 'dirSelect' : 'buyTypeSelect';
+  var optionsId = type === 'dir' ? 'dirOptions' : 'buyTypeOptions';
+  
+  var selectEl = document.getElementById(selectId);
+  var optionsEl = document.getElementById(optionsId);
+  var options = optionsEl ? optionsEl.querySelectorAll('li') : [];
+  var selectedIndex = 0;
+  
+  // 点击下拉框展开/收起
+  if (selectEl) {
+    selectEl.addEventListener('click', function(e) {
+      e.stopPropagation();
+      toggleSelect();
+    });
+  }
+  
+  // 点击选项
+  options.forEach(function(option, index) {
+    option.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var value = this.dataset.value;
+      if (type === 'dir') {
+        setDirection(value);
+      } else {
+        setBuyType(value);
+      }
+      closeSelect();
+    });
+    
+    // 鼠标悬停时更新选中索引（用于键盘导航）
+    option.addEventListener('mouseenter', function() {
+      selectedIndex = index;
+    });
+  });
+  
+  // 键盘操作
+  if (selectEl) {
+    selectEl.addEventListener('keydown', function(e) {
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          selectedIndex = Math.min(selectedIndex + 1, options.length - 1);
+          updateSelectedHighlight();
+          if (!optionsEl.classList.contains('open')) {
+            openSelect();
+          }
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          selectedIndex = Math.max(selectedIndex - 1, 0);
+          updateSelectedHighlight();
+          break;
+        case 'Enter':
+          e.preventDefault();
+          if (optionsEl.classList.contains('open')) {
+            options[selectedIndex].click();
+          } else {
+            openSelect();
+          }
+          break;
+        case 'Escape':
+          e.preventDefault();
+          closeSelect();
+          break;
+      }
+    });
+  }
+  
+  // 点击外部关闭下拉框（只关闭当前类型的下拉框）
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('#' + selectId) && !e.target.closest('#' + optionsId)) {
+      closeSelect();
+    }
+  });
+  
+  function toggleSelect() {
+    if (optionsEl.classList.contains('open')) {
+      closeSelect();
+    } else {
+      openSelect();
+    }
+  }
+  
+  function openSelect() {
+    selectEl.classList.add('open');
+    optionsEl.classList.add('open');
+    selectEl.focus();
+  }
+  
+  function closeSelect() {
+    selectEl.classList.remove('open');
+    optionsEl.classList.remove('open');
+  }
+  
+  function updateSelectedHighlight() {
+    options.forEach(function(opt, index) {
+      opt.classList.remove('hover-highlight');
+      if (index === selectedIndex) {
+        opt.classList.add('hover-highlight');
+        opt.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+}
+
 function calcPosition() {
   var cap = getCurrentCapital(),
       rPct = getRiskPct();
@@ -124,7 +427,10 @@ function addTradeFromCalc() {
   var actualLots = actualLotsRaw !== '' ? parseInt(actualLotsRaw) : 200;
   var tp = dir === '多' ? entry + stopDist * targetR : entry - stopDist * targetR;
   var actualPos = Math.round(actualLots * entry * 100) / 100;
-  var today = getToday();
+  
+  // 获取用户选择的开仓日期，默认为当天
+  var calcOpenDateEl = g('calcOpenDate');
+  var openDate = calcOpenDateEl && calcOpenDateEl.value ? calcOpenDateEl.value : getToday();
   
   // 计算开仓手续费
   var feeRate = getFeeRate() / 100;
@@ -135,8 +441,8 @@ function addTradeFromCalc() {
 
   trades.push({
     id: Date.now(),
-    date: today,
-    exitDate: today,
+    date: openDate,
+    exitDate: openDate,
     openTime: new Date().toISOString(),
     symbol: calcSymbolEl ? calcSymbolEl.value || '' : '',
     buyType: calcBuyTypeEl ? calcBuyTypeEl.value || '15分钟回踩' : '15分钟回踩',
@@ -157,10 +463,13 @@ function addTradeFromCalc() {
     note: ''
   });
 
-  save().then(function() {
-    updateAll();
-    clearCalc();
-  });
+  updateAll();
+  clearCalc();
+  
+  // 自动保存到数据库（带防抖）
+  if (typeof triggerAutoSave === 'function') {
+    triggerAutoSave();
+  }
 }
 
 function clearCalc() {
@@ -171,5 +480,7 @@ function clearCalc() {
   document.getElementById('calcActualLots').value = '200';
   document.getElementById('calcRecoLots').value = '';
   document.getElementById('lotHint').textContent = '';
+  // 重置开仓日期为当天
+  document.getElementById('calcOpenDate').value = getToday();
   calcPosition();
 }

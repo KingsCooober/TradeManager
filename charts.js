@@ -28,7 +28,9 @@ function getThemeColors() {
     fillEnd: isDark ? 'rgba(44,44,46,0)' : 'rgba(255,255,255,0)',
     refLine: isDark ? '#48484a' : '#d1d1d6',
     refLabel: isDark ? '#98989d' : '#8e8e93',
-    blue: isDark ? '#0a84ff' : '#007aff'
+    blue: isDark ? '#0a84ff' : '#007aff',
+    subText: isDark ? '#8e8e93' : '#6e6e73',
+    accentBlue: isDark ? '#0a84ff' : '#4361ee'
   };
 }
 
@@ -192,6 +194,261 @@ function drawPositionPie() {
   cashItem.innerHTML = '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + tc.pieEmpty + ';border:1px solid ' + tc.pieEmptyStroke + ';flex-shrink:0"></span><span style="color:' + tc.legendMuted + '">空仓</span><span style="color:' + tc.legendMuted + ';font-weight:600">' + cashPct + '%</span><span style="color:' + tc.noDataSubText + ';font-size:10px">(' + CNY(Math.max(0, cap - totalPos)) + ')</span>';
   legend.appendChild(cashItem);
 }
+
+// ===== 收益曲线弹窗功能 =====
+function openEquityModal() {
+  var modal = document.getElementById('equityModal');
+  if (modal) {
+    modal.classList.add('show');
+    refreshEquityModal();
+  }
+}
+
+function closeEquityModal() {
+  var modal = document.getElementById('equityModal');
+  if (modal) {
+    modal.classList.remove('show');
+  }
+}
+
+function refreshEquityModal() {
+  drawEquityModalChart();
+  updateEquityStats();
+}
+
+function drawEquityModalChart() {
+  var canvas = document.getElementById('equityModalChart');
+  if (!canvas) return;
+
+  var container = canvas.parentElement;
+  var W = container.clientWidth - 48;
+  var H = Math.max(400, Math.floor(W * 0.55));
+  
+  canvas.width = W;
+  canvas.height = H;
+
+  var ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  
+  var init = getInitCapital();
+  var tc = getThemeColors();
+
+  ctx.clearRect(0, 0, W, H);
+
+  var padL = 70;
+  var padR = 25;
+  var padT = 30;
+  var padB = 50;
+  var cW = W - padL - padR;
+  var cH = H - padT - padB;
+
+  var timeRange = document.getElementById('equityTimeRange') ? document.getElementById('equityTimeRange').value : 'all';
+  var filteredTrades = getTradesByTimeRange(timeRange);
+
+  var points = [{ date: '起点', capital: init, pct: 0 }];
+  var run = init;
+
+  for (var i = 0; i < filteredTrades.length; i++) {
+    var t = filteredTrades[i];
+    if (t.status !== 'open' && t.pnl !== '' && !isNaN(parseFloat(t.pnl))) {
+      run += parseFloat(t.pnl);
+      points.push({ date: t.date, capital: run, pct: (run - init) / init * 100 });
+    }
+  }
+
+  if (points.length < 2) {
+    ctx.strokeStyle = tc.axisLine;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(padL, H / 2);
+    ctx.lineTo(W - padR, H / 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = tc.noDataSubText;
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('暂无足够数据', W / 2, H / 2 + 16);
+    return;
+  }
+
+  var minC = Math.min.apply(null, points.map(function(p) { return p.capital; }));
+  var maxC = Math.max.apply(null, points.map(function(p) { return p.capital; }));
+  var range = maxC - minC || maxC * 0.01;
+  var minY = minC - range * 0.15;
+  var maxY = maxC + range * 0.15;
+
+  function toX(idx) {
+    return padL + (idx / Math.max(1, points.length - 1)) * cW;
+  }
+  function toY(val) {
+    return padT + cH - ((val - minY) / (maxY - minY || 1)) * cH;
+  }
+
+  for (var g = 0; g <= 5; g++) {
+    var gy = padT + (g / 5) * cH;
+    ctx.strokeStyle = tc.gridLine;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(W - padR, gy);
+    ctx.stroke();
+    
+    var val = maxY - (g / 5) * (maxY - minY);
+    ctx.fillStyle = tc.subText;
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(formatNumber(val), padL - 8, gy + 5);
+  }
+
+  ctx.strokeStyle = tc.axisLine;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT);
+  ctx.lineTo(padL, H - padB);
+  ctx.lineTo(W - padR, H - padB);
+  ctx.stroke();
+
+  var stepX = Math.max(1, Math.floor(points.length / 6));
+  for (var i = 0; i < points.length; i += stepX) {
+    var px = toX(i);
+    ctx.fillStyle = tc.subText;
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(points[i].date, px, H - padB + 22);
+  }
+
+  var gradient = ctx.createLinearGradient(0, padT, 0, H - padB);
+  gradient.addColorStop(0, 'rgba(67, 97, 238, 0.3)');
+  gradient.addColorStop(1, 'rgba(67, 97, 238, 0)');
+  
+  ctx.beginPath();
+  ctx.moveTo(toX(0), toY(points[0].capital));
+  for (var i = 1; i < points.length; i++) {
+    ctx.lineTo(toX(i), toY(points[i].capital));
+  }
+  ctx.lineTo(toX(points.length - 1), H - padB);
+  ctx.lineTo(padL, H - padB);
+  ctx.closePath();
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(toX(0), toY(points[0].capital));
+  for (var i = 1; i < points.length; i++) {
+    ctx.lineTo(toX(i), toY(points[i].capital));
+  }
+  ctx.strokeStyle = tc.accentBlue;
+  ctx.lineWidth = 3.5;
+  ctx.stroke();
+
+  for (var i = 0; i < points.length; i++) {
+    var x = toX(i);
+    var y = toY(points[i].capital);
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = tc.accentBlue;
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+}
+
+function getTradesByTimeRange(range) {
+  var now = new Date();
+  var cutoffDate;
+  
+  switch (range) {
+    case '30days':
+      cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      break;
+    case '90days':
+      cutoffDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      break;
+    case '1year':
+      cutoffDate = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+      break;
+    default:
+      return trades;
+  }
+  
+  return trades.filter(function(t) {
+    if (!t.date) return false;
+    var tradeDate = new Date(t.date);
+    return tradeDate >= cutoffDate;
+  });
+}
+
+function updateEquityStats() {
+  var initCapital = getInitCapital();
+  var timeRange = document.getElementById('equityTimeRange') ? document.getElementById('equityTimeRange').value : 'all';
+  var filteredTrades = getTradesByTimeRange(timeRange);
+
+  var completedTrades = filteredTrades.filter(function(t) {
+    return t.status !== 'open' && t.pnl !== '' && !isNaN(parseFloat(t.pnl));
+  });
+
+  var totalPnl = completedTrades.reduce(function(sum, t) {
+    return sum + parseFloat(t.pnl);
+  }, 0);
+  
+  var currentCapital = initCapital + totalPnl;
+  var totalReturn = initCapital > 0 ? (totalPnl / initCapital * 100) : 0;
+
+  var winTrades = completedTrades.filter(function(t) {
+    return parseFloat(t.pnl) > 0;
+  });
+  var winRate = completedTrades.length > 0 ? (winTrades.length / completedTrades.length * 100) : 0;
+
+  var points = [{ capital: initCapital }];
+  var run = initCapital;
+  var maxCapital = initCapital;
+  var maxDrawdown = 0;
+  
+  for (var i = 0; i < completedTrades.length; i++) {
+    run += parseFloat(completedTrades[i].pnl);
+    points.push({ capital: run });
+    maxCapital = Math.max(maxCapital, run);
+    var drawdown = (maxCapital - run) / maxCapital * 100;
+    maxDrawdown = Math.max(maxDrawdown, drawdown);
+  }
+
+  var eqEl = function(id) { return document.getElementById(id); };
+  if (eqEl('equityInitCapital')) eqEl('equityInitCapital').textContent = formatNumber(initCapital);
+  if (eqEl('equityCurrentCapital')) eqEl('equityCurrentCapital').textContent = formatNumber(currentCapital);
+  if (eqEl('equityTotalPnl')) eqEl('equityTotalPnl').textContent = (totalPnl >= 0 ? '+' : '') + formatNumber(totalPnl);
+  if (eqEl('equityTotalReturn')) eqEl('equityTotalReturn').textContent = totalReturn.toFixed(2) + '%';
+  if (eqEl('equityMaxDrawdown')) eqEl('equityMaxDrawdown').textContent = maxDrawdown.toFixed(2) + '%';
+  if (eqEl('equityPeakCapital')) eqEl('equityPeakCapital').textContent = formatNumber(maxCapital);
+  if (eqEl('equityTotalTrades')) eqEl('equityTotalTrades').textContent = completedTrades.length;
+  if (eqEl('equityWinRate')) eqEl('equityWinRate').textContent = winRate.toFixed(1) + '%';
+}
+
+function initEquityModalEvents() {
+  var card = document.querySelector('.chart-card:has(#equityCurve)');
+  
+  if (card) {
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('button') || e.target.closest('input')) return;
+      openEquityModal();
+    });
+  }
+
+  var modal = document.getElementById('equityModal');
+  if (modal) {
+    modal.addEventListener('click', function(e) {
+      if (e.target === modal) {
+        closeEquityModal();
+      }
+    });
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  initEquityModalEvents();
+});
 
 // ===== 收益曲线 =====
 function drawEquityCurve() {
