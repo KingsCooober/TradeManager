@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>调试交易记录</title>
+</head>
+<body>
+<h1>调试交易记录显示</h1>
+
+<h2>LocalStorage 数据</h2>
+<pre id="lsOutput"></pre>
+
+<h2>IndexedDB 数据</h2>
+<pre id="dbOutput"></pre>
+
+<h2>页面元素检查</h2>
+<pre id="elOutput"></pre>
+
+<script>
+// 检查 LocalStorage
+var lsData = localStorage.getItem('trades_v4');
+document.getElementById('lsOutput').textContent = lsData ? JSON.stringify(JSON.parse(lsData), null, 2) : '无数据';
+
+// 检查 IndexedDB
+var dbOutput = document.getElementById('dbOutput');
+var request = indexedDB.open('positionManagerDB', 1);
+request.onsuccess = function(event) {
+  var db = event.target.result;
+  if (!db.objectStoreNames.contains('trades')) {
+    dbOutput.textContent = 'trades 对象存储不存在';
+    return;
+  }
+  var transaction = db.transaction(['trades'], 'readonly');
+  var store = transaction.objectStore('trades');
+  var getAll = store.getAll();
+  getAll.onsuccess = function() {
+    dbOutput.textContent = JSON.stringify(getAll.result, null, 2);
+  };
+  getAll.onerror = function() {
+    dbOutput.textContent = '读取失败: ' + getAll.error;
+  };
+};
+request.onerror = function() {
+  dbOutput.textContent = '数据库打开失败';
+};
+
+// 检查页面元素（在新窗口中打开 index.html 后运行）
+setTimeout(function() {
+  var elOutput = document.getElementById('elOutput');
+  var info = [];
+  
+  // 检查 trades 变量
+  info.push('trades 变量: ' + (typeof trades !== 'undefined' ? '存在，长度=' + trades.length : '不存在'));
+  
+  // 检查 tradeBody 元素
+  var tbody = document.getElementById('tradeBody');
+  info.push('tradeBody 元素: ' + (tbody ? '存在' : '不存在'));
+  if (tbody) {
+    info.push('tradeBody 内容长度: ' + tbody.innerHTML.length);
+    info.push('tradeBody 子元素数: ' + tbody.children.length);
+  }
+  
+  // 检查 renderTable 函数
+  info.push('renderTable 函数: ' + (typeof renderTable !== 'undefined' ? '存在' : '不存在'));
+  
+  elOutput.textContent = info.join('\n');
+}, 1000);
+</script>
+
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>测试删除功能</title>
+</head>
+<body>
+<h2>测试删除功能</h2>
+<div id="output"></div>
+
+<script>
+var trades = [
+  { id: 123, symbol: '测试1' },
+  { id: 'abc-def', symbol: '测试2' }
+];
+
+function log(msg) {
+  document.getElementById('output').innerHTML += '<p>' + msg + '</p>';
+}
+
+function deleteTrade(id) {
+  log('deleteTrade called with id: ' + JSON.stringify(id) + ' (type: ' + typeof id + ')');
+  var idStr = String(id);
+  log('Comparing with idStr: ' + idStr);
+  
+  trades.forEach(function(t) {
+    log('  Trade id: ' + JSON.stringify(t.id) + ' (type: ' + typeof t.id + '), String(t.id): ' + String(t.id) + ', match: ' + (String(t.id) === idStr));
+  });
+  
+  var before = trades.length;
+  trades = trades.filter(function(t) { return String(t.id) !== idStr; });
+  log('Deleted: ' + (before - trades.length) + ' items, remaining: ' + trades.length);
+}
+
+// 测试1: 数字ID
+log('<h3>测试1: 数字ID (123)</h3>');
+deleteTrade(123);
+
+// 重置
+trades = [
+  { id: 123, symbol: '测试1' },
+  { id: 'abc-def', symbol: '测试2' }
+];
+
+// 测试2: 字符串ID
+log('<h3>测试2: 字符串ID ("abc-def")</h3>');
+deleteTrade('abc-def');
+
+// 重置
+trades = [
+  { id: 123, symbol: '测试1' },
+  { id: 'abc-def', symbol: '测试2' }
+];
+
+// 测试3: 模拟HTML生成的onclick
+log('<h3>测试3: 模拟HTML生成的onclick</h3>');
+var testId = 'abc-def';
+var onclickCode = 'deleteTrade(' + JSON.stringify(testId) + ')';
+log('Generated onclick: ' + onclickCode);
+
+// 执行生成的代码
+try {
+  eval(onclickCode);
+} catch(e) {
+  log('Error: ' + e.message);
+}
+
+log('<h3>当前trades:</h3>');
+log(JSON.stringify(trades));
+</script>
+
+</body>
+</html>

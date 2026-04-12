@@ -3,7 +3,6 @@ node_modules/
 server/node_modules/
 
 # 数据库 & 运行时文件（每个部署环境独立）
-server/data.db
 *.db-journal
 *.db-wal
 *.db-shm
@@ -12,8 +11,6 @@ server/data.db
 ~$*.xlsx
 *.tmp
 .DS_Store
-debug_*.html
-test_*.html
 deploy.zip
 
 # 工作区配置（个人数据）

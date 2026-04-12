@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>数据调试</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 20px; background: #f5f5f5; }
+    .card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    h2 { margin-top: 0; }
+    pre { background: #f0f0f0; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>数据调试工具</h1>
+  
+  <div class="card">
+    <h2>LocalStorage 数据</h2>
+    <pre id="localStorageData">加载中...</pre>
+  </div>
+  
+  <div class="card">
+    <h2>IndexedDB 数据</h2>
+    <pre id="indexedDBData">加载中...</pre>
+  </div>
+  
+  <div class="card">
+    <h2>操作</h2>
+    <button onclick="refreshData()">刷新数据</button>
+    <button onclick="clearIndexedDB()">清空 IndexedDB</button>
+    <button onclick="restoreFromLocalStorage()">从 LocalStorage 恢复</button>
+  </div>
+
+  <script>
+    // 打开 IndexedDB
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open('TradeDB', 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains('trades')) {
+            db.createObjectStore('trades', { keyPath: 'id' });
+          }
+        };
+      });
+    }
+    
+    // 获取所有交易记录
+    async function getAllTrades() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(['trades'], 'readonly');
+        const store = transaction.objectStore('trades');
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
+    
+    // 刷新数据显示
+    async function refreshData() {
+      // LocalStorage
+      const localData = {
+        trades: JSON.parse(localStorage.getItem('trades_v4') || '[]'),
+        funds: JSON.parse(localStorage.getItem('funds_v1') || '{}')
+      };
+      document.getElementById('localStorageData').textContent = 
+        `交易记录数: ${localData.trades.length}\n` +
+        JSON.stringify(localData, null, 2);
+      
+      // IndexedDB
+      try {
+        const dbTrades = await getAllTrades();
+        document.getElementById('indexedDBData').textContent = 
+          `交易记录数: ${dbTrades.length}\n` +
+          JSON.stringify(dbTrades.slice(0, 3), null, 2) + 
+          (dbTrades.length > 3 ? '\n... 等 ' + dbTrades.length + ' 条记录' : '');
+      } catch (err) {
+        document.getElementById('indexedDBData').textContent = '错误: ' + err.message;
+      }
+    }
+    
+    // 清空 IndexedDB
+    async function clearIndexedDB() {
+      if (!confirm('确定要清空 IndexedDB 吗？')) return;
+      const db = await openDB();
+      const transaction = db.transaction(['trades'], 'readwrite');
+      const store = transaction.objectStore('trades');
+      await store.clear();
+      alert('IndexedDB 已清空');
+      refreshData();
+    }
+    
+    // 从 LocalStorage 恢复
+    async function restoreFromLocalStorage() {
+      const trades = JSON.parse(localStorage.getItem('trades_v4') || '[]');
+      if (trades.length === 0) {
+        alert('LocalStorage 中没有交易记录');
+        return;
+      }
+      
+      const db = await openDB();
+      const transaction = db.transaction(['trades'], 'readwrite');
+      const store = transaction.objectStore('trades');
+      
+      for (const trade of trades) {
+        await store.put(trade);
+      }
+      
+      alert(`已恢复 ${trades.length} 条交易记录到 IndexedDB`);
+      refreshData();
+    }
+    
+    // 页面加载时刷新
+    refreshData();
+  </script>
+</body>
+</html>

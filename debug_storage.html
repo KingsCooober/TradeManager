@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>存储调试工具</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f7;
+        }
+        h1 {
+            color: #1d1d1f;
+        }
+        .section {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h2 {
+            margin-top: 0;
+            color: #007aff;
+            font-size: 18px;
+        }
+        pre {
+            background: #1d1d1f;
+            color: #00e676;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        button {
+            background: #007aff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button.danger {
+            background: #ff3b30;
+        }
+        button.danger:hover {
+            background: #d32f2f;
+        }
+        .info {
+            color: #6e6e73;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        .count {
+            font-weight: bold;
+            color: #007aff;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔧 存储调试工具</h1>
+    
+    <div class="section">
+        <h2>操作按钮</h2>
+        <button onclick="refreshData()">🔄 刷新数据</button>
+        <button onclick="clearIndexedDB()" class="danger">🗑️ 清空 IndexedDB</button>
+        <button onclick="clearLocalStorage()" class="danger">🗑️ 清空 LocalStorage</button>
+        <button onclick="syncToLocalStorage()">💾 同步到 LocalStorage</button>
+        <button onclick="forceMigrate()">📥 强制迁移 LocalStorage → IndexedDB</button>
+    </div>
+
+    <div class="section">
+        <h2>IndexedDB 状态</h2>
+        <div class="info">数据库名称: PositionManagerDB | 版本: 1</div>
+        <div class="info">初始化状态: <span id="dbStatus">检查中...</span></div>
+        <div class="info">交易记录数: <span id="dbCount" class="count">-</span></div>
+        <pre id="dbData">加载中...</pre>
+    </div>
+
+    <div class="section">
+        <h2>LocalStorage 状态</h2>
+        <div class="info"> trades_v4 记录数: <span id="lsCount" class="count">-</span></div>
+        <div class="info">迁移标记 db_migrated_v1: <span id="lsMigrated">-</span></div>
+        <pre id="lsData">加载中...</pre>
+    </div>
+
+    <div class="section">
+        <h2>内存状态</h2>
+        <div class="info"> trades 数组长度: <span id="memoryCount" class="count">-</span></div>
+        <pre id="memoryData">加载中...</pre>
+    </div>
+
+    <script src="database.js"></script>
+    <script src="storage.js"></script>
+    <script>
+        // 覆盖 trades 变量以便观察
+        var originalTrades = [];
+        
+        function refreshData() {
+            // 检查 IndexedDB
+            if (typeof db !== 'undefined' && db) {
+                document.getElementById('dbStatus').textContent = '已连接';
+                document.getElementById('dbStatus').style.color = '#34c759';
+                
+                getAllTradesFromDB().then(function(trades) {
+                    document.getElementById('dbCount').textContent = trades.length;
+                    document.getElementById('dbData').textContent = JSON.stringify(trades, null, 2);
+                }).catch(function(err) {
+                    document.getElementById('dbData').textContent = '错误: ' + err.message;
+                });
+            } else {
+                document.getElementById('dbStatus').textContent = '未连接';
+                document.getElementById('dbStatus').style.color = '#ff3b30';
+                document.getElementById('dbData').textContent = '数据库未初始化';
+            }
+            
+            // 检查 LocalStorage
+            var lsData = localStorage.getItem('trades_v4');
+            var lsTrades = lsData ? JSON.parse(lsData) : [];
+            document.getElementById('lsCount').textContent = lsTrades.length;
+            document.getElementById('lsData').textContent = JSON.stringify(lsTrades, null, 2);
+            document.getElementById('lsMigrated').textContent = localStorage.getItem('db_migrated_v1') || '未设置';
+            
+            // 检查内存状态
+            document.getElementById('memoryCount').textContent = typeof trades !== 'undefined' ? trades.length : '未定义';
+            document.getElementById('memoryData').textContent = JSON.stringify(typeof trades !== 'undefined' ? trades : [], null, 2);
+        }
+        
+        function clearIndexedDB() {
+            if (!confirm('确定要清空 IndexedDB 中的所有交易记录吗？')) return;
+            clearAllTradesFromDB().then(function() {
+                alert('IndexedDB 已清空');
+                refreshData();
+            }).catch(function(err) {
+                alert('清空失败: ' + err.message);
+            });
+        }
+        
+        function clearLocalStorage() {
+            if (!confirm('确定要清空 LocalStorage 中的 trades_v4 吗？')) return;
+            localStorage.setItem('trades_v4', '[]');
+            localStorage.removeItem('db_migrated_v1');
+            alert('LocalStorage 已清空');
+            refreshData();
+        }
+        
+        function syncToLocalStorage() {
+            getAllTradesFromDB().then(function(trades) {
+                localStorage.setItem('trades_v4', JSON.stringify(trades));
+                alert('已同步 ' + trades.length + ' 笔记录到 LocalStorage');
+                refreshData();
+            });
+        }
+        
+        function forceMigrate() {
+            localStorage.removeItem('db_migrated_v1');
+            migrateFromLocalStorage().then(function(result) {
+                alert('迁移完成: ' + (result ? '已迁移数据' : '无需迁移'));
+                refreshData();
+            }).catch(function(err) {
+                alert('迁移失败: ' + err.message);
+            });
+        }
+        
+        // 初始化
+        initDatabase().then(function() {
+            refreshData();
+        }).catch(function() {
+            refreshData();
+        });
+    </script>
+</body>
+</html>

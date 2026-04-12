@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>调试删除按钮</title>
+<style>
+body { font-family: monospace; padding: 20px; }
+pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h2>调试删除按钮生成的HTML</h2>
+<div id="output"></div>
+
+<script>
+// 模拟一个交易记录
+var t = {
+  id: '550e8400-e29b-41d4-a716-446655440000',
+  symbol: '测试品种',
+  status: 'open',
+  followedPlan: '是',
+  note: '测试备注'
+};
+
+// 模拟 esc 函数
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// 生成删除按钮的HTML（使用 JSON.stringify）
+var htmlWithJSON = '<button onclick="deleteTrade(' + JSON.stringify(t.id) + ')">删除</button>';
+
+// 生成删除按钮的HTML（直接拼接）
+var htmlDirect = '<button onclick="deleteTrade(' + t.id + ')">删除</button>';
+
+// 显示结果
+document.getElementById('output').innerHTML = 
+  '<h3>交易ID:</h3><pre>' + JSON.stringify(t.id) + '</pre>' +
+  '<h3>使用 JSON.stringify(t.id):</h3><pre>' + esc(htmlWithJSON) + '</pre>' +
+  '<h3>直接拼接 t.id:</h3><pre>' + esc(htmlDirect) + '</pre>' +
+  '<h3>实际渲染效果 (JSON.stringify):</h3>' + htmlWithJSON +
+  '<h3>实际渲染效果 (直接拼接):</h3>' + htmlDirect;
+
+// 定义 deleteTrade 函数
+function deleteTrade(id) {
+  alert('deleteTrade called with: ' + JSON.stringify(id));
+}
+</script>
+
+</body>
+</html>
