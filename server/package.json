@@ -1,7 +1,7 @@
 {
-  "name": "position-manager-server",
+  "name": "trademanager-server",
   "version": "1.0.0",
-  "description": "仓位管理表后端服务器",
+  "description": "Trade Manager Backend Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
