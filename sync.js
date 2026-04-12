@@ -22,8 +22,8 @@
  */
 
 const SYNC_CONFIG = {
-  // 服务器地址 - 部署后修改为实际地址
-  serverUrl: localStorage.getItem('sync_server_url') || 'http://localhost:3000',
+  // 服务器地址 - 通过 Nginx 反向代理，使用相对路径
+  serverUrl: localStorage.getItem('sync_server_url') || '/',
   // 同步间隔（毫秒）
   syncInterval: 30000,
   // 自动同步开关（默认开启）
