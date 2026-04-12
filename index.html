@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>仓位管理 & 交易记录</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ===== 顶部导航栏 ===== -->
+<header class="app-header">
+  <div class="header-left">
+    <div class="app-logo">📊</div>
+    <div class="app-title">
+      <h1>仓位管理 & 交易记录</h1>
+      <span class="app-subtitle">Position Manager</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="syncStatus" class="sync-status-inline"></div>
+    <!-- 已登录状态：显示用户名、同步、自动同步、退出 -->
+    <div id="headerSyncLoggedIn" style="display:none;align-items:center;gap:8px">
+      <span class="header-user-badge">👤 <span id="headerUsername">-</span></span>
+      <button class="btn btn-sm btn-primary" onclick="handleFullSync()">🔄 同步</button>
+      <button class="btn btn-sm btn-ghost" onclick="handleToggleAutoSync()" id="headerBtnAutoSync">自动: 关</button>
+      <button class="btn btn-sm btn-ghost-danger" onclick="handleLogout()">退出</button>
+    </div>
+    <!-- 未登录状态：只显示登录按钮 -->
+    <div id="headerSyncLoggedOut" style="display:flex;align-items:center;gap:8px">
+      <button class="btn btn-sm btn-primary" onclick="openLoginModal()">☁️ 登录同步</button>
+    </div>
+    <div class="theme-divider"></div>
+    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="切换明暗主题">
+      <span class="theme-icon-light">🌙</span>
+      <span class="theme-icon-dark">☀️</span>
+    </button>
+  </div>
+</header>
+
+<!-- ===== 主内容区：左右分布 ===== -->
+<div class="main-layout">
+
+  <!-- ===== 左侧边栏 ===== -->
+  <aside class="left-sidebar">
+
+    <!-- 账户资金卡片 -->
+    <div class="card">
+      <div class="card-header"><h2>💰 账户资金</h2></div>
+      <div class="field"><label>初始资金</label><input type="number" id="initCapital" value="100000" step="1000" onchange="updateAll()"></div>
+      <div class="field"><label>当前总资金</label><span class="val glow-cyan" id="currentCapital">100,000.00 ￥</span></div>
+      <div class="field"><label>累计盈亏</label><span class="val" id="totalPnl">0.00 ￥</span></div>
+      <div class="field"><label>账户收益率</label><span class="val" id="totalReturn">0.00%</span></div>
+      <div class="field-divider"></div>
+      <div class="field"><label>累计入金</label><span class="val glow-green" id="totalDeposit">0.00 ￥</span></div>
+      <div class="field"><label>累计出金</label><span class="val glow-red" id="totalWithdraw">0.00 ￥</span></div>
+      <div class="field"><label>手续费率 (%)</label><input type="number" id="feeRate" value="0.1" step="0.01" min="0" max="10" onchange="updateAll()"></div>
+      <div class="field"><label>累计手续费</label><span class="val" id="totalFees">0.00 ￥</span></div>
+      <div class="card-actions">
+        <button class="btn btn-sm btn-deposit" onclick="showDepositModal()">＋ 入金</button>
+        <button class="btn btn-sm btn-withdraw" onclick="showWithdrawModal()">－ 出金</button>
+      </div>
+    </div>
+
+    <!-- 风险参数卡片 -->
+    <div class="card">
+      <div class="card-header"><h2>⚡ 风险参数</h2></div>
+      <div class="field"><label>单笔风险 R (%)</label><input type="number" id="riskPct" value="2" step="0.1" min="0.1" max="10" onchange="updateAll()"></div>
+      <div class="field"><label>单笔 R 金额</label><span class="val glow-cyan" id="rAmount">2,000.00 ￥</span></div>
+      <div class="field"><label>最大持仓风险 (R)</label><input type="number" id="maxRisk" value="3" step="1" min="1" onchange="updateAll()"></div>
+      <div class="field"><label>已使用风险金额</label><span class="val glow-yellow" id="usedRisk">0.00 ￥</span></div>
+      <div class="field"><label>剩余可用风险</label><span class="val glow-green" id="remainRisk">3,000.00 ￥</span></div>
+    </div>
+
+    <!-- 图表区域：持仓分布 + 收益曲线 -->
+    <div class="card chart-card">
+      <div class="card-header"><h2>🥧 持仓分布</h2></div>
+      <canvas id="positionPie"></canvas>
+      <div id="pieLegend" style="display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px;font-size:11px"></div>
+    </div>
+
+    <div class="card chart-card">
+      <div class="card-header"><h2>📉 收益曲线</h2></div>
+      <canvas id="equityCurve"></canvas>
+      <div class="drawdown-stats">
+        <div class="drawdown-row">
+          <div class="drawdown-item">
+            <div class="s-label">最大回撤</div>
+            <div class="s-val" id="maxDrawdownPct">-</div>
+          </div>
+          <div class="drawdown-item">
+            <div class="s-label">最大回撤金额</div>
+            <div class="s-val" id="maxDrawdownAmt">-</div>
+          </div>
+        </div>
+        <div class="drawdown-row">
+          <div class="drawdown-item">
+            <div class="s-label">峰值资金</div>
+            <div class="s-val glow-cyan" id="peakCapital">-</div>
+          </div>
+          <div class="drawdown-item">
+            <div class="s-label">谷值资金</div>
+            <div class="s-val" id="valleyCapital">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ===== 右侧主内容 ===== -->
+  <main class="right-main">
+
+    <!-- 开仓仓位计算器 -->
+    <div class="card calc-card">
+      <div class="card-header"><h2>🧮 开仓仓位计算器</h2></div>
+
+      <div class="calc-inputs">
+        <div class="calc-field wide"><label>品种 / 标的</label><input type="text" id="calcSymbol" placeholder="BTC / A股 / 指数"></div>
+        <div class="calc-field">
+          <label>买点类型</label>
+          <select id="calcBuyType">
+            <option value="15分钟回踩">15分钟回踩</option>
+            <option value="日线回踩">日线回踩</option>
+            <option value="大阳不破">大阳不破</option>
+          </select>
+        </div>
+        <div class="calc-field narrow">
+          <label>方向</label>
+          <select id="calcDir"><option value="多">多</option><option value="空">空</option></select>
+        </div>
+        <div class="calc-field"><label>入场价格</label><input type="number" id="calcEntry" placeholder="0.00" step="any" oninput="calcPosition()"></div>
+        <div class="calc-field"><label>止损价格</label><input type="number" id="calcStop" placeholder="0.00" step="any" oninput="calcPosition()"></div>
+        <div class="calc-field"><label>目标止盈 R 倍数</label><input type="number" id="calcTargetR" placeholder="如 2" step="0.5" min="0.5" value="2" oninput="calcPosition()"></div>
+        <div class="calc-field"><label>推荐买入手数</label><input type="text" id="calcRecoLots" class="calc-readonly" readonly placeholder="—"></div>
+        <div class="calc-field"><label>实际买入手数</label><input type="number" id="calcActualLots" value="200" step="100" min="0" oninput="onActualLotsInput()"></div>
+      </div>
+      <p class="calc-hint">止损距离 = 1R，目标盈利 = 填入的 R 倍数 × 单笔 R 金额</p>
+      <p id="lotHint" class="lot-hint"></p>
+
+      <!-- 计算结果 -->
+      <div class="calc-results">
+        <div class="result-box">
+          <div class="r-label">单笔 R 金额</div>
+          <div class="r-val glow-cyan" id="res_R">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label" style="color:var(--color-green)">止损距离 %</div>
+          <div class="r-val" style="color:var(--color-green)" id="res_stopPct">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label" style="color:var(--color-red)">止盈距离 %</div>
+          <div class="r-val" style="color:var(--color-red)" id="res_tpDist">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label" style="color:var(--color-red)">止盈目标价</div>
+          <div class="r-val" style="color:var(--color-red)" id="res_tp">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label" style="color:var(--color-blue)">平保价格</div>
+          <div class="r-val" style="color:var(--color-blue)" id="res_breakeven">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label">建议仓位金额</div>
+          <div class="r-val glow-yellow" id="res_posSize">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label" style="color:var(--color-orange)">推荐买入手数</div>
+          <div class="r-val" style="color:var(--color-orange)" id="res_recoLots">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label">实际可能止损额</div>
+          <div class="r-val glow-yellow" id="res_actualLots">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label">实际买入金额</div>
+          <div class="r-val glow-yellow" id="res_actualPos">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label" style="color:var(--color-red)">实际可能止损额</div>
+          <div class="r-val" style="color:var(--color-red)" id="res_actualRisk">-</div>
+        </div>
+        <div class="result-box">
+          <div class="r-label">仓位占总资金 %</div>
+          <div class="r-val" id="res_posPct">-</div>
+        </div>
+      </div>
+
+      <div class="calc-actions">
+        <button class="btn btn-primary" onclick="addTradeFromCalc()">＋ 添加到交易记录</button>
+        <button class="btn btn-ghost" onclick="clearCalc()">清空</button>
+      </div>
+    </div>
+
+    <!-- 交易记录 -->
+    <div class="card trade-card">
+
+      <!-- 工具栏 + 统计 -->
+      <div class="trade-toolbar">
+        <h2 class="trade-title">📋 交易记录</h2>
+        <div class="toolbar-stats">
+          <span class="toolbar-stat">总交易: <b id="s_total">0</b></span>
+          <span class="toolbar-stat">盈: <b id="s_wins" style="color:var(--color-red)">0</b></span>
+          <span class="toolbar-stat">亏: <b id="s_losses" style="color:var(--color-green)">0</b></span>
+          <span class="toolbar-stat">胜率: <b id="s_winrate">-</b></span>
+          <span class="toolbar-stat">平均盈亏比: <b id="s_avgrr">-</b></span>
+          <span class="toolbar-stat">期望值: <b id="s_ev">-</b></span>
+          <span class="toolbar-stat">最大连亏: <b id="s_maxdd">0</b></span>
+          <span class="toolbar-stat">累计 R: <b id="s_totalR">-</b></span>
+        </div>
+        <div class="toolbar-actions">
+          <button class="btn btn-sm btn-danger" onclick="clearAll()">清空记录</button>
+          <button class="btn btn-sm btn-ghost" onclick="exportCSV()">导出 CSV</button>
+          <button class="btn btn-sm btn-ghost" onclick="exportData()">导出 JSON</button>
+          <button class="btn btn-sm btn-ghost" onclick="document.getElementById('importFile').click()">导入 JSON</button>
+          <input type="file" id="importFile" accept=".json" style="display:none" onchange="importFromFile(event)">
+        </div>
+      </div>
+
+      <!-- 交易表格 -->
+      <div class="table-wrap">
+        <table id="tradeTable">
+          <thead>
+            <tr>
+              <th>#</th><th>开仓日期</th><th>品种</th><th>买点类型</th><th>方向</th>
+              <th>入场价</th><th>止损价</th><th>止盈价</th>
+              <th>止盈%</th><th>仓位金额</th><th>风险R</th>
+              <th>出场价</th><th>出场日期</th><th>盈亏%</th><th>盈亏金额</th><th>盈亏R</th>
+              <th>持仓天数</th><th>状态</th><th>是否按计划执行</th><th>备注</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="tradeBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ===== 入金弹窗 ===== -->
+<div id="depositModal" class="modal-overlay">
+  <div class="modal-content">
+    <h3 style="color:var(--color-green)">入金记录</h3>
+    <div class="modal-field">
+      <label>金额（元）</label>
+      <input type="number" id="depositAmount" placeholder="请输入金额">
+    </div>
+    <div class="modal-field">
+      <label>日期</label>
+      <div id="depositDatePicker" class="date-picker-inline"></div>
+      <input type="date" id="depositDate" style="display:none">
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-success" style="flex:1" onclick="confirmDeposit()">确认</button>
+      <button class="btn btn-gray" style="flex:1" onclick="closeDepositModal()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 出金弹窗 ===== -->
+<div id="withdrawModal" class="modal-overlay">
+  <div class="modal-content">
+    <h3 style="color:var(--color-blue)">出金记录</h3>
+    <div class="modal-field">
+      <label>金额（元）</label>
+      <input type="number" id="withdrawAmount" placeholder="请输入金额">
+    </div>
+    <div class="modal-field">
+      <label>日期</label>
+      <div id="withdrawDatePicker" class="date-picker-inline"></div>
+      <input type="date" id="withdrawDate" style="display:none">
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-danger" style="flex:1" onclick="confirmWithdraw()">确认</button>
+      <button class="btn btn-gray" style="flex:1" onclick="closeWithdrawModal()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 登录同步弹窗 ===== -->
+<div id="loginModal" class="modal-overlay">
+  <div class="modal-content">
+    <h3 style="color:var(--color-blue)">☁️ 登录 / 注册</h3>
+    <div class="modal-field">
+      <label>服务器地址</label>
+      <input type="text" id="syncServerUrl" placeholder="http://localhost:3000" value="http://localhost:3000">
+    </div>
+    <div class="modal-field">
+      <label>用户名</label>
+      <input type="text" id="syncLoginUser" placeholder="输入用户名">
+    </div>
+    <div class="modal-field">
+      <label>密码</label>
+      <input type="password" id="syncLoginPass" placeholder="输入密码">
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-primary" style="flex:1.2" onclick="handleLogin()">登录</button>
+      <button class="btn btn-success" style="flex:1.2" onclick="handleRegister()">注册</button>
+      <button class="btn btn-gray" onclick="closeLoginModal()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 模块化 JS -->
+<script src="utils.js?v=4"></script>
+<script src="database.js?v=4"></script>
+<script src="sync.js?v=5"></script>
+<script src="storage.js?v=4"></script>
+<script src="calculator.js?v=4"></script>
+<script src="table.js?v=4"></script>
+<script src="charts.js?v=4"></script>
+<script src="main.js?v=4"></script>
+<script>
+function toggleSyncPanel() {
+  var panel = document.getElementById('syncPanel');
+  if (panel.style.display === 'none') {
+    panel.style.display = 'block';
+    setTimeout(function() { panel.classList.add('open'); }, 10);
+  } else {
+    panel.classList.remove('open');
+    setTimeout(function() { panel.style.display = 'none'; }, 300);
+  }
+}
+
+// ===== 主题切换 =====
+function toggleTheme() {
+  var html = document.documentElement;
+  var current = html.getAttribute('data-theme');
+  var next = current === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  localStorage.setItem('app_theme', next);
+  // 重绘图表（因为颜色需要更新）
+  if (typeof drawEquityCurve === 'function') drawEquityCurve();
+  if (typeof drawPositionPie === 'function') drawPositionPie();
+}
+
+// 初始化主题
+(function() {
+  var saved = localStorage.getItem('app_theme');
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+</script>
+</body>
+</html>

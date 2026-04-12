@@ -1,0 +1,31 @@
+# 依赖目录
+node_modules/
+server/node_modules/
+
+# 数据库 & 运行时文件（每个部署环境独立）
+server/data.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 临时文件 & 调试页面
+~$*.xlsx
+*.tmp
+.DS_Store
+debug_*.html
+test_*.html
+deploy.zip
+
+# 工作区配置（个人数据）
+.workbuddy/
+
+# 日志
+*.log
+
+# IDE / 编辑器
+.vscode/
+.idea/
+
+# 操作系统文件
+Thumbs.db
+Desktop.ini
