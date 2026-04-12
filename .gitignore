@@ -6,7 +6,6 @@ server/node_modules/
 *.db-journal
 *.db-wal
 *.db-shm
-server/data.db
 
 # 临时文件 & 调试页面
 ~$*.xlsx
