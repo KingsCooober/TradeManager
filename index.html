@@ -30,6 +30,11 @@
     <div id="headerSyncLoggedOut" style="display:flex;align-items:center;gap:8px">
       <button class="btn btn-sm btn-primary" onclick="openLoginModal()">☁️ 登录同步</button>
     </div>
+    <!-- 管理员菜单 -->
+    <div id="adminMenu" style="display:none;align-items:center;gap:8px">
+      <span class="header-user-badge admin-badge">🔧 管理员</span>
+      <button class="btn btn-sm btn-warning" onclick="toggleAdminPanel()">管理面板</button>
+    </div>
     <div class="theme-divider"></div>
     <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="切换明暗主题">
       <span class="theme-icon-light">🌙</span>
@@ -298,6 +303,56 @@
       <button class="btn btn-primary" style="flex:1.2" onclick="handleLogin()">登录</button>
       <button class="btn btn-success" style="flex:1.2" onclick="handleRegister()">注册</button>
       <button class="btn btn-gray" onclick="closeLoginModal()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 管理员面板弹窗 ===== -->
+<div id="adminPanel" class="modal-overlay admin-panel">
+  <div class="modal-content admin-content">
+    <div class="admin-header">
+      <h3>🔧 管理员面板</h3>
+      <button class="btn btn-gray btn-sm" onclick="toggleAdminPanel()">✕ 关闭</button>
+    </div>
+    
+    <!-- 统计概览 -->
+    <div class="admin-section">
+      <h4>📊 系统统计</h4>
+      <div class="stats-grid">
+        <div class="stat-item"><span class="stat-label">总用户数</span><span class="stat-value" id="adminStatUsers">-</span></div>
+        <div class="stat-item"><span class="stat-label">总交易数</span><span class="stat-value" id="adminStatTrades">-</span></div>
+        <div class="stat-item"><span class="stat-label">总入金</span><span class="stat-value" id="adminStatDeposit">-</span></div>
+        <div class="stat-item"><span class="stat-label">总出金</span><span class="stat-value" id="adminStatWithdraw">-</span></div>
+      </div>
+    </div>
+    
+    <!-- 用户列表 -->
+    <div class="admin-section">
+      <h4>👥 用户列表</h4>
+      <div class="user-list-controls">
+        <input type="text" id="adminSearchUser" placeholder="搜索用户名..." oninput="filterAdminUserList()">
+        <button class="btn btn-sm btn-primary" onclick="refreshAdminUserList()">🔄 刷新</button>
+      </div>
+      <div id="adminUserList" class="user-list">
+        <div class="loading">加载中...</div>
+      </div>
+    </div>
+    
+    <!-- 用户详情 -->
+    <div class="admin-section" id="adminUserDetail" style="display:none">
+      <h4>📋 用户详情 - <span id="adminDetailUsername">-</span></h4>
+      <div class="detail-tabs">
+        <button class="tab-btn active" onclick="showUserDetailTab('trades')">交易记录</button>
+        <button class="tab-btn" onclick="showUserDetailTab('funds')">资金记录</button>
+        <button class="tab-btn" onclick="showUserDetailTab('settings')">账户设置</button>
+      </div>
+      <div id="adminDetailContent">
+        <div class="loading">选择用户查看详情</div>
+      </div>
+      <div class="detail-actions">
+        <button class="btn btn-sm btn-danger" onclick="deleteUserWithConfirm()">🗑️ 删除用户</button>
+        <button class="btn btn-sm btn-gray" onclick="closeAdminUserDetail()">返回列表</button>
+      </div>
     </div>
   </div>
 </div>

@@ -75,7 +75,7 @@ async function register(username, password) {
     }
 
     if (!res.ok) throw new Error(data.error || '注册失败（' + res.status + '）');
-    currentUser = { id: data.userId, username: data.username };
+    currentUser = { id: data.userId, username: data.username, role: data.role || 'user' };
     localStorage.setItem('sync_user', JSON.stringify(currentUser));
     return data;
   } catch (err) {
@@ -120,7 +120,7 @@ async function login(username, password) {
       throw new Error('服务器返回的JSON格式有误: ' + rawText.substring(0, 100));
     }
     if (!res.ok) throw new Error(data.error || '登录失败（' + res.status + '）');
-    currentUser = { id: data.userId, username: data.username };
+    currentUser = { id: data.userId, username: data.username, role: data.role || 'user' };
     localStorage.setItem('sync_user', JSON.stringify(currentUser));
     return data;
   } catch (err) {

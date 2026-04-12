@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,8 +22,16 @@ db.serialize(() => {
     id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL,
+    role TEXT DEFAULT 'user',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+  
+  // 尝试添加管理员字段（忽略已存在的错误）
+  db.run(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'`, (err) => {
+    if (err && !err.message.includes('duplicate column name')) {
+      console.warn('添加 role 字段失败:', err.message);
+    }
+  });
 
   // 交易记录表
   db.run(`CREATE TABLE IF NOT EXISTS trades (
@@ -88,12 +97,18 @@ db.serialize(() => {
 
 // 用户注册
 app.post('/api/register', (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, role = 'user' } = req.body;
   const userId = uuidv4();
   
+  if (role === 'admin' && username !== 'admin') {
+    return res.status(403).json({ error: '只有管理员可以创建管理员账户' });
+  }
+  
+  const hashedPassword = bcrypt.hashSync(password, 10);
+  
   db.run(
-    'INSERT INTO users (id, username, password) VALUES (?, ?, ?)',
-    [userId, username, password],
+    'INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)',
+    [userId, username, hashedPassword, role],
     function(err) {
       if (err) {
         if (err.message.includes('UNIQUE constraint failed')) {
@@ -101,9 +116,8 @@ app.post('/api/register', (req, res) => {
         }
         return res.status(500).json({ error: err.message });
       }
-      // 创建默认设置
       db.run('INSERT INTO settings (user_id) VALUES (?)', [userId]);
-      res.json({ userId, username, message: '注册成功' });
+      res.json({ userId, username, role, message: '注册成功' });
     }
   );
 });
@@ -113,12 +127,16 @@ app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
   
   db.get(
-    'SELECT * FROM users WHERE username = ? AND password = ?',
-    [username, password],
+    'SELECT * FROM users WHERE username = ?',
+    [username],
     (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!row) return res.status(401).json({ error: '用户名或密码错误' });
-      res.json({ userId: row.id, username: row.username, message: '登录成功' });
+      
+      const isPasswordValid = bcrypt.compareSync(password, row.password);
+      if (!isPasswordValid) return res.status(401).json({ error: '用户名或密码错误' });
+      
+      res.json({ userId: row.id, username: row.username, role: row.role, message: '登录成功' });
     }
   );
 });
@@ -319,6 +337,140 @@ app.delete('/api/clear/:userId', (req, res) => {
     
     console.log(`[清空] 用户 ${userId} 的数据已清空`);
     res.json({ message: '所有数据已清空' });
+  });
+});
+
+// ===== 管理员 API =====
+
+// 验证管理员权限
+function checkAdmin(userId, callback) {
+  db.get('SELECT role FROM users WHERE id = ?', [userId], (err, row) => {
+    if (err) return callback(err);
+    if (!row || row.role !== 'admin') {
+      return callback(new Error('权限不足，需要管理员权限'));
+    }
+    callback(null);
+  });
+}
+
+// 管理员获取所有用户列表
+app.get('/api/admin/users', (req, res) => {
+  const { adminId } = req.query;
+  
+  checkAdmin(adminId, (err) => {
+    if (err) return res.status(403).json({ error: err.message });
+    
+    db.all('SELECT id, username, role, created_at FROM users ORDER BY created_at DESC', (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ users: rows });
+    });
+  });
+});
+
+// 管理员获取指定用户的所有数据
+app.get('/api/admin/user/:userId', (req, res) => {
+  const { userId } = req.params;
+  const { adminId } = req.query;
+  
+  checkAdmin(adminId, (err) => {
+    if (err) return res.status(403).json({ error: err.message });
+    
+    const result = { trades: [], deposits: [], withdrawals: [], settings: null };
+    
+    db.get('SELECT * FROM settings WHERE user_id = ?', [userId], (err, settings) => {
+      if (settings) result.settings = settings;
+      
+      db.all('SELECT * FROM trades WHERE user_id = ? ORDER BY open_date DESC', [userId], (err, trades) => {
+        result.trades = trades || [];
+        
+        db.all('SELECT * FROM deposits WHERE user_id = ? ORDER BY date DESC', [userId], (err, deposits) => {
+          result.deposits = deposits || [];
+          
+          db.all('SELECT * FROM withdrawals WHERE user_id = ? ORDER BY date DESC', [userId], (err, withdrawals) => {
+            result.withdrawals = withdrawals || [];
+            
+            db.get('SELECT username FROM users WHERE id = ?', [userId], (err, user) => {
+              result.username = user ? user.username : null;
+              res.json(result);
+            });
+          });
+        });
+      });
+    });
+  });
+});
+
+// 管理员删除指定用户及其所有数据
+app.delete('/api/admin/user/:userId', (req, res) => {
+  const { userId } = req.params;
+  const { adminId } = req.query;
+  
+  checkAdmin(adminId, (err) => {
+    if (err) return res.status(403).json({ error: err.message });
+    
+    db.serialize(() => {
+      db.run('DELETE FROM trades WHERE user_id = ?', [userId]);
+      db.run('DELETE FROM deposits WHERE user_id = ?', [userId]);
+      db.run('DELETE FROM withdrawals WHERE user_id = ?', [userId]);
+      db.run('DELETE FROM settings WHERE user_id = ?', [userId]);
+      db.run('DELETE FROM users WHERE id = ?', [userId]);
+      
+      console.log(`[管理员删除] 用户 ${userId} 及其所有数据已删除`);
+      res.json({ message: '用户及其所有数据已删除' });
+    });
+  });
+});
+
+// 管理员创建管理员账户
+app.post('/api/admin/register', (req, res) => {
+  const { adminId, username, password } = req.body;
+  
+  checkAdmin(adminId, (err) => {
+    if (err) return res.status(403).json({ error: err.message });
+    
+    const userId = uuidv4();
+    const hashedPassword = bcrypt.hashSync(password, 10);
+    
+    db.run(
+      'INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)',
+      [userId, username, hashedPassword, 'admin'],
+      function(err) {
+        if (err) {
+          if (err.message.includes('UNIQUE constraint failed')) {
+            return res.status(400).json({ error: '用户名已存在' });
+          }
+          return res.status(500).json({ error: err.message });
+        }
+        db.run('INSERT INTO settings (user_id) VALUES (?)', [userId]);
+        res.json({ userId, username, role: 'admin', message: '管理员账户创建成功' });
+      }
+    );
+  });
+});
+
+// 管理员统计数据
+app.get('/api/admin/stats', (req, res) => {
+  const { adminId } = req.query;
+  
+  checkAdmin(adminId, (err) => {
+    if (err) return res.status(403).json({ error: err.message });
+    
+    db.get('SELECT COUNT(*) as user_count FROM users', (err, userResult) => {
+      db.get('SELECT COUNT(*) as trade_count FROM trades', (err, tradeResult) => {
+        db.get('SELECT COUNT(*) as deposit_count, SUM(amount) as total_deposit FROM deposits', (err, depositResult) => {
+          db.get('SELECT COUNT(*) as withdrawal_count, SUM(amount) as total_withdrawal FROM withdrawals', (err, withdrawalResult) => {
+            res.json({
+              user_count: userResult.user_count || 0,
+              trade_count: tradeResult.trade_count || 0,
+              deposit_count: depositResult.deposit_count || 0,
+              total_deposit: depositResult.total_deposit || 0,
+              withdrawal_count: withdrawalResult.withdrawal_count || 0,
+              total_withdrawal: withdrawalResult.total_withdrawal || 0
+            });
+          });
+        });
+      });
+    });
   });
 });
 

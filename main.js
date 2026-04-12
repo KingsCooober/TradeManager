@@ -326,17 +326,29 @@ function updateHeaderSyncUI() {
   var loggedOut = document.getElementById('headerSyncLoggedOut');
 
   if (user) {
-    // 已登录：显示登录状态，隐藏登录按钮
-    if (loggedIn) { loggedIn.style.display = 'flex'; }
-    if (loggedOut) { loggedOut.style.display = 'none'; }
-    if (headerUsername) { headerUsername.textContent = user.username; }
-    if (headerBtnAutoSync) {
-      var isAuto = localStorage.getItem('sync_auto') === 'true';
-      headerBtnAutoSync.textContent = '自动: ' + (isAuto ? '开' : '关');
+    // 更新管理员菜单显示
+    updateAdminMenu();
+    
+    // 如果不是管理员，显示普通用户登录状态
+    if (user.role !== 'admin') {
+      if (loggedIn) { loggedIn.style.display = 'flex'; }
+      if (loggedOut) { loggedOut.style.display = 'none'; }
+      if (headerUsername) { headerUsername.textContent = user.username; }
+      if (headerBtnAutoSync) {
+        var isAuto = localStorage.getItem('sync_auto') === 'true';
+        headerBtnAutoSync.textContent = '自动: ' + (isAuto ? '开' : '关');
+      }
+    } else {
+      // 管理员不显示普通用户的登录状态
+      if (loggedIn) { loggedIn.style.display = 'none'; }
+      if (loggedOut) { loggedOut.style.display = 'none'; }
     }
   } else {
     if (loggedIn) { loggedIn.style.display = 'none'; }
     if (loggedOut) { loggedOut.style.display = 'flex'; }
+    if (document.getElementById('adminMenu')) {
+      document.getElementById('adminMenu').style.display = 'none';
+    }
   }
 }
 
@@ -494,6 +506,277 @@ function handleToggleAutoSync() {
   if (btn1) btn1.textContent = '自动同步: ' + (isOn ? '开' : '关');
   if (btn2) btn2.textContent = '自动: ' + (isOn ? '开' : '关');
   syncModule.showSyncStatus(isOn ? '自动同步已开启' : '自动同步已关闭', 'info');
+}
+
+// ===== 管理员面板功能 =====
+
+var currentAdminUser = null;
+var adminUserList = [];
+
+function toggleAdminPanel() {
+  var panel = document.getElementById('adminPanel');
+  if (panel.style.display === 'flex') {
+    panel.style.display = 'none';
+  } else {
+    panel.style.display = 'flex';
+    refreshAdminStats();
+    refreshAdminUserList();
+  }
+}
+
+function refreshAdminStats() {
+  if (!syncModule.isLoggedIn() || syncModule.getCurrentUser().role !== 'admin') {
+    return;
+  }
+  
+  var userId = syncModule.getCurrentUser().id;
+  var serverUrl = syncModule.getServerUrl();
+  
+  fetch(serverUrl + '/api/admin/stats?adminId=' + userId)
+    .then(res => res.json())
+    .then(data => {
+      document.getElementById('adminStatUsers').textContent = data.user_count || 0;
+      document.getElementById('adminStatTrades').textContent = data.trade_count || 0;
+      document.getElementById('adminStatDeposit').textContent = (data.total_deposit || 0).toLocaleString() + ' ￥';
+      document.getElementById('adminStatWithdraw').textContent = (data.total_withdrawal || 0).toLocaleString() + ' ￥';
+    })
+    .catch(err => {
+      console.error('获取统计数据失败:', err);
+    });
+}
+
+function refreshAdminUserList() {
+  if (!syncModule.isLoggedIn() || syncModule.getCurrentUser().role !== 'admin') {
+    return;
+  }
+  
+  var userId = syncModule.getCurrentUser().id;
+  var serverUrl = syncModule.getServerUrl();
+  
+  fetch(serverUrl + '/api/admin/users?adminId=' + userId)
+    .then(res => res.json())
+    .then(data => {
+      adminUserList = data.users || [];
+      renderAdminUserList(adminUserList);
+    })
+    .catch(err => {
+      console.error('获取用户列表失败:', err);
+      document.getElementById('adminUserList').innerHTML = '<div class="error">加载失败</div>';
+    });
+}
+
+function renderAdminUserList(users) {
+  var listEl = document.getElementById('adminUserList');
+  if (!users || users.length === 0) {
+    listEl.innerHTML = '<div class="empty">暂无用户</div>';
+    return;
+  }
+  
+  var html = users.map(user => `
+    <div class="user-item" onclick="showAdminUserDetail('${user.id}', '${escapeHtml(user.username)}')">
+      <div class="user-info">
+        <span class="user-name">${escapeHtml(user.username)}</span>
+        <span class="user-role ${user.role === 'admin' ? 'role-admin' : 'role-user'}">${user.role === 'admin' ? '管理员' : '普通用户'}</span>
+      </div>
+      <div class="user-meta">
+        <span class="user-date">${user.created_at}</span>
+      </div>
+    </div>
+  `).join('');
+  
+  listEl.innerHTML = html;
+}
+
+function filterAdminUserList() {
+  var search = document.getElementById('adminSearchUser').value.toLowerCase();
+  var filtered = adminUserList.filter(user => 
+    user.username.toLowerCase().includes(search)
+  );
+  renderAdminUserList(filtered);
+}
+
+function showAdminUserDetail(userId, username) {
+  currentAdminUser = { id: userId, username: username };
+  document.getElementById('adminDetailUsername').textContent = username;
+  document.getElementById('adminUserDetail').style.display = 'block';
+  document.querySelector('.admin-section:not(#adminUserDetail)').style.display = 'none';
+  showUserDetailTab('trades');
+}
+
+function closeAdminUserDetail() {
+  currentAdminUser = null;
+  document.getElementById('adminUserDetail').style.display = 'none';
+  document.querySelector('.admin-section:not(#adminUserDetail)').style.display = 'block';
+}
+
+function showUserDetailTab(tab) {
+  if (!currentAdminUser) return;
+  
+  var userId = syncModule.getCurrentUser().id;
+  var serverUrl = syncModule.getServerUrl();
+  
+  fetch(serverUrl + '/api/admin/user/' + currentAdminUser.id + '?adminId=' + userId)
+    .then(res => res.json())
+    .then(data => {
+      var contentEl = document.getElementById('adminDetailContent');
+      
+      if (tab === 'trades') {
+        renderAdminTrades(data.trades || []);
+      } else if (tab === 'funds') {
+        renderAdminFunds(data.deposits || [], data.withdrawals || []);
+      } else if (tab === 'settings') {
+        renderAdminSettings(data.settings);
+      }
+      
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelector('.tab-btn[onclick="showUserDetailTab(\'' + tab + '\')"]').classList.add('active');
+    })
+    .catch(err => {
+      console.error('获取用户详情失败:', err);
+      document.getElementById('adminDetailContent').innerHTML = '<div class="error">加载失败</div>';
+    });
+}
+
+function renderAdminTrades(trades) {
+  var contentEl = document.getElementById('adminDetailContent');
+  if (trades.length === 0) {
+    contentEl.innerHTML = '<div class="empty">暂无交易记录</div>';
+    return;
+  }
+  
+  var html = `
+    <table class="admin-table">
+      <thead>
+        <tr><th>日期</th><th>品种</th><th>方向</th><th>入场价</th><th>出场价</th><th>盈亏</th><th>状态</th></tr>
+      </thead>
+      <tbody>
+        ${trades.map(t => `
+          <tr>
+            <td>${t.open_date || '-'}</td>
+            <td>${escapeHtml(t.symbol || '-')}</td>
+            <td>${t.direction || '-'}</td>
+            <td>${t.entry_price || '-'}</td>
+            <td>${t.close_price || '-'}</td>
+            <td>${(t.pnl_amount !== undefined ? (t.pnl_amount >= 0 ? '+' : '') + t.pnl_amount.toLocaleString() : '-')} ￥</td>
+            <td>${t.status || '-'}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+  
+  contentEl.innerHTML = html;
+}
+
+function renderAdminFunds(deposits, withdrawals) {
+  var contentEl = document.getElementById('adminDetailContent');
+  
+  var depositHtml = deposits.length > 0 ? `
+    <div class="fund-section">
+      <h5>💰 入金记录</h5>
+      <table class="admin-table">
+        <thead><tr><th>日期</th><th>金额</th></tr></thead>
+        <tbody>
+          ${deposits.map(d => `<tr><td>${d.date}</td><td>+${d.amount.toLocaleString()} ￥</td></tr>`).join('')}
+        </tbody>
+      </table>
+      <div class="fund-total">累计入金: <strong>+${deposits.reduce((sum, d) => sum + d.amount, 0).toLocaleString()} ￥</strong></div>
+    </div>
+  ` : '';
+  
+  var withdrawHtml = withdrawals.length > 0 ? `
+    <div class="fund-section">
+      <h5>💸 出金记录</h5>
+      <table class="admin-table">
+        <thead><tr><th>日期</th><th>金额</th></tr></thead>
+        <tbody>
+          ${withdrawals.map(w => `<tr><td>${w.date}</td><td>-${w.amount.toLocaleString()} ￥</td></tr>`).join('')}
+        </tbody>
+      </table>
+      <div class="fund-total">累计出金: <strong>-${withdrawals.reduce((sum, w) => sum + w.amount, 0).toLocaleString()} ￥</strong></div>
+    </div>
+  ` : '';
+  
+  if (!depositHtml && !withdrawHtml) {
+    contentEl.innerHTML = '<div class="empty">暂无资金记录</div>';
+    return;
+  }
+  
+  contentEl.innerHTML = depositHtml + withdrawHtml;
+}
+
+function renderAdminSettings(settings) {
+  var contentEl = document.getElementById('adminDetailContent');
+  if (!settings) {
+    contentEl.innerHTML = '<div class="empty">暂无设置数据</div>';
+    return;
+  }
+  
+  contentEl.innerHTML = `
+    <div class="settings-grid">
+      <div class="setting-item">
+        <label>初始资金</label>
+        <span>${(settings.init_capital || 0).toLocaleString()} ￥</span>
+      </div>
+      <div class="setting-item">
+        <label>风险百分比</label>
+        <span>${settings.risk_pct || 0}%</span>
+      </div>
+      <div class="setting-item">
+        <label>最大风险</label>
+        <span>${settings.max_risk || 0}</span>
+      </div>
+      <div class="setting-item">
+        <label>手续费率</label>
+        <span>${settings.fee_rate || 0}%</span>
+      </div>
+    </div>
+  `;
+}
+
+function deleteUserWithConfirm() {
+  if (!currentAdminUser) return;
+  
+  if (!confirm(`确认删除用户 "${currentAdminUser.username}" 及其所有数据？此操作不可撤销！`)) {
+    return;
+  }
+  
+  var userId = syncModule.getCurrentUser().id;
+  var serverUrl = syncModule.getServerUrl();
+  
+  fetch(serverUrl + '/api/admin/user/' + currentAdminUser.id + '?adminId=' + userId, {
+    method: 'DELETE'
+  })
+  .then(res => res.json())
+  .then(data => {
+    alert('用户删除成功');
+    closeAdminUserDetail();
+    refreshAdminUserList();
+    refreshAdminStats();
+  })
+  .catch(err => {
+    console.error('删除用户失败:', err);
+    alert('删除失败');
+  });
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// 更新管理员菜单显示
+function updateAdminMenu() {
+  var user = syncModule.getCurrentUser();
+  var adminMenu = document.getElementById('adminMenu');
+  var headerLoggedIn = document.getElementById('headerSyncLoggedIn');
+  
+  if (user && user.role === 'admin') {
+    if (adminMenu) adminMenu.style.display = 'flex';
+    if (headerLoggedIn) headerLoggedIn.style.display = 'none';
+  } else {
+    if (adminMenu) adminMenu.style.display = 'none';
+  }
 }
 
 // ===== 初始化 =====
