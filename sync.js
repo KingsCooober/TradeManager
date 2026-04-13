@@ -22,8 +22,8 @@
  */
 
 const SYNC_CONFIG = {
-  // 服务器地址 - 使用完整URL确保连接正确
-  serverUrl: localStorage.getItem('sync_server_url') || 'http://localhost:3000',
+  // 服务器地址 - 使用当前页面的域名，避免CORS错误
+  serverUrl: localStorage.getItem('sync_server_url') || window.location.origin,
   // 同步间隔（毫秒）
   syncInterval: 30000,
   // 自动同步开关（默认开启）
