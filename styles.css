@@ -714,7 +714,7 @@ h2 {
 }
 
 .custom-select-options.open {
-  max-height: 200px;
+  max-height: 300px;
   opacity: 1;
   transform: translateY(0);
 }
