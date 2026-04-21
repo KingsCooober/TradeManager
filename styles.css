@@ -509,7 +509,6 @@ h2 {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
 }
 
 .calc-date-label {

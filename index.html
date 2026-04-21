@@ -161,8 +161,8 @@
         <div class="calc-field"><label>入场价格</label><input type="number" id="calcEntry" placeholder="0.00" step="any" oninput="calcPosition()"></div>
         <div class="calc-field"><label>止损价格</label><input type="number" id="calcStop" placeholder="0.00" step="any" oninput="calcPosition()"></div>
         <div class="calc-field"><label>目标止盈 R 倍数</label><input type="number" id="calcTargetR" placeholder="如 2" step="0.5" min="0.5" value="2" oninput="calcPosition()"></div>
-        <div class="calc-field"><label>推荐买入手数</label><input type="text" id="calcRecoLots" class="calc-readonly" readonly placeholder="—"></div>
-        <div class="calc-field"><label>实际买入手数</label><input type="number" id="calcActualLots" value="200" step="100" min="0" oninput="onActualLotsInput()"></div>
+        <div class="calc-field"><label>推荐买入股数</label><input type="text" id="calcRecoLots" class="calc-readonly" readonly placeholder="—"></div>
+        <div class="calc-field"><label>实际买入股数</label><input type="number" id="calcActualLots" value="200" step="100" min="0" oninput="onActualLotsInput()"></div>
       </div>
       <p class="calc-hint">止损距离 = 1R，目标盈利 = 填入的 R 倍数 × 单笔 R 金额</p>
       <p id="lotHint" class="lot-hint"></p>
@@ -194,7 +194,7 @@
           <div class="r-val glow-yellow" id="res_posSize">-</div>
         </div>
         <div class="result-box">
-          <div class="r-label" style="color:var(--color-orange)">推荐买入手数</div>
+          <div class="r-label" style="color:var(--color-orange)">推荐买入股数</div>
           <div class="r-val" style="color:var(--color-orange)" id="res_recoLots">-</div>
         </div>
         <div class="result-box">
@@ -216,12 +216,12 @@
       </div>
 
       <div class="calc-actions">
-        <button class="btn btn-primary" onclick="addTradeFromCalc()">＋ 添加到交易记录</button>
-        <button class="btn btn-ghost" onclick="clearCalc()">清空</button>
         <div class="calc-date-cell">
           <label class="calc-date-label">📅 开仓日期</label>
           <input type="date" id="calcOpenDate" class="calc-date-input" onchange="updateCalcDate()">
         </div>
+        <button class="btn btn-primary" onclick="addTradeFromCalc()">＋ 添加到交易记录</button>
+        <button class="btn btn-ghost" onclick="clearCalc()">清空</button>
       </div>
     </div>
 
