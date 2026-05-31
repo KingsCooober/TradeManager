@@ -91,6 +91,23 @@ db.serialize(() => {
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
   )`);
+
+  // 复盘总结表
+  db.run(`CREATE TABLE IF NOT EXISTS diary2 (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    symbol TEXT,
+    pnl_percent REAL,
+    trade_logic TEXT,
+    mood TEXT,
+    follow_system TEXT DEFAULT '否',
+    lesson TEXT,
+    improvement TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
 });
 
 // ===== API 路由 =====
@@ -367,10 +384,67 @@ app.delete('/api/clear/:userId', (req, res) => {
     db.run('DELETE FROM deposits WHERE user_id = ?', [userId]);
     // 清空出金记录
     db.run('DELETE FROM withdrawals WHERE user_id = ?', [userId]);
-    // 清空设置（可选，保留初始资金设置）
+    // 清空日记2
+    db.run('DELETE FROM diary2 WHERE user_id = ?', [userId]);
     
     console.log(`[清空] 用户 ${userId} 的数据已清空`);
     res.json({ message: '所有数据已清空' });
+  });
+});
+
+// ===== 复盘总结2 API =====
+
+// 获取用户复盘总结2数据
+app.get('/api/diary/:userId', (req, res) => {
+  const { userId } = req.params;
+  
+  db.all(
+    'SELECT * FROM diary2 WHERE user_id = ? ORDER BY trade_date DESC',
+    [userId],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ diary: rows || [] });
+    }
+  );
+});
+
+// 保存日记2数据
+app.post('/api/diary/:userId', (req, res) => {
+  const { userId } = req.params;
+  const { diary } = req.body;
+  
+  if (!diary || !Array.isArray(diary)) {
+    return res.status(400).json({ error: '无效的数据格式' });
+  }
+  
+  db.serialize(() => {
+    // 使用 INSERT OR REPLACE 更新或插入记录，保留其他数据
+    const stmt = db.prepare(`INSERT OR REPLACE INTO diary2 (
+      id, user_id, trade_date, symbol, pnl_percent,
+      trade_logic, mood, follow_system, lesson, improvement,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    
+    diary.forEach(item => {
+      stmt.run([
+        item.id || uuidv4(),
+        userId,
+        item.tradeDate,
+        item.symbol,
+        item.pnlPercent,
+        item.tradeLogic,
+        item.mood,
+        item.followSystem || '否',
+        item.lesson,
+        item.improvement,
+        item.createdAt || new Date().toISOString(),
+        item.updatedAt || new Date().toISOString()
+      ]);
+    });
+    
+    stmt.finalize();
+    
+    res.json({ message: '复盘总结数据已保存', count: diary.length });
   });
 });
 
@@ -409,7 +483,7 @@ app.get('/api/admin/user/:userId', (req, res) => {
   checkAdmin(adminId, (err) => {
     if (err) return res.status(403).json({ error: err.message });
     
-    const result = { trades: [], deposits: [], withdrawals: [], settings: null };
+    const result = { trades: [], deposits: [], withdrawals: [], diary2: [], settings: null };
     
     db.get('SELECT * FROM settings WHERE user_id = ?', [userId], (err, settings) => {
       if (settings) result.settings = settings;
@@ -423,9 +497,13 @@ app.get('/api/admin/user/:userId', (req, res) => {
           db.all('SELECT * FROM withdrawals WHERE user_id = ? ORDER BY date DESC', [userId], (err, withdrawals) => {
             result.withdrawals = withdrawals || [];
             
-            db.get('SELECT username FROM users WHERE id = ?', [userId], (err, user) => {
-              result.username = user ? user.username : null;
-              res.json(result);
+            db.all('SELECT * FROM diary2 WHERE user_id = ? ORDER BY trade_date DESC', [userId], (err, diary2) => {
+              result.diary2 = diary2 || [];
+              
+              db.get('SELECT username FROM users WHERE id = ?', [userId], (err, user) => {
+                result.username = user ? user.username : null;
+                res.json(result);
+              });
             });
           });
         });

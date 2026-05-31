@@ -708,6 +708,8 @@ function showUserDetailTab(tab) {
       
       if (tab === 'trades') {
         renderAdminTrades(data.trades || []);
+      } else if (tab === 'diary') {
+        renderAdminDiary(data.diary2 || []);
       } else if (tab === 'funds') {
         renderAdminFunds(data.deposits || [], data.withdrawals || []);
       } else if (tab === 'settings') {
@@ -745,6 +747,59 @@ function renderAdminTrades(trades) {
             <td>${t.close_price || '-'}</td>
             <td>${(t.pnl_amount !== undefined ? (t.pnl_amount >= 0 ? '+' : '') + t.pnl_amount.toLocaleString() : '-')} ￥</td>
             <td>${t.status || '-'}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+  
+  contentEl.innerHTML = html;
+}
+
+function renderAdminDiary(diary2) {
+  var contentEl = document.getElementById('adminDetailContent');
+  if (diary2.length === 0) {
+    contentEl.innerHTML = '<div class="empty">暂无复盘总结记录</div>';
+    return;
+  }
+  
+  var html = `
+    <style>
+      .admin-diary-table td {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        word-break: break-word;
+        vertical-align: top;
+        max-width: 300px;
+      }
+      .admin-diary-table .text-col {
+        max-width: 400px;
+      }
+    </style>
+    <table class="admin-table admin-diary-table">
+      <thead>
+        <tr>
+          <th style="width: 100px;">日期</th>
+          <th style="width: 120px;">品种</th>
+          <th style="width: 100px;">盈亏比例</th>
+          <th class="text-col" style="width: 400px;">买入/卖出逻辑</th>
+          <th class="text-col" style="width: 250px;">当时心态</th>
+          <th style="width: 80px;">符合系统</th>
+          <th class="text-col" style="width: 350px;">教训与总结</th>
+          <th class="text-col" style="width: 350px;">改进措施</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${diary2.map(d => `
+          <tr>
+            <td>${d.trade_date || '-'}</td>
+            <td>${escapeHtml(d.symbol || '-')}</td>
+            <td><span style="color: ${parseFloat(d.pnl_percent) > 0 ? '#ef4444' : parseFloat(d.pnl_percent) < 0 ? '#48bb78' : '#6b7280'}">${d.pnl_percent !== undefined ? (d.pnl_percent > 0 ? '+' : '') + d.pnl_percent + '%' : '-'}</span></td>
+            <td class="text-col">${escapeHtml(d.trade_logic || '-')}</td>
+            <td class="text-col">${escapeHtml(d.mood || '-')}</td>
+            <td><span style="color: ${d.follow_system === '是' ? '#ef4444' : '#48bb78'}">${d.follow_system || '否'}</span></td>
+            <td class="text-col">${escapeHtml(d.lesson || '-')}</td>
+            <td class="text-col">${escapeHtml(d.improvement || '-')}</td>
           </tr>
         `).join('')}
       </tbody>

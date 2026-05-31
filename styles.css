@@ -1503,6 +1503,16 @@ h2 {
   box-shadow: var(--glow-blue);
 }
 
+.btn-diary2 {
+  background: linear-gradient(135deg, var(--color-purple), #8b1fc9);
+  color: white;
+  border: none;
+}
+.btn-diary2:hover { 
+  box-shadow: 0 5px 20px rgba(114,9,183,0.38), 0 2px 8px rgba(114,9,183,0.15);
+  transform: translateY(-2px);
+}
+
 /* ===== 风险参数行 ===== */
 .risk-params-row {
   display: flex;

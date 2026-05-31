@@ -16,6 +16,9 @@
       <h1>Trade Manager</h1>
       <span class="app-subtitle">交易管理系统</span>
     </div>
+    <a href="diary2.html" class="btn btn-sm btn-diary2" style="text-decoration: none; margin-left: 12px;">
+      📖 复盘总结
+    </a>
   </div>
   <div class="header-right">
     <div id="syncStatus" class="sync-status-inline"></div>
@@ -416,6 +419,7 @@
       <h4>📋 用户详情 - <span id="adminDetailUsername">-</span></h4>
       <div class="detail-tabs">
         <button class="tab-btn active" onclick="showUserDetailTab('trades')">交易记录</button>
+        <button class="tab-btn" onclick="showUserDetailTab('diary')">复盘总结</button>
         <button class="tab-btn" onclick="showUserDetailTab('funds')">资金记录</button>
         <button class="tab-btn" onclick="showUserDetailTab('settings')">账户设置</button>
       </div>

@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>复盘总结 - Trade Manager</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="diary2.css?v=20260531010">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-left">
+    <button class="btn btn-ghost btn-sm" onclick="goBack()" aria-label="返回主页面">
+      ← 返回
+    </button>
+    <div class="app-logo">📖</div>
+    <div class="app-title">
+      <h1>复盘总结</h1>
+      <span class="app-subtitle">亏损交易复盘总结</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="syncStatus" class="sync-status-inline"></div>
+    <!-- 已登录状态：显示用户名、同步、自动同步、修改密码、退出 -->
+    <div id="headerSyncLoggedIn" style="display:none;align-items:center;gap:8px">
+      <span class="header-user-badge">👤 <span id="headerUsername">-</span></span>
+      <button class="btn btn-sm btn-primary" onclick="handleFullSync()">🔄 同步</button>
+      <button class="btn btn-sm btn-ghost" onclick="handleToggleAutoSync()" id="headerBtnAutoSync">自动: 关</button>
+      <button class="btn btn-sm btn-ghost" onclick="openChangePasswordModal()">� 修改密码</button>
+      <button class="btn btn-sm btn-ghost-danger" onclick="handleLogout()">退出</button>
+    </div>
+    <!-- 未登录状态：只显示登录按钮 -->
+    <div id="headerSyncLoggedOut" style="display:flex;align-items:center;gap:8px">
+      <button class="btn btn-sm btn-primary" onclick="openLoginModal()">☁️ 登录同步</button>
+    </div>
+    <!-- 管理员菜单 -->
+    <div id="adminMenu" style="display:none;align-items:center;gap:8px">
+      <span class="header-user-badge admin-badge">🔧 管理员</span>
+    </div>
+    <div class="theme-divider"></div>
+    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="切换明暗主题">
+      <span class="theme-icon-light">🌙</span>
+      <span class="theme-icon-dark">☀️</span>
+    </button>
+  </div>
+</header>
+
+<main class="diary-main">
+  <div class="diary-container">
+    
+    <div class="diary-toolbar card">
+      <div class="toolbar-left">
+        <h2>📝 复盘总结</h2>
+      </div>
+      <div class="toolbar-right">
+        <button class="btn btn-sm btn-ghost" onclick="exportDiaryData()">📤 导出</button>
+        <button class="btn btn-sm btn-ghost" onclick="document.getElementById('importDiaryFile').click()">📥 导入</button>
+        <input type="file" id="importDiaryFile" accept=".json" style="display:none" onchange="importDiaryData(event)">
+        <button class="btn btn-sm btn-primary" onclick="openAddDiaryModal()">➕ 新增记录</button>
+      </div>
+    </div>
+
+    <div class="diary-filters card">
+      <div class="filter-group">
+        <label>快速筛选:</label>
+        <select id="quickFilter" onchange="applyQuickFilter()" aria-label="快速筛选">
+          <option value="all">全部记录</option>
+          <option value="thisMonth">本月</option>
+          <option value="thisWeek">本周</option>
+          <option value="win">盈利</option>
+          <option value="loss">亏损</option>
+          <option value="breakeven">保本</option>
+          <option value="followingSystem">符合系统</option>
+          <option value="notFollowing">不符合系统</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>时间范围:</label>
+        <input type="date" id="filterStartDate" onchange="applyFilters()" aria-label="开始日期">
+        <span>至</span>
+        <input type="date" id="filterEndDate" onchange="applyFilters()" aria-label="结束日期">
+      </div>
+      <button class="btn btn-sm btn-gray" onclick="clearFilters()">清除筛选</button>
+    </div>
+
+    <div class="diary-table-wrapper card">
+      <div class="table-header">
+        <h3>📋 记录列表</h3>
+        <div class="table-controls">
+          <label>显示:
+            <select id="pageSize" onchange="changePageSize()" aria-label="每页显示数量">
+              <option value="10">10</option>
+              <option value="20" selected>20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <span id="tableInfo">显示 0-0 条，共 0 条</span>
+        </div>
+      </div>
+      
+      <div class="table-responsive">
+        <table id="diaryTable" role="grid" aria-label="记录表格">
+          <thead>
+            <tr>
+              <th scope="col" onclick="sortDiary('tradeDate')" tabindex="0" role="button" aria-sort="none">
+                日期 <span class="sort-icon">↕</span>
+              </th>
+              <th scope="col" onclick="sortDiary('symbol')" tabindex="0" role="button" aria-sort="none">
+                代码/名称 <span class="sort-icon">↕</span>
+              </th>
+              <th scope="col" onclick="sortDiary('pnlPercent')" tabindex="0" role="button" aria-sort="none">
+                盈亏比例 <span class="sort-icon">↕</span>
+              </th>
+              <th scope="col" class="text-column-header wide-column">买入/卖出逻辑</th>
+              <th scope="col" class="text-column-header wide-column">当时心态</th>
+              <th scope="col" class="text-column-header" onclick="sortDiary('followSystem')" tabindex="0" role="button" aria-sort="none">
+                符合系统 <span class="sort-icon">↕</span>
+              </th>
+              <th scope="col" class="text-column-header wide-column">教训与总结</th>
+              <th scope="col" class="text-column-header wide-column">改进措施</th>
+              <th scope="col">操作</th>
+            </tr>
+          </thead>
+          <tbody id="diaryTableBody">
+          </tbody>
+        </table>
+      </div>
+
+      <div class="pagination">
+        <button class="btn btn-sm btn-gray" id="prevPage" onclick="prevPage()" disabled>上一页</button>
+        <span id="pageInfo">第 1 页</span>
+        <button class="btn btn-sm btn-gray" id="nextPage" onclick="nextPage()" disabled>下一页</button>
+        <span id="pageSizeInfo">每页 20 条</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="diaryModal" class="modal-overlay" role="dialog" aria-labelledby="modalTitle" aria-modal="true">
+  <div class="modal-content diary-modal">
+    <div class="modal-header">
+      <h2 id="modalTitle">📝 新增交易记录</h2>
+      <button class="modal-close" onclick="closeDiaryModal()" aria-label="关闭">✕</button>
+    </div>
+    
+    <form id="diaryForm" onsubmit="saveDiaryRecord(event)">
+      <input type="hidden" id="diaryId">
+      
+      <div class="form-row">
+        <div class="form-field">
+          <label for="diaryDate">交易日期 *</label>
+          <input type="date" id="diaryDate" required aria-required="true">
+        </div>
+        <div class="form-field">
+          <label for="diarySymbol">代码/名称 *</label>
+          <input type="text" id="diarySymbol" required placeholder="如: BTC、600000" aria-required="true">
+        </div>
+        <div class="form-field">
+          <label for="diaryPnlPercent">盈亏比例 (%) *</label>
+          <input type="number" id="diaryPnlPercent" step="0.01" required placeholder="如: 5.5" aria-required="true">
+        </div>
+      </div>
+      
+      <div class="form-field full-width">
+        <label for="diaryTradeLogic">买入/卖出逻辑</label>
+        <textarea id="diaryTradeLogic" rows="3" placeholder="描述您的买入/卖出依据和逻辑..."></textarea>
+      </div>
+      
+      <div class="form-field full-width">
+        <label for="diaryMood">当时心态</label>
+        <textarea id="diaryMood" rows="2" placeholder="描述交易时的心态状态..."></textarea>
+      </div>
+      
+      <div class="form-field">
+        <label for="diaryFollowSystem">是否符合系统</label>
+        <select id="diaryFollowSystem">
+          <option value="是">是 ✓</option>
+          <option value="否">否 ✗</option>
+        </select>
+      </div>
+      
+      <div class="form-field full-width">
+        <label for="diaryLesson">教训与总结</label>
+        <textarea id="diaryLesson" rows="3" placeholder="总结本次交易的教训和收获..."></textarea>
+      </div>
+      
+      <div class="form-field full-width">
+        <label for="diaryImprovement">改进措施</label>
+        <textarea id="diaryImprovement" rows="3" placeholder="提出具体的改进措施..."></textarea>
+      </div>
+      
+      <div class="modal-buttons">
+        <button type="button" class="btn btn-gray" onclick="closeDiaryModal()">取消</button>
+        <button type="submit" class="btn btn-primary">💾 保存记录</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="deleteDiaryModal" class="modal-overlay" role="alertdialog" aria-labelledby="deleteTitle" aria-describedby="deleteDesc">
+  <div class="modal-content" style="max-width: 400px;">
+    <h3 id="deleteTitle" style="color: var(--color-red);">🗑️ 确认删除</h3>
+    <p id="deleteDesc" style="color: var(--text-secondary); margin-bottom: 16px;">
+      确定要删除这条交易记录吗？此操作不可撤销。
+    </p>
+    <div id="deleteDiaryInfo" style="background: var(--bg-subtle); padding: 12px; border-radius: var(--radius-sm); margin-bottom: 16px;">
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-danger" onclick="confirmDeleteDiary()">确认删除</button>
+      <button class="btn btn-gray" onclick="closeDeleteDiaryModal()">取消</button>
+    </div>
+  </div>
+</div>
+
+<div id="viewDiaryModal" class="modal-overlay" role="dialog" aria-labelledby="viewTitle" aria-modal="true">
+  <div class="modal-content diary-modal">
+    <div class="modal-header">
+      <h2 id="viewTitle">📖 交易记录详情</h2>
+      <button class="modal-close" onclick="closeViewDiaryModal()" aria-label="关闭">✕</button>
+    </div>
+    <div id="viewDiaryContent" class="view-content">
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-gray" onclick="closeViewDiaryModal()">关闭</button>
+      <button class="btn btn-primary" onclick="editCurrentDiary()">✏️ 编辑</button>
+    </div>
+  </div>
+</div>
+
+<script src="utils.js?v=4"></script>
+<script src="database.js?v=4"></script>
+<script src="sync.js?v=5"></script>
+<script src="diary2.js?v=20260531012"></script>
+<script>
+function goBack() {
+  window.location.href = 'index.html';
+}
+
+function toggleTheme() {
+  var html = document.documentElement;
+  var current = html.getAttribute('data-theme');
+  var next = current === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  localStorage.setItem('app_theme', next);
+}
+
+(function() {
+  var saved = localStorage.getItem('app_theme');
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+
+window.addEventListener('load', function() {
+  initDiary2();
+});
+</script>
+</body>
+</html>

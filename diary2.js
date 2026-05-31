@@ -1,0 +1,619 @@
+let diary2Data = [];
+let diary2FilteredData = [];
+let diary2CurrentPage = 1;
+let diary2PageSize = 20;
+let diary2SortField = 'tradeDate';
+let diary2SortOrder = 'desc';
+let diary2CurrentUserId = null;
+let diary2IsLoggedIn = false;
+
+function initDiary2() {
+  loadDiaryData();
+  setupEventListeners();
+  applyFilters();
+  checkLoginStatus();
+}
+
+function loadDiaryData() {
+  const stored = localStorage.getItem('diary2_data');
+  if (stored) {
+    try {
+      diary2Data = JSON.parse(stored);
+    } catch (e) {
+      console.error('加载数据失败:', e);
+      diary2Data = [];
+    }
+  }
+}
+
+function saveDiaryData() {
+  try {
+    localStorage.setItem('diary2_data', JSON.stringify(diary2Data));
+    if (diary2IsLoggedIn && diary2CurrentUserId) {
+      syncToServer();
+    }
+  } catch (e) {
+    console.error('保存数据失败:', e);
+  }
+}
+
+function generateId() {
+  return 'diary_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+function setupEventListeners() {
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeDiaryModal();
+      closeDeleteDiaryModal();
+      closeViewDiaryModal();
+    }
+  });
+  
+  const table = document.getElementById('diaryTable');
+  if (table) {
+    table.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && e.target.tagName === 'TH') {
+        const field = e.target.getAttribute('onclick')?.match(/sortDiary\('(\w+)'\)/)?.[1];
+        if (field) sortDiary(field);
+      }
+    });
+  }
+}
+
+function checkLoginStatus() {
+  if (typeof syncModule !== 'undefined' && syncModule.isLoggedIn()) {
+    const user = syncModule.getCurrentUser();
+    diary2CurrentUserId = user.id;
+    diary2IsLoggedIn = true;
+    document.getElementById('headerSyncLoggedIn').style.display = 'flex';
+    document.getElementById('headerSyncLoggedOut').style.display = 'none';
+    document.getElementById('headerUsername').textContent = user.username;
+    loadFromServer();
+  } else {
+    showNotLoggedIn();
+  }
+}
+
+function showNotLoggedIn() {
+  document.getElementById('headerSyncLoggedIn').style.display = 'none';
+  document.getElementById('headerSyncLoggedOut').style.display = 'flex';
+}
+
+function loadFromServer() {
+  if (!diary2CurrentUserId) return;
+  
+  fetch(`/api/diary/${diary2CurrentUserId}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' }
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.diary && data.diary.length > 0) {
+      diary2Data = data.diary.map(item => ({
+        id: item.id,
+        tradeDate: item.trade_date || item.tradeDate,
+        symbol: item.symbol,
+        pnlPercent: item.pnl_percent || item.pnlPercent,
+        tradeLogic: item.trade_logic || item.tradeLogic,
+        mood: item.mood,
+        followSystem: item.follow_system || item.followSystem,
+        lesson: item.lesson,
+        improvement: item.improvement,
+        createdAt: item.created_at || item.createdAt,
+        updatedAt: item.updated_at || item.updatedAt
+      }));
+      saveDiaryData();
+      applyFilters();
+      showSyncStatus('同步成功', 'success');
+    }
+  })
+  .catch(err => {
+    console.error('从服务器加载失败:', err);
+  });
+}
+
+function syncToServer() {
+  if (!diary2CurrentUserId) return;
+  
+  fetch(`/api/diary/${diary2CurrentUserId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ diary: diary2Data })
+  })
+  .then(res => res.json())
+  .then(data => {
+    showSyncStatus('数据已同步', 'success');
+  })
+  .catch(err => {
+    console.error('同步失败:', err);
+    showSyncStatus('同步失败', 'error');
+  });
+}
+
+function syncData() {
+  syncToServer();
+}
+
+function handleLogout() {
+  localStorage.removeItem('currentUser');
+  diary2CurrentUserId = null;
+  diary2IsLoggedIn = false;
+  document.getElementById('headerSyncLoggedIn').style.display = 'none';
+  document.getElementById('headerSyncLoggedOut').style.display = 'flex';
+}
+
+function openLoginModal() {
+  if (confirm('您需要登录才能同步数据。是否返回主页面进行登录？\n\n提示：您可以在未登录状态下使用本地存储功能。')) {
+    window.location.href = 'index.html';
+  }
+}
+
+function showSyncStatus(message, type) {
+  const statusEl = document.getElementById('syncStatus');
+  if (statusEl) {
+    statusEl.textContent = message;
+    statusEl.className = 'sync-status-inline ' + type;
+    setTimeout(() => {
+      statusEl.textContent = '';
+      statusEl.className = 'sync-status-inline';
+    }, 3000);
+  }
+}
+
+function applyFilters() {
+  const quickFilter = document.getElementById('quickFilter')?.value || 'all';
+  const startDate = document.getElementById('filterStartDate')?.value || '';
+  const endDate = document.getElementById('filterEndDate')?.value || '';
+  
+  diary2FilteredData = diary2Data.filter(item => {
+    if (quickFilter !== 'all') {
+      switch (quickFilter) {
+        case 'thisMonth':
+          const now = new Date();
+          const itemDate = new Date(item.tradeDate);
+          if (itemDate.getMonth() !== now.getMonth() || itemDate.getFullYear() !== now.getFullYear()) {
+            return false;
+          }
+          break;
+        case 'thisWeek':
+          const weekAgo = new Date();
+          weekAgo.setDate(weekAgo.getDate() - 7);
+          if (new Date(item.tradeDate) < weekAgo) {
+            return false;
+          }
+          break;
+        case 'win':
+          if (parseFloat(item.pnlPercent) <= 0) return false;
+          break;
+        case 'loss':
+          if (parseFloat(item.pnlPercent) >= 0) return false;
+          break;
+        case 'breakeven':
+          if (parseFloat(item.pnlPercent) !== 0) return false;
+          break;
+        case 'followingSystem':
+          if (item.followSystem !== '是') return false;
+          break;
+        case 'notFollowing':
+          if (item.followSystem !== '否') return false;
+          break;
+      }
+    }
+    
+    if (startDate && item.tradeDate < startDate) {
+      return false;
+    }
+    
+    if (endDate && item.tradeDate > endDate) {
+      return false;
+    }
+    
+    return true;
+  });
+  
+  diary2CurrentPage = 1;
+  renderTable();
+}
+
+function applyQuickFilter() {
+  applyFilters();
+}
+
+function clearFilters() {
+  document.getElementById('quickFilter').value = 'all';
+  document.getElementById('filterStartDate').value = '';
+  document.getElementById('filterEndDate').value = '';
+  applyFilters();
+}
+
+function sortDiary(field) {
+  if (diary2SortField === field) {
+    diary2SortOrder = diary2SortOrder === 'asc' ? 'desc' : 'asc';
+  } else {
+    diary2SortField = field;
+    diary2SortOrder = 'asc';
+  }
+  
+  const headers = document.querySelectorAll('#diaryTable thead th');
+  headers.forEach(th => {
+    th.setAttribute('aria-sort', 'none');
+  });
+  
+  const currentHeader = document.querySelector(`th[onclick="sortDiary('${field}')"]`);
+  if (currentHeader) {
+    currentHeader.setAttribute('aria-sort', diary2SortOrder === 'asc' ? 'ascending' : 'descending');
+  }
+  
+  diary2FilteredData.sort((a, b) => {
+    let valA = a[field];
+    let valB = b[field];
+    
+    if (field === 'tradeDate') {
+      valA = new Date(valA);
+      valB = new Date(valB);
+    } else if (field === 'pnlPercent') {
+      valA = parseFloat(valA) || 0;
+      valB = parseFloat(valB) || 0;
+    }
+    
+    if (valA < valB) return diary2SortOrder === 'asc' ? -1 : 1;
+    if (valA > valB) return diary2SortOrder === 'asc' ? 1 : -1;
+    return 0;
+  });
+  
+  renderTable();
+}
+
+function renderTable() {
+  const tbody = document.getElementById('diaryTableBody');
+  if (!tbody) return;
+  
+  const start = (diary2CurrentPage - 1) * diary2PageSize;
+  const end = start + diary2PageSize;
+  const pageData = diary2FilteredData.slice(start, end);
+  
+  if (pageData.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="9" style="text-align: center; padding: 40px; color: var(--text-tertiary);">
+          暂无复盘记录，请点击"新增记录"添加
+        </td>
+      </tr>
+    `;
+    updatePagination();
+    return;
+  }
+  
+  tbody.innerHTML = pageData.map(item => `
+    <tr>
+      <td class="text-center">${item.tradeDate}</td>
+      <td class="text-center"><strong>${escapeHtml(item.symbol)}</strong></td>
+      <td class="text-center">
+        <span class="pnl-badge ${parseFloat(item.pnlPercent) > 0 ? 'positive' : parseFloat(item.pnlPercent) < 0 ? 'negative' : 'zero'}">
+          ${item.pnlPercent > 0 ? '+' : ''}${item.pnlPercent}%
+        </span>
+      </td>
+      <td class="text-left">
+        <div class="table-content text-column-content" title="${escapeHtml(item.tradeLogic || '-')}">
+          ${escapeHtml(item.tradeLogic) || '<span style="color: var(--text-tertiary);">-</span>'}
+        </div>
+      </td>
+      <td class="text-left">
+        <div class="table-content text-column-content" title="${escapeHtml(item.mood || '-')}">
+          ${escapeHtml(item.mood) || '<span style="color: var(--text-tertiary);">-</span>'}
+        </div>
+      </td>
+      <td class="text-center">
+        <span class="system-badge ${item.followSystem === '是' ? 'yes' : 'no'}">
+          ${item.followSystem || '否'}
+        </span>
+      </td>
+      <td class="text-left">
+        <div class="table-content text-column-content" title="${escapeHtml(item.lesson || '-')}">
+          ${escapeHtml(item.lesson) || '<span style="color: var(--text-tertiary);">-</span>'}
+        </div>
+      </td>
+      <td class="text-left">
+        <div class="table-content text-column-content" title="${escapeHtml(item.improvement || '-')}">
+          ${escapeHtml(item.improvement) || '<span style="color: var(--text-tertiary);">-</span>'}
+        </div>
+      </td>
+      <td class="text-center">
+        <div style="display: flex; gap: 6px; justify-content: center;">
+          <button class="btn btn-sm btn-ghost" onclick="viewDiary('${item.id}')" title="查看">👁️</button>
+          <button class="btn btn-sm btn-ghost" onclick="editDiary('${item.id}')" title="编辑">✏️</button>
+          <button class="btn btn-sm btn-ghost-danger" onclick="deleteDiary('${item.id}')" title="删除">🗑️</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+  
+  updatePagination();
+}
+
+function updatePagination() {
+  const totalPages = Math.ceil(diary2FilteredData.length / diary2PageSize) || 1;
+  const start = diary2FilteredData.length === 0 ? 0 : (diary2CurrentPage - 1) * diary2PageSize + 1;
+  const end = Math.min(diary2CurrentPage * diary2PageSize, diary2FilteredData.length);
+  
+  const tableInfoEl = document.getElementById('tableInfo');
+  if (tableInfoEl) tableInfoEl.textContent = `显示 ${start}-${end} 条，共 ${diary2FilteredData.length} 条`;
+  
+  const pageInfoEl = document.getElementById('pageInfo');
+  if (pageInfoEl) pageInfoEl.textContent = `第 ${diary2CurrentPage} 页`;
+  
+  const prevPageEl = document.getElementById('prevPage');
+  if (prevPageEl) prevPageEl.disabled = diary2CurrentPage <= 1;
+  
+  const nextPageEl = document.getElementById('nextPage');
+  if (nextPageEl) nextPageEl.disabled = diary2CurrentPage >= totalPages;
+}
+
+function changePageSize() {
+  diary2PageSize = parseInt(document.getElementById('diary2PageSize').value) || 20;
+  diary2CurrentPage = 1;
+  renderTable();
+}
+
+function prevPage() {
+  if (diary2CurrentPage > 1) {
+    diary2CurrentPage--;
+    renderTable();
+  }
+}
+
+function nextPage() {
+  const totalPages = Math.ceil(diary2FilteredData.length / diary2PageSize) || 1;
+  if (diary2CurrentPage < totalPages) {
+    diary2CurrentPage++;
+    renderTable();
+  }
+}
+
+function openAddDiaryModal() {
+  try {
+    document.getElementById('modalTitle').textContent = '📝 新增复盘记录';
+    document.getElementById('diaryId').value = '';
+    document.getElementById('diaryForm').reset();
+    document.getElementById('diaryDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('diaryModal').classList.add('show');
+  } catch (error) {
+    console.error('打开模态框失败:', error);
+    alert('打开记录表单失败，请刷新页面重试');
+  }
+}
+
+function editDiary(id) {
+  const item = diary2Data.find(d => d.id === id);
+  if (!item) return;
+  
+  document.getElementById('modalTitle').textContent = '✏️ 编辑复盘记录';
+  document.getElementById('diaryId').value = item.id;
+  document.getElementById('diaryDate').value = item.tradeDate;
+  document.getElementById('diarySymbol').value = item.symbol;
+  document.getElementById('diaryPnlPercent').value = item.pnlPercent;
+  document.getElementById('diaryTradeLogic').value = item.tradeLogic || '';
+  document.getElementById('diaryMood').value = item.mood || '';
+  document.getElementById('diaryFollowSystem').value = item.followSystem || '否';
+  document.getElementById('diaryLesson').value = item.lesson || '';
+  document.getElementById('diaryImprovement').value = item.improvement || '';
+  
+  document.getElementById('diaryModal').classList.add('show');
+}
+
+function viewDiary(id) {
+  const item = diary2Data.find(d => d.id === id);
+  if (!item) return;
+  
+  document.getElementById('viewTitle').textContent = `📖 ${item.tradeDate} - ${item.symbol}`;
+  
+  const content = document.getElementById('viewDiaryContent');
+  content.innerHTML = `
+    <div class="view-row">
+      <div class="view-label">代码/名称</div>
+      <div class="view-value">${escapeHtml(item.symbol)}</div>
+    </div>
+    <div class="view-row">
+      <div class="view-label">盈亏比例</div>
+      <div class="view-value">
+        <span class="pnl-badge ${parseFloat(item.pnlPercent) > 0 ? 'positive' : parseFloat(item.pnlPercent) < 0 ? 'negative' : 'zero'}">
+          ${item.pnlPercent > 0 ? '+' : ''}${item.pnlPercent}%
+        </span>
+      </div>
+    </div>
+    <div class="view-row">
+      <div class="view-label">买入/卖出逻辑</div>
+      <div class="view-value">${escapeHtml(item.tradeLogic) || '-'}</div>
+    </div>
+    <div class="view-row">
+      <div class="view-label">当时心态</div>
+      <div class="view-value">${escapeHtml(item.mood) || '-'}</div>
+    </div>
+    <div class="view-row">
+      <div class="view-label">是否符合系统</div>
+      <div class="view-value">
+        <span class="system-badge ${item.followSystem === '是' ? 'yes' : 'no'}">${item.followSystem || '否'}</span>
+      </div>
+    </div>
+    <div class="view-row">
+      <div class="view-label">教训与总结</div>
+      <div class="view-value">${escapeHtml(item.lesson) || '-'}</div>
+    </div>
+    <div class="view-row">
+      <div class="view-label">改进措施</div>
+      <div class="view-value">${escapeHtml(item.improvement) || '-'}</div>
+    </div>
+  `;
+  
+  window.currentViewingId = id;
+  document.getElementById('viewDiaryModal').classList.add('show');
+}
+
+function editCurrentDiary() {
+  if (window.currentViewingId) {
+    closeViewDiaryModal();
+    editDiary(window.currentViewingId);
+  }
+}
+
+function closeViewDiaryModal() {
+  document.getElementById('viewDiaryModal').classList.remove('show');
+  window.currentViewingId = null;
+}
+
+function saveDiaryRecord(event) {
+  event.preventDefault();
+  
+  const id = document.getElementById('diaryId').value;
+  const record = {
+    id: id || generateId(),
+    tradeDate: document.getElementById('diaryDate').value,
+    symbol: document.getElementById('diarySymbol').value.trim(),
+    pnlPercent: parseFloat(document.getElementById('diaryPnlPercent').value) || 0,
+    tradeLogic: document.getElementById('diaryTradeLogic').value.trim(),
+    mood: document.getElementById('diaryMood').value.trim(),
+    followSystem: document.getElementById('diaryFollowSystem').value,
+    lesson: document.getElementById('diaryLesson').value.trim(),
+    improvement: document.getElementById('diaryImprovement').value.trim(),
+    updatedAt: new Date().toISOString()
+  };
+  
+  if (!record.tradeDate || !record.symbol) {
+    alert('请填写必填字段');
+    return;
+  }
+  
+  if (id) {
+    const index = diary2Data.findIndex(d => d.id === id);
+    if (index !== -1) {
+      record.createdAt = diary2Data[index].createdAt;
+      diary2Data[index] = record;
+    }
+  } else {
+    record.createdAt = new Date().toISOString();
+    diary2Data.push(record);
+  }
+  
+  saveDiaryData();
+  closeDiaryModal();
+  applyFilters();
+}
+
+
+
+function closeDiaryModal() {
+  document.getElementById('diaryModal').classList.remove('show');
+  document.getElementById('diaryForm').reset();
+}
+
+function deleteDiary(id) {
+  const item = diary2Data.find(d => d.id === id);
+  if (!item) return;
+  
+  document.getElementById('deleteDiaryInfo').innerHTML = `
+    <div><strong>日期:</strong> ${item.tradeDate}</div>
+    <div><strong>品种:</strong> ${escapeHtml(item.symbol)}</div>
+    <div><strong>盈亏:</strong> ${item.pnlPercent}%</div>
+  `;
+  
+  window.currentDeleteId = id;
+  document.getElementById('deleteDiaryModal').classList.add('show');
+}
+
+function confirmDeleteDiary() {
+  if (window.currentDeleteId) {
+    diary2Data = diary2Data.filter(d => d.id !== window.currentDeleteId);
+    saveDiaryData();
+    closeDeleteDiaryModal();
+    applyFilters();
+  }
+}
+
+function closeDeleteDiaryModal() {
+  document.getElementById('deleteDiaryModal').classList.remove('show');
+  window.currentDeleteId = null;
+}
+
+function exportDiaryData() {
+  const dataStr = JSON.stringify(diary2Data, null, 2);
+  const blob = new Blob([dataStr], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `diary2_export_${new Date().toISOString().split('T')[0]}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function importDiaryData(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const imported = JSON.parse(e.target.result);
+      if (Array.isArray(imported)) {
+        const newData = imported.filter(item => item.tradeDate && item.symbol);
+        if (newData.length > 0) {
+          diary2Data = diary2Data.concat(newData.map(item => ({
+            ...item,
+            id: item.id || generateId()
+          })));
+          saveDiaryData();
+          applyFilters();
+          alert(`成功导入 ${newData.length} 条记录`);
+        } else {
+          alert('导入失败：数据格式不正确');
+        }
+      } else {
+        alert('导入失败：不是有效的JSON数组');
+      }
+    } catch (err) {
+      alert('导入失败：' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function handleFullSync() {
+  if (!syncModule.isLoggedIn()) {
+    alert('请先登录');
+    return;
+  }
+  var statusEl = document.getElementById('syncStatus');
+  if (statusEl) { statusEl.textContent = '同步中...'; statusEl.className = 'sync-status-inline info'; }
+  syncModule.fullSync().then(function(ok) {
+    if (statusEl) {
+      statusEl.textContent = ok ? '已同步' : '同步失败';
+      statusEl.className = 'sync-status-inline ' + (ok ? 'success' : 'error');
+      setTimeout(function() { statusEl.textContent = ''; statusEl.className = 'sync-status-inline'; }, 3000);
+    }
+  });
+}
+
+function handleToggleAutoSync() {
+  const isOn = syncModule.toggleAutoSync();
+  var btn1 = document.getElementById('btnAutoSync');
+  var btn2 = document.getElementById('headerBtnAutoSync');
+  if (btn1) btn1.textContent = '自动同步: ' + (isOn ? '开' : '关');
+  if (btn2) btn2.textContent = '自动: ' + (isOn ? '开' : '关');
+  syncModule.showSyncStatus(isOn ? '自动同步已开启' : '自动同步已关闭', 'info');
+}
+
+function openChangePasswordModal() {
+  var modal = document.getElementById('changePasswordModal');
+  if (modal) modal.style.display = 'flex';
+}
+
