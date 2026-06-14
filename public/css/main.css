@@ -1513,6 +1513,16 @@ h2 {
   transform: translateY(-2px);
 }
 
+.btn-plan {
+  background: linear-gradient(135deg, var(--color-teal), #0096b8);
+  color: white;
+  border: none;
+}
+.btn-plan:hover {
+  box-shadow: 0 5px 20px rgba(0,180,216,0.38), 0 2px 8px rgba(0,180,216,0.15);
+  transform: translateY(-2px);
+}
+
 /* ===== 风险参数行 ===== */
 .risk-params-row {
   display: flex;

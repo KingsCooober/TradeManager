@@ -182,15 +182,23 @@ class TradeTable extends BasePage {
    * 直接通过 JS 添加交易到全局 trades 数组
    */
   async addTradeDirectly(trade) {
-    // 确保交易有唯一 ID
-    const tradeWithId = { id: trade.id || `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...trade };
+    // 确保交易有唯一 ID（结合时间戳 + 计数器 + 随机数）
+    const tradeWithId = {
+      id: trade.id || `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${Math.floor(Math.random() * 1e6)}`,
+      ...trade,
+    };
     await this.page.evaluate((t) => {
       try {
+        if (typeof trades === 'undefined' || !Array.isArray(trades)) {
+          throw new Error('trades 数组未定义');
+        }
         trades.push(t);
         if (typeof updateAll === 'function') updateAll();
         if (typeof save === 'function') save();
       } catch (e) { console.error(e); }
     }, tradeWithId);
+    // 等待 DOM 渲染稳定
+    await this.page.waitForTimeout(150);
     await this.waitForAutoSave(800);
     return tradeWithId;
   }

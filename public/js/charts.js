@@ -674,3 +674,190 @@ function updateDrawdownStats(points) {
     el('valleyCapital').textContent = CNY(finalValley);
   }
 }
+
+// ===== 每日交易计划图表 =====
+
+// 计划 vs 实际 P&L 双柱状图
+function drawPlanPnlChart(canvasId, plans) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  var W = rect.width, H = rect.height;
+  ctx.clearRect(0, 0, W, H);
+
+  var tc = getThemeColors();
+  var padding = { top: 20, right: 20, bottom: 50, left: 60 };
+  var plotW = W - padding.left - padding.right;
+  var plotH = H - padding.top - padding.bottom;
+
+  // 汇总过去 30 天
+  var days = 30;
+  var today = new Date();
+  var dailyData = [];
+  for (var i = days - 1; i >= 0; i--) {
+    var d = new Date(today);
+    d.setDate(d.getDate() - i);
+    var iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    var pnl = 0, risk = 0;
+    plans.forEach(function (p) {
+      if (p.date !== iso) return;
+      var s = PlanModule.summarizePlan(p);
+      pnl += s.totalActualPnl;
+      risk += s.totalPlannedRisk;
+    });
+    dailyData.push({ date: iso, pnl: pnl, risk: risk });
+  }
+
+  var maxAbs = 0;
+  dailyData.forEach(function (d) {
+    if (Math.abs(d.pnl) > maxAbs) maxAbs = Math.abs(d.pnl);
+    if (d.risk > maxAbs) maxAbs = d.risk;
+  });
+  if (maxAbs === 0) maxAbs = 1000;
+  var yMax = maxAbs * 1.1;
+
+  // 网格
+  ctx.strokeStyle = tc.gridLine;
+  ctx.lineWidth = 1;
+  ctx.fillStyle = tc.axisLabel;
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (var g = 0; g <= 4; g++) {
+    var y = padding.top + (plotH * g / 4);
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(padding.left + plotW, y);
+    ctx.stroke();
+    var v = (yMax * (1 - g / 4));
+    var label = Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(0);
+    ctx.fillText(label, padding.left - 6, y);
+  }
+
+  // 0 线
+  var zeroY = padding.top + plotH / 2;
+  if (Math.abs(zeroY - (padding.top + plotH * (1 - 0 / yMax * 1.1))) > 2) {
+    // recompute zero position based on symmetric y range
+    zeroY = padding.top + plotH * (yMax / (yMax * 2));
+    ctx.strokeStyle = tc.refLine;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, zeroY);
+    ctx.lineTo(padding.left + plotW, zeroY);
+    ctx.stroke();
+  }
+
+  // 柱
+  var barGroupW = plotW / dailyData.length;
+  var barW = Math.max(2, barGroupW * 0.35);
+  dailyData.forEach(function (d, i) {
+    var x = padding.left + barGroupW * i + barGroupW / 2;
+    // 计划风险柱
+    var riskH = (d.risk / (yMax * 2)) * plotH;
+    ctx.fillStyle = 'rgba(239, 71, 111, 0.7)';
+    ctx.fillRect(x - barW - 1, padding.top + plotH - riskH, barW, riskH);
+    // 实际 P&L 柱
+    var pnlH = (Math.abs(d.pnl) / (yMax * 2)) * plotH;
+    var pnlY = d.pnl >= 0 ? padding.top + plotH / 2 - pnlH : padding.top + plotH / 2;
+    ctx.fillStyle = d.pnl >= 0 ? 'rgba(67, 97, 238, 0.85)' : 'rgba(239, 71, 111, 0.85)';
+    ctx.fillRect(x + 1, pnlY, barW, pnlH);
+  });
+
+  // X 轴日期标签（每 5 天一个）
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = tc.axisLabel;
+  for (var i = 0; i < dailyData.length; i += 5) {
+    var x = padding.left + barGroupW * i + barGroupW / 2;
+    var parts = dailyData[i].date.split('-');
+    ctx.fillText(parts[1] + '/' + parts[2], x, padding.top + plotH + 6);
+  }
+
+  // 无数据提示
+  var hasData = dailyData.some(function (d) { return d.pnl !== 0 || d.risk !== 0; });
+  if (!hasData) {
+    ctx.fillStyle = tc.noDataText;
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('近 30 天暂无数据', padding.left + plotW / 2, padding.top + plotH / 2);
+  }
+}
+
+// 计划状态分布环形图
+function drawPlanStatusChart(canvasId, counts) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  var W = rect.width, H = rect.height;
+  ctx.clearRect(0, 0, W, H);
+
+  var tc = getThemeColors();
+  var cx = W * 0.35, cy = H / 2;
+  var r = Math.min(W * 0.3, H * 0.35);
+  var innerR = r * 0.6;
+
+  var labels = { draft: '草稿', confirmed: '已确认', executed: '已执行', completed: '已完成', cancelled: '已取消' };
+  var colorMap = { draft: '#9a9ab0', confirmed: '#4361ee', executed: '#7209b7', completed: '#06d6a0', cancelled: '#ef476f' };
+
+  var total = 0;
+  Object.keys(counts).forEach(function (k) { total += counts[k]; });
+
+  if (total === 0) {
+    ctx.fillStyle = tc.noDataText;
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('暂无计划', cx, cy);
+    return;
+  }
+
+  // 绘制扇区
+  var startAngle = -Math.PI / 2;
+  Object.keys(counts).forEach(function (k) {
+    var v = counts[k];
+    if (v === 0) return;
+    var angle = (v / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, startAngle, startAngle + angle);
+    ctx.arc(cx, cy, innerR, startAngle + angle, startAngle, true);
+    ctx.closePath();
+    ctx.fillStyle = colorMap[k];
+    ctx.fill();
+    startAngle += angle;
+  });
+
+  // 中心数字
+  ctx.fillStyle = tc.axisLabel;
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('总数', cx, cy - 4);
+  ctx.font = '700 22px sans-serif';
+  ctx.fillStyle = tc.pieCenter === '#2c2c2e' ? '#e5e5ea' : '#1a1a2e';
+  ctx.fillText(total, cx, cy + 18);
+
+  // 图例
+  var legendX = W * 0.65;
+  var legendY = H * 0.15;
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  Object.keys(labels).forEach(function (k, i) {
+    var v = counts[k];
+    var y = legendY + i * 22;
+    ctx.fillStyle = colorMap[k];
+    ctx.fillRect(legendX, y - 5, 10, 10);
+    ctx.fillStyle = tc.legendText;
+    ctx.fillText(labels[k] + ' (' + v + ')', legendX + 16, y);
+  });
+}

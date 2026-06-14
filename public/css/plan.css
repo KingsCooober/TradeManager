@@ -1,0 +1,552 @@
+/* ===================================================
+   每日交易计划 - 专属样式
+   配色：明亮/暗黑 主题均适配
+   布局：顶部统计 → 工具栏 → 图表 → 列表
+   =================================================== */
+
+/* ===== 主体布局 ===== */
+.plan-main {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ===== 统计卡片行 ===== */
+.plan-summary-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+}
+
+.summary-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-card);
+  border-left: 4px solid var(--accent-blue);
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.summary-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-h);
+}
+.summary-card.stat-blue   { border-left-color: var(--color-blue); }
+.summary-card.stat-green  { border-left-color: var(--color-green); }
+.summary-card.stat-yellow { border-left-color: var(--color-yellow); }
+.summary-card.stat-purple { border-left-color: var(--color-purple); }
+.summary-card.stat-red    { border-left-color: var(--color-red); }
+
+.stat-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 6px 0 4px;
+  font-family: 'SF Mono', Consolas, 'Courier New', monospace;
+}
+.stat-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* 盈亏值着色 */
+.stat-value.pnl-pos { color: var(--color-green); }
+.stat-value.pnl-neg { color: var(--color-red); }
+
+/* ===== 工具栏 ===== */
+.plan-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+.toolbar-left { display: flex; align-items: center; gap: 12px; }
+.toolbar-left h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.toolbar-hint { font-size: 12px; color: var(--text-tertiary); }
+.toolbar-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.select-sm, .input-sm {
+  padding: 6px 10px;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.select-sm:focus, .input-sm:focus {
+  border-color: var(--color-blue);
+  background: var(--bg-input-focus);
+}
+.input-sm { min-width: 180px; }
+
+/* ===== 图表区 ===== */
+.plan-charts-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+}
+.chart-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-card);
+}
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.chart-header h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.chart-legend { display: flex; gap: 12px; }
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.legend-item::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 4px;
+}
+.legend-pnl::before  { background: var(--color-blue); }
+.legend-risk::before { background: var(--color-red); }
+
+canvas { display: block; width: 100%; }
+
+/* ===== 计划列表 ===== */
+.plan-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.plan-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  transition: transform 0.2s, box-shadow 0.2s;
+  border-left: 4px solid var(--border-input);
+  display: flex;
+  flex-direction: column;
+}
+.plan-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-h);
+}
+.plan-card.status-draft     { border-left-color: #9a9ab0; }
+.plan-card.status-confirmed { border-left-color: var(--color-blue); }
+.plan-card.status-executed  { border-left-color: var(--color-purple); }
+.plan-card.status-completed { border-left-color: var(--color-green); }
+.plan-card.status-cancelled { border-left-color: var(--color-red); }
+
+.plan-card-head {
+  padding: 12px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-divider);
+  background: var(--bg-subtle);
+}
+.plan-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+.plan-card-date {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-family: 'SF Mono', Consolas, monospace;
+}
+.plan-card-status {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.status-draft     { background: #e5e7eb; color: #4b5563; }
+.status-confirmed { background: #dbeafe; color: #1e40af; }
+.status-executed  { background: #ede9fe; color: #6b21a8; }
+.status-completed { background: #d1fae5; color: #065f46; }
+.status-cancelled { background: #fee2e2; color: #991b1b; }
+
+[data-theme="dark"] .status-draft     { background: #374151; color: #d1d5db; }
+[data-theme="dark"] .status-confirmed { background: #1e3a8a; color: #93c5fd; }
+[data-theme="dark"] .status-executed  { background: #581c87; color: #d8b4fe; }
+[data-theme="dark"] .status-completed { background: #064e3b; color: #6ee7b7; }
+[data-theme="dark"] .status-cancelled { background: #7f1d1d; color: #fca5a5; }
+
+.plan-card-body {
+  padding: 14px 16px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.plan-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.plan-card-meta .tag {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--bg-subtle);
+  border-radius: 6px;
+  font-size: 11px;
+}
+.plan-card-strategy {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.plan-card-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.plan-card-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--bg-subtle);
+  border-radius: 6px;
+}
+.item-symbol {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.item-dir-long, .item-dir-buy   { color: var(--color-green); }
+.item-dir-short, .item-dir-sell { color: var(--color-red); }
+
+.plan-card-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-divider);
+}
+.plan-card-stat {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.plan-card-stat .label { color: var(--text-tertiary); }
+.plan-card-stat .value { font-weight: 600; color: var(--text-primary); }
+.plan-card-stat .value.pnl-pos { color: var(--color-green); }
+.plan-card-stat .value.pnl-neg { color: var(--color-red); }
+
+.plan-card-foot {
+  padding: 8px 12px;
+  display: flex;
+  gap: 6px;
+  border-top: 1px solid var(--border-divider);
+  background: var(--bg-subtle);
+  justify-content: flex-end;
+}
+.plan-card-foot .btn { padding: 4px 10px; font-size: 12px; }
+
+/* ===== 空状态 ===== */
+.empty-state {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-card);
+}
+.empty-icon { font-size: 64px; margin-bottom: 12px; }
+.empty-title { font-size: 18px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.empty-desc { margin-bottom: 20px; }
+
+.empty-state-mini {
+  padding: 30px 20px;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+/* ===== 编辑模态框 ===== */
+.modal-content-xl {
+  max-width: 1000px;
+  width: 95%;
+}
+.modal-content-md { max-width: 600px; width: 95%; }
+.modal-content-sm { max-width: 420px; width: 95%; }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s;
+}
+.modal-content {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.3s;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+.modal-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-divider);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.modal-header h3 { margin: 0; font-size: 16px; }
+.modal-close {
+  width: 32px; height: 32px;
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.modal-close:hover { background: var(--bg-hover); }
+.modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+.modal-footer {
+  padding: 12px 24px;
+  border-top: 1px solid var(--border-divider);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modal-field {
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.modal-field label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.modal-field input,
+.modal-field select,
+.modal-field textarea {
+  padding: 8px 12px;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.modal-field input:focus,
+.modal-field select:focus,
+.modal-field textarea:focus {
+  border-color: var(--color-blue);
+  background: var(--bg-input-focus);
+}
+.modal-field textarea { resize: vertical; min-height: 60px; }
+.form-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+
+/* ===== 编辑表单分组 ===== */
+.form-section {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px dashed var(--border-divider);
+}
+.form-section:last-child { border-bottom: none; }
+.form-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+.form-grid-3 { grid-template-columns: repeat(3, 1fr); }
+.form-grid-4 { grid-template-columns: repeat(4, 1fr); }
+.form-grid-full { grid-template-columns: 1fr; }
+
+.market-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.market-chip {
+  padding: 4px 10px;
+  background: var(--bg-subtle);
+  border-radius: 14px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid var(--border-input);
+  transition: all 0.15s;
+}
+.market-chip:hover { background: var(--bg-hover); }
+.market-chip.active {
+  background: var(--color-blue);
+  color: white;
+  border-color: var(--color-blue);
+}
+
+/* ===== 交易子项 ===== */
+.plan-items-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.plan-item-block {
+  border: 1px solid var(--border-input);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--bg-subtle);
+  position: relative;
+}
+.plan-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.plan-item-head-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.plan-item-remove {
+  background: transparent;
+  border: none;
+  color: var(--color-red);
+  cursor: pointer;
+  font-size: 18px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.plan-item-remove:hover { background: var(--bg-hover); }
+
+.item-rr-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--bg-input);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'SF Mono', Consolas, monospace;
+  margin-left: 8px;
+}
+.item-rr-badge.good { color: var(--color-green); }
+.item-rr-badge.warn { color: var(--color-orange); }
+.item-rr-badge.bad  { color: var(--color-red); }
+
+.add-item-btn {
+  width: 100%;
+  padding: 10px;
+  border: 2px dashed var(--border-input);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+.add-item-btn:hover {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+  background: var(--bg-hover);
+}
+
+/* ===== 模板管理 ===== */
+.template-list { display: flex; flex-direction: column; gap: 8px; }
+.template-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--bg-subtle);
+  border-radius: 8px;
+}
+.template-item-name { font-weight: 500; }
+.template-item-actions { display: flex; gap: 6px; }
+.template-item-actions .btn { padding: 4px 8px; font-size: 12px; }
+
+/* ===== 提醒徽章 ===== */
+.reminder-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  background: var(--color-yellow);
+  color: #5a4500;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 6px;
+}
+[data-theme="dark"] .reminder-badge {
+  background: #92400e;
+  color: #fef3c7;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 1100px) {
+  .plan-summary-row { grid-template-columns: repeat(3, 1fr); }
+  .plan-charts-row { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .plan-main { padding: 12px; }
+  .plan-summary-row { grid-template-columns: repeat(2, 1fr); }
+  .plan-toolbar { flex-direction: column; align-items: stretch; }
+  .toolbar-right { justify-content: flex-start; }
+  .form-grid, .form-grid-3, .form-grid-4 { grid-template-columns: 1fr; }
+  .modal-content-xl, .modal-content-md, .modal-content-sm { width: 100%; max-width: 100%; max-height: 100vh; border-radius: 0; }
+}

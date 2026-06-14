@@ -138,29 +138,147 @@ async function clearAllStorage(page) {
  * @param {Array<object>} trades
  */
 async function seedTradesToIndexedDB(page, trades) {
-  await page.evaluate(async (trades) => {
+  await page.evaluate((trades) => {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('PositionManagerDB', 1);
+      const req = indexedDB.open('PositionManagerDB', 2);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('trades')) {
+          const ts = db.createObjectStore('trades', { keyPath: 'id' });
+          ts.createIndex('date', 'date', { unique: false });
+        }
+      };
       req.onsuccess = (event) => {
         const db = event.target.result;
-        const tx = db.transaction(['trades'], 'readwrite');
-        const store = tx.objectStore('trades');
-        // 先清空
-        store.clear();
-        // 写入新数据
-        for (const t of trades) {
-          store.put(t);
+        if (!db.objectStoreNames.contains('trades')) {
+          db.close();
+          return reject(new Error('trades store not available'));
         }
-        tx.oncomplete = () => {
-          // 同步到 localStorage 备份
-          localStorage.setItem('trades_v4', JSON.stringify(trades));
-          resolve();
-        };
-        tx.onerror = (e) => reject(e);
+        try {
+          const tx = db.transaction(['trades'], 'readwrite');
+          const store = tx.objectStore('trades');
+          store.clear();
+          for (const t of trades) {
+            store.put(t);
+          }
+          tx.oncomplete = () => {
+            try {
+              localStorage.setItem('trades_v4', JSON.stringify(trades));
+            } catch (_) {}
+            db.close();
+            resolve();
+          };
+          tx.onerror = (e) => {
+            db.close();
+            reject(new Error(e?.message || 'tx error'));
+          };
+        } catch (e) {
+          db.close();
+          reject(e);
+        }
       };
-      req.onerror = (e) => reject(e);
+      req.onerror = (e) => reject(new Error(e?.target?.error?.message || 'open error'));
     });
   }, trades);
+}
+
+/**
+ * 直接将交易计划写入 IndexedDB（v2 schema）
+ * @param {import('@playwright/test').Page} page
+ * @param {Array<object>} plans
+ */
+async function seedPlansToIndexedDB(page, plans) {
+  await page.evaluate((plans) => {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('PositionManagerDB', 2);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('plans')) {
+          const ps = db.createObjectStore('plans', { keyPath: 'id' });
+          ps.createIndex('date', 'date', { unique: false });
+          ps.createIndex('status', 'status', { unique: false });
+          ps.createIndex('userId', 'userId', { unique: false });
+          ps.createIndex('updatedAt', 'updatedAt', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('planTemplates')) {
+          db.createObjectStore('planTemplates', { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains('plans')) {
+          db.close();
+          return reject(new Error('plans store not available'));
+        }
+        try {
+          const tx = db.transaction(['plans'], 'readwrite');
+          const store = tx.objectStore('plans');
+          store.clear();
+          for (const p of plans) {
+            store.put(p);
+          }
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onerror = (e) => {
+            db.close();
+            reject(new Error(e?.message || 'tx error'));
+          };
+        } catch (e) {
+          db.close();
+          reject(e);
+        }
+      };
+      req.onerror = (e) => reject(new Error(e?.target?.error?.message || 'open error'));
+    });
+  }, plans);
+}
+
+/**
+ * 直接将计划模板写入 IndexedDB
+ * @param {import('@playwright/test').Page} page
+ * @param {Array<object>} templates
+ */
+async function seedTemplatesToIndexedDB(page, templates) {
+  await page.evaluate((templates) => {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('PositionManagerDB', 2);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('planTemplates')) {
+          db.createObjectStore('planTemplates', { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains('planTemplates')) {
+          db.close();
+          return reject(new Error('planTemplates store not available'));
+        }
+        try {
+          const tx = db.transaction(['planTemplates'], 'readwrite');
+          const store = tx.objectStore('planTemplates');
+          store.clear();
+          for (const t of templates) {
+            store.put(t);
+          }
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onerror = (e) => {
+            db.close();
+            reject(new Error(e?.message || 'tx error'));
+          };
+        } catch (e) {
+          db.close();
+          reject(e);
+        }
+      };
+      req.onerror = (e) => reject(new Error(e?.target?.error?.message || 'open error'));
+    });
+  }, templates);
 }
 
 /**
@@ -214,6 +332,8 @@ module.exports = {
   clearIndexedDB,
   clearAllStorage,
   seedTradesToIndexedDB,
+  seedPlansToIndexedDB,
+  seedTemplatesToIndexedDB,
   setupDialogHandler,
   waitForVisible,
   safe,

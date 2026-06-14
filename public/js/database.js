@@ -1,7 +1,7 @@
 // ===== IndexedDB 数据库管理 =====
 
 const DB_NAME = 'PositionManagerDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 // 数据库连接
 var db = null;
@@ -49,7 +49,22 @@ function initDatabase() {
       if (!database.objectStoreNames.contains('settings')) {
         database.createObjectStore('settings', { keyPath: 'key' });
       }
-      
+
+      // 每日交易计划表
+      if (!database.objectStoreNames.contains('plans')) {
+        var planStore = database.createObjectStore('plans', { keyPath: 'id' });
+        planStore.createIndex('date', 'date', { unique: false });
+        planStore.createIndex('status', 'status', { unique: false });
+        planStore.createIndex('userId', 'userId', { unique: false });
+        planStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+      }
+
+      // 计划模板表
+      if (!database.objectStoreNames.contains('planTemplates')) {
+        var tmplStore = database.createObjectStore('planTemplates', { keyPath: 'id' });
+        tmplStore.createIndex('userId', 'userId', { unique: false });
+      }
+
       console.log('数据库结构升级完成');
     };
   });

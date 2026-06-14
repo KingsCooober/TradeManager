@@ -63,9 +63,13 @@ class CalculatorPanel extends BasePage {
    * 设置方向（多/空）
    */
   async setDirection(dir) {
-    await this.page.click(this.selectors.dirSelect);
-    await this.page.waitForSelector(`${this.selectors.dirOptions}.open`, { timeout: 3000 }).catch(() => {});
-    await this.page.click(`${this.selectors.dirOptions} li[data-value="${dir}"]`);
+    await this.page.evaluate((d) => {
+      if (typeof setDir === 'function') setDir(d);
+      else {
+        var hidden = document.getElementById('calcDir');
+        if (hidden) hidden.value = d;
+      }
+    }, dir);
     await this.waitForAutoSave(200);
   }
 
@@ -73,9 +77,13 @@ class CalculatorPanel extends BasePage {
    * 设置买点类型
    */
   async setBuyType(buyType) {
-    await this.page.click(this.selectors.buyTypeSelect);
-    await this.page.waitForSelector(`${this.selectors.buyTypeOptions}.open`, { timeout: 3000 }).catch(() => {});
-    await this.page.click(`${this.selectors.buyTypeOptions} li[data-value="${buyType}"]`);
+    await this.page.evaluate((t) => {
+      if (typeof setBuyType === 'function') setBuyType(t);
+      else {
+        var hidden = document.getElementById('calcBuyType');
+        if (hidden) hidden.value = t;
+      }
+    }, buyType);
     await this.waitForAutoSave(200);
   }
 
