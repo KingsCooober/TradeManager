@@ -17,8 +17,9 @@ function calcActualRisk(trade) {
 
 function addEmptyTrade() {
   var today = getToday();
+  var id = generateUUID();
   trades.push({
-    id: Date.now(),
+    id: id,
     date: today,
     exitDate: today,
     openTime: new Date().toISOString(),
@@ -39,6 +40,7 @@ function addEmptyTrade() {
     followedPlan: '是',
     note: ''
   });
+  markTradeDirty(id);
   save().then(function() {
     renderTableWithSelects();
   });
@@ -71,6 +73,9 @@ function confirmDeleteTrade() {
   var idStr = String(id);
   trades = trades.filter(function(t) { return String(t.id) !== idStr; });
   
+  // 标记为待删除
+  markTradeDeleted(idStr);
+  
   // 更新界面
   updateAll();
   
@@ -97,6 +102,9 @@ function deleteTrade(id) {
   // 直接删除（用于内部调用）
   var idStr = String(id);
   trades = trades.filter(function(t) { return String(t.id) !== idStr; });
+  
+  // 标记为待删除
+  markTradeDeleted(idStr);
   
   var savePromise = save();
   
@@ -134,6 +142,9 @@ function updateTrade(id, field, value) {
   if (!t) return;
 
   t[field] = value;
+  
+  // 标记为待同步
+  markTradeDirty(idStr);
 
   // 当填写出场价、入场价、仓位时自动计算盈亏（扣除手续费）
   if ((field === 'exit' || field === 'entry' || field === 'posSize' || field === 'actualLots') && t.exit && t.entry && t.posSize) {

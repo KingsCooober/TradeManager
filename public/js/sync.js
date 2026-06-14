@@ -300,7 +300,7 @@ async function syncFromServer() {
     if (serverData.trades) {
       trades = serverData.trades.map(tradeFromServerFormat);
       console.log('转换后的交易记录:', trades);
-      await save();
+      await saveAll();
     }
     
     // 转换并更新入金记录

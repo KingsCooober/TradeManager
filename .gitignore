@@ -28,3 +28,16 @@ deploy.zip
 # 操作系统文件
 Thumbs.db
 Desktop.ini
+
+# Playwright 测试产物
+playwright-report/
+test-results/
+playwright/.cache/
+.playwright/
+screenshots/
+playwright-report/data/
+playwright-report/trace.*.zip
+
+# 覆盖率报告
+coverage/
+*.lcov

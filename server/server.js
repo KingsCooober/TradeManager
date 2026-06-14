@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 // 中间件
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../')));
+app.use(express.static(path.join(__dirname, '../public')));
 
 // 数据库初始化
 const db = new sqlite3.Database(path.join(__dirname, 'data.db'));

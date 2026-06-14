@@ -6,6 +6,28 @@ var deposits = [];
 var withdrawals = [];
 var dbInitialized = false;
 
+// 增量同步追踪
+var dirtyTradeIds = {};
+var pendingDeletedTradeIds = [];
+
+// 标记交易为待同步
+function markTradeDirty(id) {
+  dirtyTradeIds[String(id)] = true;
+}
+
+// 标记交易为待删除
+function markTradeDeleted(id) {
+  var idStr = String(id);
+  pendingDeletedTradeIds.push(idStr);
+  delete dirtyTradeIds[idStr];
+}
+
+// 清空增量追踪
+function clearDirtyTracking() {
+  dirtyTradeIds = {};
+  pendingDeletedTradeIds = [];
+}
+
 // 初始化存储
 function initStorage() {
   return new Promise(function(resolve, reject) {
@@ -73,10 +95,48 @@ function loadFromLocalStorage() {
   loadAccountParamsFromLocalStorage();
 }
 
-// 保存交易记录
+// 保存交易记录（增量同步）
 function save() {
   if (dbInitialized && db) {
-    // 获取当前数据库中的所有记录，删除不在 trades 数组中的记录
+    // 如果没有待同步的变更，跳过保存
+    if (Object.keys(dirtyTradeIds).length === 0 && pendingDeletedTradeIds.length === 0) {
+      return Promise.resolve();
+    }
+    
+    var promises = [];
+    
+    // 删除待删除的交易
+    pendingDeletedTradeIds.forEach(function(id) {
+      promises.push(deleteTradeFromDB(id));
+    });
+    
+    // 保存待同步的交易
+    for (var id in dirtyTradeIds) {
+      var trade = trades.find(function(t) { return String(t.id) === id; });
+      if (trade) {
+        promises.push(saveTradeToDB(trade));
+      }
+    }
+    
+    return Promise.all(promises).then(function() {
+      // 清空追踪
+      clearDirtyTracking();
+      // 更新 localStorage 备份
+      localStorage.setItem('trades_v4', JSON.stringify(trades));
+      console.log('增量保存完成');
+    }).catch(function(err) {
+      console.error('增量保存失败:', err);
+      throw err;
+    });
+  } else {
+    localStorage.setItem('trades_v4', JSON.stringify(trades));
+    return Promise.resolve();
+  }
+}
+
+// 全量同步（用于从服务器同步后）
+function saveAll() {
+  if (dbInitialized && db) {
     return getAllTradesFromDB().then(function(existingTrades) {
       var tradeIds = trades.map(function(t) { return String(t.id); });
       var deletePromises = [];
@@ -90,21 +150,22 @@ function save() {
       
       return Promise.all(deletePromises);
     }).then(function() {
-      // 保存所有交易到数据库（使用 put 会覆盖已有记录）
+      // 保存所有交易到数据库
       var promises = trades.map(function(trade) {
         return saveTradeToDB(trade);
       });
       return Promise.all(promises);
     }).then(function() {
-      // 同时更新 localStorage 作为备份，保持同步
+      // 清空追踪（全量同步后不需要增量同步）
+      clearDirtyTracking();
+      // 同时更新 localStorage 作为备份
       localStorage.setItem('trades_v4', JSON.stringify(trades));
-      console.log('保存完成，共 ' + trades.length + ' 笔记录');
+      console.log('全量保存完成，共 ' + trades.length + ' 笔记录');
     }).catch(function(err) {
-      console.error('保存到数据库失败:', err);
+      console.error('全量保存失败:', err);
       throw err;
     });
   } else {
-    // 回退到localStorage
     localStorage.setItem('trades_v4', JSON.stringify(trades));
     return Promise.resolve();
   }
@@ -205,7 +266,7 @@ function addDeposit(amount, date) {
       deposits.push({ id: id, amount: amount, date: date });
     });
   } else {
-    var id = Date.now();
+    var id = generateUUID();
     deposits.push({ id: id, amount: amount, date: date });
     saveFunds();
     return Promise.resolve();
@@ -219,7 +280,7 @@ function addWithdrawal(amount, date) {
       withdrawals.push({ id: id, amount: amount, date: date });
     });
   } else {
-    var id = Date.now();
+    var id = generateUUID();
     withdrawals.push({ id: id, amount: amount, date: date });
     saveFunds();
     return Promise.resolve();
@@ -415,7 +476,7 @@ function importToLocalStorage(data) {
   if (data.riskPct) document.getElementById('riskPct').value = data.riskPct;
   if (data.maxRisk) document.getElementById('maxRisk').value = data.maxRisk;
   if (data.feeRate !== undefined) document.getElementById('feeRate').value = data.feeRate;
-  save().then(function() {
+  saveAll().then(function() {
     updateAll();
   });
   var el = document.getElementById('syncStatus');

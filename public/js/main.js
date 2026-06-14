@@ -333,7 +333,9 @@ function updateHeaderSyncUI() {
       if (loggedOut) { loggedOut.style.display = 'none'; }
       if (headerUsername) { headerUsername.textContent = user.username; }
       if (headerBtnAutoSync) {
-        var isAuto = localStorage.getItem('sync_auto') === 'true';
+        // 使用 SYNC_CONFIG.autoSync 作为真实状态来源（与 sync.js 中的默认值保持一致）
+        // 避免 localStorage 未设置时（初始状态）显示错误
+        var isAuto = (typeof SYNC_CONFIG !== 'undefined' && SYNC_CONFIG.autoSync === true);
         headerBtnAutoSync.textContent = '自动: ' + (isAuto ? '开' : '关');
       }
     } else {

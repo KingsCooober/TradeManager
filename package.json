@@ -1,0 +1,24 @@
+{
+  "name": "trademanager",
+  "version": "1.0.0",
+  "description": "交易管理系统 - 前后端整合",
+  "scripts": {
+    "test": "node --test tests/frontend/*.test.js tests/backend/*.js",
+    "test:frontend": "node --test tests/frontend/*.test.js",
+    "test:backend": "node --test tests/backend/*.js",
+    "test:watch": "node --test --watch tests/frontend/*.test.js",
+    "start": "node server/server.js",
+    "dev": "node server/server.js",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:edge": "playwright test --project=edge",
+    "test:e2e:report": "playwright show-report"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0"
+  }
+}

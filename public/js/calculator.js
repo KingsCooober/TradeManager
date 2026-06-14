@@ -440,7 +440,7 @@ function addTradeFromCalc() {
   var calcBuyTypeEl = g('calcBuyType');
 
   trades.push({
-    id: Date.now(),
+    id: generateUUID(),
     date: openDate,
     exitDate: openDate,
     openTime: new Date().toISOString(),
@@ -462,6 +462,9 @@ function addTradeFromCalc() {
     followedPlan: '是',
     note: ''
   });
+  
+  // 标记为待同步
+  markTradeDirty(trades[trades.length - 1].id);
 
   updateAll();
   clearCalc();
