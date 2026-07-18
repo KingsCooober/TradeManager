@@ -180,16 +180,6 @@ function saveTrade(trade) {
   }
 }
 
-// 删除交易
-function deleteTradeStorage(id) {
-  if (dbInitialized && db) {
-    return deleteTradeFromDB(id);
-  } else {
-    trades = trades.filter(function(t) { return t.id !== id; });
-    return save();
-  }
-}
-
 // 加载账户参数（从localStorage，用于回退）
 function loadAccountParamsFromLocalStorage() {
   var acc = localStorage.getItem('account_v1');

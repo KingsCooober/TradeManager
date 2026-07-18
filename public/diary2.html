@@ -4,47 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>复盘总结 - Trade Manager</title>
-<link rel="stylesheet" href="css/main.css?v=5">
+<link rel="stylesheet" href="css/main.css?v=6">
 <link rel="stylesheet" href="css/diary2.css?v=20260531010">
 </head>
 <body>
 
-<header class="app-header">
-  <div class="header-left">
-    <button class="btn btn-ghost btn-sm" onclick="goBack()" aria-label="返回主页面">
-      ← 返回
-    </button>
-    <div class="app-logo">📖</div>
-    <div class="app-title">
-      <h1>复盘总结</h1>
-      <span class="app-subtitle">亏损交易复盘总结</span>
-    </div>
-  </div>
-  <div class="header-right">
-    <div id="syncStatus" class="sync-status-inline"></div>
-    <!-- 已登录状态：显示用户名、同步、自动同步、修改密码、退出 -->
-    <div id="headerSyncLoggedIn" style="display:none;align-items:center;gap:8px">
-      <span class="header-user-badge">👤 <span id="headerUsername">-</span></span>
-      <button class="btn btn-sm btn-primary" onclick="handleFullSync()">🔄 同步</button>
-      <button class="btn btn-sm btn-ghost" onclick="handleToggleAutoSync()" id="headerBtnAutoSync">自动: 关</button>
-      <button class="btn btn-sm btn-ghost" onclick="openChangePasswordModal()">� 修改密码</button>
-      <button class="btn btn-sm btn-ghost-danger" onclick="handleLogout()">退出</button>
-    </div>
-    <!-- 未登录状态：只显示登录按钮 -->
-    <div id="headerSyncLoggedOut" style="display:flex;align-items:center;gap:8px">
-      <button class="btn btn-sm btn-primary" onclick="openLoginModal()">☁️ 登录同步</button>
-    </div>
-    <!-- 管理员菜单 -->
-    <div id="adminMenu" style="display:none;align-items:center;gap:8px">
-      <span class="header-user-badge admin-badge">🔧 管理员</span>
-    </div>
-    <div class="theme-divider"></div>
-    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="切换明暗主题">
-      <span class="theme-icon-light">🌙</span>
-      <span class="theme-icon-dark">☀️</span>
-    </button>
-  </div>
-</header>
+<header class="app-header" id="appHeader"></header>
 
 <main class="diary-main">
   <div class="diary-container">
@@ -230,6 +195,8 @@
 </div>
 
 <script src="js/utils.js?v=4"></script>
+<script src="js/header.js?v=1"></script>
+<script>renderAppHeader('diary');</script>
 <script src="js/database.js?v=4"></script>
 <script src="js/sync.js?v=5"></script>
 <script src="js/diary2.js?v=20260531012"></script>

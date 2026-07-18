@@ -15,20 +15,6 @@ function calcActualRisk(trade) {
   return 0;
 }
 
-function getBuyTypeSelect(trade) {
-  var html = '<div class="table-select-wrapper">' +
-    '<div class="table-select type-select" tabindex="0" data-trade-id="' + esc(trade.id) + '" data-field="buyType">' +
-    '<span class="table-select-value">' + esc(trade.buyType || '-') + '</span>' +
-    '<span class="table-select-arrow">▼</span>' +
-    '</div>' +
-    '<ul class="table-select-options" data-trade-id="' + esc(trade.id) + '" data-field="buyType">';
-  BUY_TYPES.forEach(function(t) {
-    html += '<li data-value="' + esc(t) + '"' + (trade.buyType === t ? ' class="selected"' : '') + '>' + esc(t) + '</li>';
-  });
-  html += '</ul></div>';
-  return html;
-}
-
 var EXIT_TYPES = ['', '止损', '目标止盈', '移动止盈', '平保'];
 var EXIT_TYPE_LABELS = { '': '-', '止损': '止损', '目标止盈': '目标止盈', '移动止盈': '移动止盈', '平保': '平保' };
 var EXIT_TYPE_COLORS = { '止损': 'var(--color-green)', '目标止盈': 'var(--color-red)', '移动止盈': 'var(--color-orange, #f97316)', '平保': 'var(--color-blue)' };
@@ -49,39 +35,6 @@ function getExitTypeSelect(trade) {
   });
   html += '</ul></div>';
   return html;
-}
-
-function addEmptyTrade() {
-  var today = getToday();
-  var id = generateUUID();
-  trades.push({
-    id: id,
-    date: today,
-    exitDate: today,
-    openTime: new Date().toISOString(),
-    symbol: '',
-    buyType: '15分钟回踩',
-    dir: '多',
-    entry: '',
-    stop: '',
-    breakEvenPrice: '',
-    target: '',
-    rrTarget: 0,
-    posSize: '',
-    actualLots: null,
-    riskAmount: '',
-    exit: '',
-    pnl: '',
-    pnlR: '',
-    status: 'open',
-    followedPlan: '是',
-    exitType: '',
-    note: ''
-  });
-  markTradeDirty(id);
-  save().then(function() {
-    renderTableWithSelects();
-  });
 }
 
 var pendingDeleteTradeId = null;
@@ -136,38 +89,6 @@ function confirmDeleteTrade() {
   }
 }
 
-function deleteTrade(id) {
-  // 直接删除（用于内部调用）
-  var idStr = String(id);
-  trades = trades.filter(function(t) { return String(t.id) !== idStr; });
-  
-  // 标记为待删除
-  markTradeDeleted(idStr);
-  
-  var savePromise = save();
-  
-  if (typeof syncModule !== 'undefined' && syncModule.isLoggedIn()) {
-    savePromise = savePromise.then(function() {
-      return syncModule.deleteTradeFromServer(idStr);
-    }).then(function(success) {
-      if (success) {
-        console.log('已从服务器删除交易记录');
-      } else {
-        console.warn('服务器删除可能失败，将在下次同步时处理');
-      }
-    }).catch(function(err) {
-      console.error('删除服务器记录失败:', err);
-    });
-  }
-  
-  savePromise.then(function() {
-    updateAll();
-  }).catch(function(err) {
-    console.error('删除保存失败:', err);
-    updateAll();
-  });
-}
-
 function updateTrade(id, field, value) {
   var t = null;
   var idStr = String(id);
@@ -185,12 +106,18 @@ function updateTrade(id, field, value) {
   markTradeDirty(idStr);
 
   // 当填写出场价、入场价、仓位时自动计算盈亏（扣除手续费）
-  if ((field === 'exit' || field === 'entry' || field === 'posSize' || field === 'actualLots') && t.exit && t.entry && t.posSize) {
+  if (field === 'exit' || field === 'entry' || field === 'posSize' || field === 'actualLots') {
     var e = parseFloat(t.entry),
         ex = parseFloat(t.exit),
-        pos = parseFloat(t.posSize),
         lots = parseFloat(t.actualLots) || 0;
-    if (!isNaN(e) && !isNaN(ex) && !isNaN(pos) && e !== 0) {
+    
+    // 如果posSize为空但有actualLots和entry，自动计算posSize
+    if ((!t.posSize || isNaN(parseFloat(t.posSize))) && lots > 0 && !isNaN(e) && e > 0) {
+      t.posSize = Math.round(e * lots * 100) / 100;
+    }
+    
+    var pos = parseFloat(t.posSize) || 0;
+    if (!isNaN(e) && !isNaN(ex) && pos > 0 && e !== 0) {
       var pct = t.dir === '多' ? (ex - e) / e : (e - ex) / e;
       var grossPnl = pos * pct; // 毛盈亏
       
@@ -248,6 +175,9 @@ function updateTrade(id, field, value) {
   }
 
   updateAll();
+  
+  // 同步保存到localStorage（确保不丢失）
+  try { localStorage.setItem('trades_v4', JSON.stringify(trades)); } catch(e) {}
   
   // 自动保存到数据库（带防抖）
   if (typeof triggerAutoSave === 'function') {
@@ -323,7 +253,7 @@ function renderTable() {
       '<td style="text-align:center;color:var(--color-red)">' + tpD + '</td>' +
       '<td style="text-align:center;color:var(--color-blue)">' + (t.posSize ? parseFloat(t.posSize).toLocaleString() + ' ￥' : '-') + '</td>' +
       '<td style="text-align:center;color:var(--color-purple)">' + riskDisplay + '</td>' +
-      '<td><input type="number" class="in-exit" value="' + t.exit + '" placeholder="出场" step="0.1" onchange="updateTrade(' + t.id + ',\'exit\',this.value)"></td>' +
+      '<td><input type="number" class="in-exit" value="' + t.exit + '" placeholder="出场" step="0.1" onchange="updateTrade(' + sqesc(t.id) + ',\'exit\',this.value)"></td>' +
       '<td><input type="date" class="in-date" value="' + t.exitDate + '" onchange="updateTrade(' + sqesc(t.id) + ',\'exitDate\',this.value)"></td>' +
       '<td style="text-align:center">' + getExitTypeSelect(t) + '</td>' +
       '<td style="' + exDC + ';text-align:center">' + exD + '</td>' +

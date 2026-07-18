@@ -53,6 +53,11 @@ function triggerAutoSave() {
   autoSave();
 }
 
+// 页面关闭前保存数据
+window.addEventListener('beforeunload', function() {
+  try { localStorage.setItem('trades_v4', JSON.stringify(trades)); } catch(e) {}
+});
+
 // ===== 统计数据更新 =====
 function updateStats() {
   var closed = trades.filter(function(t) {

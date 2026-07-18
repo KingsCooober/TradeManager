@@ -4,42 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>每日复盘 - Trade Manager</title>
-<link rel="stylesheet" href="css/main.css?v=5">
+<link rel="stylesheet" href="css/main.css?v=6">
 <link rel="stylesheet" href="css/daily-review.css?v=20260718007">
 </head>
 <body>
 
-<header class="app-header">
-  <div class="header-left">
-    <button class="btn btn-ghost btn-sm" onclick="window.location.href='index.html'" aria-label="返回">← 返回</button>
-    <div class="app-logo">📋</div>
-    <div class="app-title">
-      <h1>每日复盘</h1>
-      <span class="app-subtitle">交易复盘与策略分析</span>
-    </div>
-  </div>
-  <div class="header-right">
-    <div id="syncStatus" class="sync-status-inline"></div>
-    <div id="headerSyncLoggedIn" style="display:none;align-items:center;gap:8px">
-      <span class="header-user-badge">👤 <span id="headerUsername">-</span></span>
-      <button class="btn btn-sm btn-primary" onclick="handleFullSync()">🔄 同步</button>
-      <button class="btn btn-sm btn-ghost" onclick="handleToggleAutoSync()" id="headerBtnAutoSync">自动: 关</button>
-      <button class="btn btn-sm btn-ghost" onclick="openChangePasswordModal()">🔐 修改密码</button>
-      <button class="btn btn-sm btn-ghost-danger" onclick="handleDRLogout()">退出</button>
-    </div>
-    <div id="headerSyncLoggedOut" style="display:flex;align-items:center;gap:8px">
-      <button class="btn btn-sm btn-primary" onclick="openDRLoginModal()">☁️ 登录同步</button>
-    </div>
-    <div id="adminMenu" style="display:none;align-items:center;gap:8px">
-      <span class="header-user-badge admin-badge">🔧 管理员</span>
-    </div>
-    <div class="theme-divider"></div>
-    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="切换明暗主题">
-      <span class="theme-icon-light">🌙</span>
-      <span class="theme-icon-dark">☀️</span>
-    </button>
-  </div>
-</header>
+<header class="app-header" id="appHeader"></header>
 
 <main class="dr-main">
   <div class="dr-container">
@@ -403,6 +373,7 @@
 </div>
 
 <script src="js/utils.js?v=4"></script>
+<script src="js/header.js?v=1"></script>
 <script src="js/database.js?v=4"></script>
 <script src="js/sync.js?v=5"></script>
 <script src="js/daily-review.js?v=20260718011"></script>
@@ -422,6 +393,7 @@ function toggleTheme() {
     document.documentElement.setAttribute('data-theme', 'dark');
   }
 })();
+renderAppHeader('daily');
 </script>
 </body>
 </html>
