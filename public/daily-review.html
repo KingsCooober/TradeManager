@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>每日复盘 - Trade Manager</title>
 <link rel="stylesheet" href="css/main.css?v=6">
-<link rel="stylesheet" href="css/daily-review.css?v=20260718007">
+<link rel="stylesheet" href="css/daily-review.css?v=20260718013">
 </head>
 <body>
 
@@ -68,140 +68,116 @@
       </div>
     </div>
 
-    <!-- 模块1: 大盘研判 -->
+    <!-- 模块1: 大盘研判与仓位策略（合并） -->
     <div>
       <div class="dr-section-header">
-        <h3>📊 大盘研判</h3>
+        <h3>📊 大盘研判与仓位策略</h3>
+        <span style="margin-left: auto; font-size: 12px; color: var(--text-secondary);">均线 + MACD → 综合走势 → 自动仓位</span>
       </div>
       <div class="dr-section-body">
-        <div class="dr-indices-grid" id="drIndicesList"></div>
-        <div class="dr-field" style="margin-top: 14px;">
-          <label for="drMarketOverallReason">综合判断理由</label>
-          <textarea class="dr-textarea" id="drMarketOverallReason" rows="3" placeholder="综合各指数走势，为什么做出以上判断？技术面/基本面/政策面..."></textarea>
+
+        <!-- 子模块 A: 大盘走势分析（每个指数独立判断均线+MACD） -->
+        <div class="dr-subsection">
+          <div class="dr-subsection-title">📈 大盘走势分析（每个指数独立判断均线 + MACD）</div>
+
+          <!-- 多指数卡片：每个指数独立选「均线状态」+「MACD 状态」 -->
+          <div class="dr-indices-grid" id="drIndicesList"></div>
+
+          <!-- 整体综合走势（基于所有指数走势汇总） -->
+          <div class="dr-trend-result" id="drTrendResult">
+            <div class="dr-trend-result-label">综合走势判断（最保守原则）</div>
+            <div class="dr-trend-result-value" id="drTrendResultValue">—</div>
+            <div class="dr-trend-result-hint" id="drTrendResultHint">请为每个指数选择「均线状态」和「MACD 状态」</div>
+          </div>
+
+          <!-- 综合判断理由（用户填写，可选） -->
+          <div class="dr-field" style="margin-top: 14px;">
+            <label for="drMarketOverallReason">综合判断理由（可选 / 基本面 / 政策面）</label>
+            <textarea class="dr-textarea" id="drMarketOverallReason" rows="2" placeholder="可选：补充基本面/政策面的判断理由..."></textarea>
+          </div>
         </div>
+
+        <!-- 子模块 B: 仓位策略（基于规则表自动计算） -->
+        <div class="dr-subsection" style="margin-top: 24px;">
+          <div class="dr-subsection-title">🎯 仓位策略（自动计算）</div>
+
+          <!-- 自动计算结果 -->
+          <div class="dr-suggested-pos" id="drSuggestedPos">
+            <div class="dr-suggested-pos-label">整体建议仓位（取最保守指数）</div>
+            <div class="dr-suggested-pos-value" id="drSuggestedPosValue">—</div>
+            <div class="dr-suggested-pos-hint" id="drSuggestedPosHint">基于每个指数的均线 + MACD 状态，取最保守命中规则</div>
+          </div>
+
+          <!-- 匹配的规则（动态展示） -->
+          <div class="dr-matched-rule" id="drMatchedRule" style="display: none;">
+            <div class="dr-matched-rule-label">命中规则</div>
+            <div class="dr-matched-rule-body">
+              <div class="dr-matched-rule-desc" id="drMatchedRuleDesc"></div>
+              <div class="dr-matched-rule-meta">
+                <span class="dr-matched-rule-tag" id="drMatchedRulePos"></span>
+                <span class="dr-matched-rule-tag" id="drMatchedRuleMargin"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 分批建仓 / 减仓策略 -->
+          <div class="dr-field" style="margin-top: 14px;">
+            <label for="drScalingStrategy">分批建仓 / 减仓策略</label>
+            <textarea class="dr-textarea" id="drScalingStrategy" rows="2" placeholder="如: 强势满仓持有；中等 5 成底仓 + 3 成滚动；弱势 1 成试探 + 跌破关键位全清"></textarea>
+          </div>
+
+          <!-- 仓位策略规则表（只读 + 命中高亮） -->
+          <div class="dr-rules-block">
+            <div class="dr-rules-title">📋 仓位策略规则表 <span style="font-size: 12px; color: var(--text-secondary); font-weight: 400;">（基于日线均线 / MACD 状态自动匹配）</span></div>
+            <table class="dr-rules-table" id="drRulesTable">
+              <thead>
+                <tr>
+                  <th style="width: 55%;">技术形态</th>
+                  <th style="width: 25%;">建议仓位</th>
+                  <th style="width: 20%;">融资</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr data-rule-id="rule1">
+                  <td>日线 5-10 <strong>多头排列</strong> + <strong>MACD 水上</strong></td>
+                  <td><span class="dr-pos-tag dr-pos-tag-max">10-16 成</span></td>
+                  <td>可满融</td>
+                </tr>
+                <tr data-rule-id="rule2">
+                  <td>日线 5-10 <strong>死叉</strong> 或 <strong>MACD 死叉/背离</strong></td>
+                  <td><span class="dr-pos-tag dr-pos-tag-mid">5-8 成</span></td>
+                  <td>不得融资</td>
+                </tr>
+                <tr data-rule-id="rule3">
+                  <td>日线 5-10 <strong>空头排列</strong>，<strong>MACD 顶背离</strong></td>
+                  <td><span class="dr-pos-tag dr-pos-tag-low">3-5 成</span></td>
+                  <td>不融资</td>
+                </tr>
+                <tr data-rule-id="rule4">
+                  <td>日线 5-10 <strong>空头排列</strong>，<strong>MACD 水下</strong></td>
+                  <td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td>
+                  <td>不融资</td>
+                </tr>
+                <tr data-rule-id="rule5">
+                  <td>日线 5-10 <strong>金叉</strong> 且 <strong>MACD 水下金叉后</strong></td>
+                  <td><span class="dr-pos-tag dr-pos-tag-mid">8-10 成</span></td>
+                  <td>可融资</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 备注 / 关键观察 -->
+          <div class="dr-field" style="margin-top: 14px;">
+            <label for="drRegimeNote">备注 / 关键观察</label>
+            <textarea class="dr-textarea" id="drRegimeNote" rows="2" placeholder="今天的特殊判断、明日需要重点跟踪的信号..."></textarea>
+          </div>
+        </div>
+
       </div>
     </div>
 
-    <!-- 模块2: 市场情绪周期 -->
-    <div>
-      <div class="dr-section-header">
-        <h3>🎭 市场情绪周期</h3>
-      </div>
-      <div class="dr-section-body">
-        <!-- 情绪周期阶段 -->
-        <div class="dr-sentiment-cycle">
-          <div class="dr-cycle-phases" id="drCyclePhases">
-            <div class="dr-cycle-phase" data-phase="极度悲观" onclick="setDRSentimentPhase('极度悲观')">
-              <div class="dr-cycle-dot"></div>
-              <div class="dr-cycle-label">极度悲观</div>
-            </div>
-            <div class="dr-cycle-arrow">→</div>
-            <div class="dr-cycle-phase" data-phase="悲观" onclick="setDRSentimentPhase('悲观')">
-              <div class="dr-cycle-dot"></div>
-              <div class="dr-cycle-label">悲观</div>
-            </div>
-            <div class="dr-cycle-arrow">→</div>
-            <div class="dr-cycle-phase" data-phase="中性" onclick="setDRSentimentPhase('中性')">
-              <div class="dr-cycle-dot"></div>
-              <div class="dr-cycle-label">中性</div>
-            </div>
-            <div class="dr-cycle-arrow">→</div>
-            <div class="dr-cycle-phase" data-phase="乐观" onclick="setDRSentimentPhase('乐观')">
-              <div class="dr-cycle-dot"></div>
-              <div class="dr-cycle-label">乐观</div>
-            </div>
-            <div class="dr-cycle-arrow">→</div>
-            <div class="dr-cycle-phase" data-phase="极度乐观" onclick="setDRSentimentPhase('极度乐观')">
-              <div class="dr-cycle-dot"></div>
-              <div class="dr-cycle-label">极度乐观</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 情绪温度计 -->
-        <div class="dr-temperature-section" style="margin-top: 18px;">
-          <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary); display: block; margin-bottom: 10px;">情绪温度</label>
-          <div class="dr-temperature-bar">
-            <div class="dr-temp-fill" id="drTempFill"></div>
-            <div class="dr-temp-pointer" id="drTempPointer"></div>
-          </div>
-          <div class="dr-temp-labels">
-            <span style="color: var(--color-green);">极度悲观 0</span>
-            <span style="color: var(--color-yellow);">中性 50</span>
-            <span style="color: var(--color-red);">极度乐观 100</span>
-          </div>
-          <div class="dr-temp-input-row">
-            <input type="range" id="drTemperature" min="0" max="100" value="50" class="dr-temp-slider" oninput="onDRTemperatureChange(this.value)">
-            <span class="dr-temp-value" id="drTempValue">50</span>
-          </div>
-        </div>
-
-        <!-- 多维度情绪指标 -->
-        <div style="margin-top: 18px;">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
-            <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary);">多维度情绪指标</label>
-            <button class="btn btn-sm btn-primary" onclick="autoCalcSentiment()" title="根据指标自动判断情绪周期和温度">🎯 自动判断</button>
-          </div>
-          <div class="dr-sentiment-indicators">
-            <div class="dr-indicator-item">
-              <div class="dr-indicator-name">涨跌比</div>
-              <select class="dr-select dr-indicator-field" data-indicator="advanceDecline">
-                <option value="">请选择</option>
-                <option value="强">强（涨多跌少）</option>
-                <option value="中">中（涨跌各半）</option>
-                <option value="弱">弱（跌多涨少）</option>
-              </select>
-            </div>
-            <div class="dr-indicator-item">
-              <div class="dr-indicator-name">涨停跌停</div>
-              <select class="dr-select dr-indicator-field" data-indicator="limitUpDown">
-                <option value="">请选择</option>
-                <option value="强">强（涨停多跌停少）</option>
-                <option value="中">中（涨停跌停持平）</option>
-                <option value="弱">弱（跌停多涨停少）</option>
-              </select>
-            </div>
-            <div class="dr-indicator-item">
-              <div class="dr-indicator-name">成交量</div>
-              <select class="dr-select dr-indicator-field" data-indicator="volumeChange">
-                <option value="">请选择</option>
-                <option value="放量">放量</option>
-                <option value="平量">平量</option>
-                <option value="缩量">缩量</option>
-              </select>
-            </div>
-            <div class="dr-indicator-item">
-              <div class="dr-indicator-name">融资余额</div>
-              <select class="dr-select dr-indicator-field" data-indicator="marginBalance">
-                <option value="">请选择</option>
-                <option value="增加">增加</option>
-                <option value="持平">持平</option>
-                <option value="减少">减少</option>
-              </select>
-            </div>
-            <div class="dr-indicator-item">
-              <div class="dr-indicator-name">北向资金</div>
-              <select class="dr-select dr-indicator-field" data-indicator="northbound">
-                <option value="">请选择</option>
-                <option value="流入">大幅流入</option>
-                <option value="小幅流入">小幅流入</option>
-                <option value="持平">持平</option>
-                <option value="小幅流出">小幅流出</option>
-                <option value="流出">大幅流出</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <!-- 情绪分析理由 -->
-        <div class="dr-field" style="margin-top: 14px;">
-          <label for="drSentimentReason">综合分析理由</label>
-          <textarea class="dr-textarea" id="drSentimentReason" rows="3" placeholder="结合以上指标，分析当前市场情绪所处周期及原因..."></textarea>
-        </div>
-      </div>
-    </div>
-
-    <!-- 模块4: 主线与板块 -->
+    <!-- 模块2: 主线与板块 -->
     <div>
       <div class="dr-section-header">
         <h3>🔥 主线与板块</h3>
@@ -212,7 +188,7 @@
       </div>
     </div>
 
-    <!-- 模块6: 今日交易复盘 -->
+    <!-- 模块3: 今日交易复盘 -->
     <div>
       <div class="dr-section-header">
         <h3>📋 今日交易复盘</h3>
@@ -222,7 +198,7 @@
       </div>
     </div>
 
-    <!-- 模块6: 心态与纪律 -->
+    <!-- 模块4: 心态与纪律 -->
     <div>
       <div class="dr-section-header">
         <h3>🧠 心态与纪律</h3>
@@ -265,7 +241,7 @@
       </div>
     </div>
 
-    <!-- 模块7: 每日总结 -->
+    <!-- 模块5: 每日总结 -->
     <div>
       <div class="dr-section-header">
         <h3>📝 每日总结</h3>
@@ -296,7 +272,7 @@
       </div>
     </div>
 
-    <!-- 模块8: 历史复盘 -->
+    <!-- 模块6: 历史复盘 -->
     <div>
       <div class="dr-section-header">
         <h3>📚 历史复盘</h3>
@@ -376,7 +352,7 @@
 <script src="js/header.js?v=1"></script>
 <script src="js/database.js?v=4"></script>
 <script src="js/sync.js?v=5"></script>
-<script src="js/daily-review.js?v=20260718011"></script>
+<script src="js/daily-review.js?v=20260718019"></script>
 <script>
 function toggleTheme() {
   var html = document.documentElement;

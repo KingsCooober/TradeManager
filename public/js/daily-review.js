@@ -1,11 +1,22 @@
 // ===== 每日复盘模块 =====
 
 var DR_INDICES = [
-  { key: 'sh', name: '上证指数', defaultTrend: '上升趋势', defaultPosition: '中位震荡', defaultSentiment: '正常' },
-  { key: 'zza500', name: '中证A500', defaultTrend: '上升趋势', defaultPosition: '中位震荡', defaultSentiment: '正常' },
-  { key: 'cyb50', name: '创业板50', defaultTrend: '上升趋势', defaultPosition: '中位震荡', defaultSentiment: '正常' },
-  { key: 'kc50', name: '科创50', defaultTrend: '上升趋势', defaultPosition: '中位震荡', defaultSentiment: '正常' }
+  { key: 'sh',     name: 'A股平均股价' },
+  { key: 'zza500', name: '中证A500' },
+  { key: 'cyb50',  name: '创业板50' },
+  { key: 'kc50',   name: '科创50' }
 ];
+
+// 走势强度排序（用于"最保守原则"取最弱走势）
+// 数值越小越弱 → 整体走势取最小值
+var DR_TREND_RANK = {
+  '强势上涨': 6,
+  '多头趋势': 5,
+  '反弹观察': 4,
+  '震荡整理': 3,
+  '趋势走弱': 2,
+  '弱势下跌': 1
+};
 
 var drData = {};           // 当前编辑的复盘数据
 var drAllReviews = [];     // 所有复盘记录
@@ -80,17 +91,20 @@ function loadFromServerDR() {
           return {
             id: r.id,
             date: r.review_date,
-            market: safeJSON(r.market_json),
             themes: safeJSON(r.themes_json),
             tradeReviews: safeJSON(r.trade_reviews_json),
             discipline: safeJSON(r.discipline_json),
             summary: summary,
             overallReason: summary.overallReason || '',
-            sentimentCycle: summary.sentimentCycle || { phase: '', temperature: 50, indicators: {}, reason: '' },
+            indices: summary.indices || DR_INDICES.map(function(def) {
+              return { key: def.key, name: def.name, maState: '', macdState: '', trendResult: '', trendHint: '' };
+            }),
+            marketRegime: summary.marketRegime || { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' },
             createdAt: r.created_at,
             updatedAt: r.updated_at
           };
         });
+      dedupDRReviews();   // 服务器可能有同日期多条记录（历史 bug），去重保留最新
       saveLocalReviews();
       renderReviewHistory();
       loadReviewForDate(drCurrentDate);
@@ -146,14 +160,21 @@ function loadLocalReviews() {
 }
 
 function dedupDRReviews() {
-  var seen = {};
-  var clean = [];
+  // 按 date 分组，同日期保留 updatedAt 最新的（updatedAt 为空则保留 createdAt 最新的，再为空保留最后一条）
+  var byDate = {};
   drAllReviews.forEach(function(r) {
-    if (!seen[r.date]) {
-      seen[r.date] = true;
-      clean.push(r);
+    if (!r.date) return;
+    var key = r.date;
+    var cur = byDate[key];
+    if (!cur) {
+      byDate[key] = r;
+    } else {
+      var t1 = r.updatedAt || r.createdAt || '';
+      var t2 = cur.updatedAt || cur.createdAt || '';
+      if (t1 > t2) byDate[key] = r;
     }
   });
+  var clean = Object.keys(byDate).map(function(k) { return byDate[k]; });
   if (clean.length !== drAllReviews.length) {
     drAllReviews = clean;
     saveLocalReviews();
@@ -236,22 +257,42 @@ function loadReviewForDate(date) {
   var existing = drAllReviews.find(function(r) { return r.date === date; });
   if (existing) {
     drData = JSON.parse(JSON.stringify(existing));
-    // 兼容旧格式：market 从对象迁移为数组
-    if (drData.market && !Array.isArray(drData.market)) {
-      drData.market = DR_INDICES.map(function(idx) {
-        return { key: idx.key, name: idx.name, trend: idx.defaultTrend, position: idx.defaultPosition, sentiment: idx.defaultSentiment, reason: '' };
+    // 兼容旧格式：删除已废弃字段
+    if (drData.market) delete drData.market;
+    if (drData.keyLevels) delete drData.keyLevels;
+    if (drData.riskAlert) delete drData.riskAlert;
+    if (drData.maSystem) delete drData.maSystem;
+    // 兼容旧 marketRegime 结构
+    if (drData.marketRegime && drData.marketRegime.trend !== undefined) {
+      var oldMr = drData.marketRegime;
+      drData.marketRegime = {
+        position: oldMr.position || '',
+        margin: '',
+        matchedRuleId: '',
+        matchedRuleDesc: '',
+        scalingStrategy: oldMr.scalingStrategy || '',
+        note: oldMr.note || ''
+      };
+    }
+    // 兼容旧 indices 结构（无 maState/macdState）
+    if (Array.isArray(drData.indices)) {
+      drData.indices.forEach(function(idx) {
+        if (idx.maState === undefined) idx.maState = '';
+        if (idx.macdState === undefined) idx.macdState = '';
+        if (idx.trendResult === undefined) idx.trendResult = '';
+        if (idx.trendHint === undefined) idx.trendHint = '';
       });
     }
   } else {
     drData = {
       date: date,
-      market: DR_INDICES.map(function(idx) {
-        return { key: idx.key, name: idx.name, trend: idx.defaultTrend, position: idx.defaultPosition, sentiment: idx.defaultSentiment, reason: '' };
-      }),
       overallReason: '',
-      sentimentCycle: { phase: '', temperature: 50, indicators: { advanceDecline: '', limitUpDown: '', volumeChange: '', marginBalance: '', northbound: '' }, reason: '' },
+      indices: DR_INDICES.map(function(def) {
+        return { key: def.key, name: def.name, maState: '', macdState: '', trendResult: '', trendHint: '' };
+      }),
       themes: [{ name: '', strength: '', stage: '' }],
       tradeReviews: [],
+      marketRegime: { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' },
       discipline: { moodScore: 3, moodTags: [], executedStop: true, executedTakeProfit: false, chaseKilling: false, frequentTrading: false, overnightFull: false, plannedPosition: '', actualPosition: '' },
       summary: { goodPoints: '', badPoints: '', biggestLesson: '', tomorrowNotes: '', watchList: '' }
     };
@@ -262,13 +303,13 @@ function loadReviewForDate(date) {
 
 // ===== 填充表单 =====
 function populateFormFromData() {
-  renderDRIndices();
-
   setTextVal('drMarketOverallReason', drData.overallReason || '');
+  renderDRIndicesMAStatus();
+  recalcDROverall();
 
-  renderDRSentimentCycle();
   renderDRThemes();
   renderDRDisciplineRules();
+  renderDRMarketRegime();
 
   var d = drData.discipline || {};
   setDRMoodScore(d.moodScore || 3);
@@ -291,278 +332,431 @@ function populateFormFromData() {
   renderDRTradeReviews();
 }
 
-// ===== 多指数渲染 =====
-function renderDRIndices() {
+// ===== 大盘走势分析：每个指数独立判断均线+MACD =====
+
+// 走势判断类型 → CSS class 映射
+var DR_TREND_STYLES = {
+  '强势上涨': { cls: 'trend-strong',   color: 'var(--color-green)' },
+  '多头趋势': { cls: 'trend-bullish',  color: 'var(--color-red)' },
+  '震荡整理': { cls: 'trend-neutral',  color: 'var(--color-blue)' },
+  '趋势走弱': { cls: 'trend-warning',  color: '#b8860b' },
+  '弱势下跌': { cls: 'trend-weak',     color: 'var(--color-red)' },
+  '反弹观察': { cls: 'trend-rebound',  color: 'var(--color-blue)' }
+};
+
+// 均线状态下拉选项（只看 5-10 两条均线）
+var DR_MA_OPTIONS = [
+  { value: '5-10金叉',  label: '5-10 金叉' },
+  { value: '5-10死叉',  label: '5-10 死叉' },
+  { value: '多头排列',  label: '5-10 多头排列' },
+  { value: '空头排列',  label: '5-10 空头排列' }
+];
+
+// MACD 状态下拉选项
+var DR_MACD_OPTIONS = [
+  { value: '水上',         label: 'MACD 水上' },
+  { value: '水上金叉',     label: 'MACD 水上金叉' },
+  { value: '水上死叉',     label: 'MACD 水上死叉' },
+  { value: '水上但背离',   label: 'MACD 水上但顶背离' },
+  { value: '水下',         label: 'MACD 水下' },
+  { value: '水下金叉',     label: 'MACD 水下金叉' },
+  { value: '水下死叉',     label: 'MACD 水下死叉' },
+  { value: '顶背离后水下', label: 'MACD 顶背离后水下' }
+];
+
+// 渲染多指数卡片
+function renderDRIndicesMAStatus() {
   var container = document.getElementById('drIndicesList');
   if (!container) return;
-  var indices = drData.market || [];
-  if (!Array.isArray(indices)) indices = [];
 
   // 补齐缺失的指数
-  DR_INDICES.forEach(function(def) {
-    var found = indices.find(function(m) { return m.key === def.key; });
-    if (!found) {
-      indices.push({ key: def.key, name: def.name, trend: def.defaultTrend, position: def.defaultPosition, sentiment: def.defaultSentiment, reason: '' });
-    }
-  });
-  drData.market = indices;
+  if (!Array.isArray(drData.indices)) {
+    drData.indices = DR_INDICES.map(function(def) {
+      return { key: def.key, name: def.name, maState: '', macdState: '', trendResult: '', trendHint: '' };
+    });
+  } else {
+    DR_INDICES.forEach(function(def) {
+      var found = drData.indices.find(function(m) { return m.key === def.key; });
+      if (!found) {
+        drData.indices.push({ key: def.key, name: def.name, maState: '', macdState: '', trendResult: '', trendHint: '' });
+      }
+    });
+  }
 
   var html = '';
-  indices.forEach(function(m, i) {
-    html += '<div class="dr-index-card">';
-    html += '<div class="dr-index-name">' + esc(m.name) + '</div>';
+  drData.indices.forEach(function(idx, i) {
+    html += '<div class="dr-index-card" data-index="' + i + '">';
+    html += '<div class="dr-index-name">' + esc(idx.name) + '</div>';
     html += '<div class="dr-index-fields">';
-    html += '<div class="dr-field"><label>趋势</label><select class="dr-select dr-index-field" data-index="' + i + '" data-field="trend">';
-    ['上升趋势', '横盘震荡', '下降趋势'].forEach(function(v) {
-      html += '<option value="' + esc(v) + '"' + (m.trend === v ? ' selected' : '') + '>' + esc(v) + '</option>';
+
+    // 均线 select
+    html += '<div class="dr-field"><label>均线状态</label>';
+    html += '<select class="dr-select dr-index-ma" data-index="' + i + '">';
+    html += '<option value="">请选择</option>';
+    DR_MA_OPTIONS.forEach(function(opt) {
+      html += '<option value="' + esc(opt.value) + '"' + (idx.maState === opt.value ? ' selected' : '') + '>' + esc(opt.label) + '</option>';
     });
     html += '</select></div>';
-    html += '<div class="dr-field"><label>位置</label><select class="dr-select dr-index-field" data-index="' + i + '" data-field="position">';
-    ['高位风险区', '中位震荡区', '低位机会区'].forEach(function(v) {
-      html += '<option value="' + esc(v) + '"' + (m.position === v ? ' selected' : '') + '>' + esc(v) + '</option>';
+
+    // MACD select
+    html += '<div class="dr-field"><label>MACD 状态</label>';
+    html += '<select class="dr-select dr-index-macd" data-index="' + i + '">';
+    html += '<option value="">请选择</option>';
+    DR_MACD_OPTIONS.forEach(function(opt) {
+      html += '<option value="' + esc(opt.value) + '"' + (idx.macdState === opt.value ? ' selected' : '') + '>' + esc(opt.label) + '</option>';
     });
     html += '</select></div>';
-    html += '<div class="dr-field"><label>情绪</label><select class="dr-select dr-index-field" data-index="' + i + '" data-field="sentiment">';
-    ['过热', '正常', '冰点'].forEach(function(v) {
-      html += '<option value="' + esc(v) + '"' + (m.sentiment === v ? ' selected' : '') + '>' + esc(v) + '</option>';
-    });
-    html += '</select></div>';
-    html += '<div class="dr-field dr-field-wide"><label>分析理由</label><textarea class="dr-textarea dr-index-field" data-index="' + i + '" data-field="reason" rows="2" placeholder="该指数的分析">' + esc(m.reason || '') + '</textarea></div>';
+
+    // 局部走势结果
+    html += '<div class="dr-field dr-field-wide dr-index-trend" data-index="' + i + '">';
+    html += '<label>走势判断</label>';
+    html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '—') + '</div>';
+    if (idx.trendHint) {
+      html += '<div class="dr-index-trend-hint">' + esc(idx.trendHint) + '</div>';
+    }
     html += '</div>';
-    html += '</div>';
+
+    html += '</div></div>';
   });
 
   container.innerHTML = html;
 
-  container.querySelectorAll('.dr-index-field').forEach(function(el) {
+  // 绑定事件
+  container.querySelectorAll('.dr-index-ma, .dr-index-macd').forEach(function(el) {
     el.addEventListener('change', function() {
-      saveDRIndicesToData();
-    });
-    el.addEventListener('input', function() {
-      saveDRIndicesToData();
+      onDRIndexChange(parseInt(el.dataset.index));
     });
   });
 }
 
-function saveDRIndicesToData() {
-  var container = document.getElementById('drIndicesList');
-  if (!container) return;
-  var indices = [];
-  container.querySelectorAll('.dr-index-card').forEach(function(card, i) {
-    var item = { key: (drData.market && drData.market[i]) ? drData.market[i].key : '', name: '' };
-    card.querySelectorAll('.dr-index-field').forEach(function(el) {
-      item[el.dataset.field] = el.value;
-    });
-    if (drData.market && drData.market[i]) {
-      item.key = drData.market[i].key;
-      item.name = drData.market[i].name;
+// 单个指数 select 变化 → 重新算该指数的走势 + 整体走势 + 整体仓位
+function onDRIndexChange(idx) {
+  if (!Array.isArray(drData.indices) || !drData.indices[idx]) return;
+  var maSelect = document.querySelector('.dr-index-ma[data-index="' + idx + '"]');
+  var macdSelect = document.querySelector('.dr-index-macd[data-index="' + idx + '"]');
+  if (!maSelect || !macdSelect) return;
+
+  drData.indices[idx].maState = maSelect.value;
+  drData.indices[idx].macdState = macdSelect.value;
+
+  // 重新算这个指数的走势
+  if (maSelect.value && macdSelect.value) {
+    var r = analyzeTrend(maSelect.value, macdSelect.value);
+    drData.indices[idx].trendResult = r.trend;
+    drData.indices[idx].trendHint = r.reason;
+  } else {
+    drData.indices[idx].trendResult = '';
+    drData.indices[idx].trendHint = '';
+  }
+
+  // 更新该指数的局部走势 UI（不重渲染整列，避免 select 闪烁）
+  updateDRIndexTrendUI(idx);
+
+  // 同步整体走势 + 整体仓位
+  recalcDROverall();
+  drDataDirty = true;
+}
+
+// 更新单个指数的走势显示
+function updateDRIndexTrendUI(idx) {
+  var trendBox = document.querySelector('.dr-index-trend[data-index="' + idx + '"] .dr-index-trend-result');
+  var hintBox = document.querySelector('.dr-index-trend[data-index="' + idx + '"] .dr-index-trend-hint');
+  if (!trendBox) return;
+  var item = drData.indices[idx];
+  trendBox.className = 'dr-index-trend-result';
+  if (item.trendResult && DR_TREND_STYLES[item.trendResult]) {
+    trendBox.textContent = item.trendResult;
+    trendBox.classList.add(DR_TREND_STYLES[item.trendResult].cls);
+  } else {
+    trendBox.textContent = '—';
+  }
+  if (hintBox) {
+    hintBox.textContent = item.trendHint || '';
+  }
+}
+
+// 综合走势（最保守原则：取所有指数中走势最弱的）
+function recalcDROverallTrend() {
+  if (!Array.isArray(drData.indices)) return { trend: '', hint: '' };
+  var judged = drData.indices.filter(function(i) { return i.trendResult; });
+  if (judged.length === 0) return { trend: '', hint: '请为每个指数选择「均线状态」和「MACD 状态」' };
+
+  var weakest = judged[0];
+  judged.forEach(function(i) {
+    if (DR_TREND_RANK[i.trendResult] < DR_TREND_RANK[weakest.trendResult]) {
+      weakest = i;
     }
-    indices.push(item);
-  });
-  drData.market = indices;
-}
-
-// ===== 情绪周期 =====
-var SENTIMENT_WEIGHTS = {
-  advanceDecline: { strong: 25, medium: 12, weak: 0 },
-  limitUpDown: { strong: 20, medium: 10, weak: 0 },
-  volumeChange: { up: 15, flat: 7, down: 0 },
-  marginBalance: { up: 20, flat: 10, down: 0 },
-  northbound: { inflow: 20, smallInflow: 15, flat: 10, smallOutflow: 5, outflow: 0 }
-};
-
-var SENTIMENT_PHASES = [
-  { name: '极度悲观', min: 0, max: 20, color: 'var(--color-green)' },
-  { name: '悲观', min: 21, max: 40, color: 'var(--color-orange, #f97316)' },
-  { name: '中性', min: 41, max: 60, color: 'var(--color-yellow)' },
-  { name: '乐观', min: 61, max: 80, color: 'var(--color-blue)' },
-  { name: '极度乐观', min: 81, max: 100, color: 'var(--color-red)' }
-];
-
-function renderDRSentimentCycle() {
-  var sc = drData.sentimentCycle || { phase: '', temperature: 50, indicators: {}, reason: '' };
-  if (!drData.sentimentCycle) drData.sentimentCycle = sc;
-
-  // 渲染周期阶段选中状态
-  var phases = document.querySelectorAll('.dr-cycle-phase');
-  phases.forEach(function(el) {
-    el.classList.toggle('active', el.dataset.phase === sc.phase);
   });
 
-  // 渲染温度计
-  var temp = sc.temperature || 50;
-  var slider = document.getElementById('drTemperature');
-  if (slider) slider.value = temp;
-  updateDRTemperatureUI(temp);
-
-  // 渲染指标
-  var indicators = sc.indicators || {};
-  document.querySelectorAll('.dr-indicator-field').forEach(function(el) {
-    el.value = indicators[el.dataset.indicator] || '';
-    el.addEventListener('change', function() {
-      saveDRSentimentToData();
-      autoCalcSentimentSilent();
-    });
-  });
-
-  setTextVal('drSentimentReason', sc.reason || '');
+  var parts = judged.map(function(i) { return i.name + ':' + i.trendResult; });
+  return {
+    trend: weakest.trendResult,
+    hint: '综合 ' + judged.length + ' 个指数：' + parts.join(' / ') + ' → 取最弱：' + weakest.name
+  };
 }
 
-function setDRSentimentPhase(phase) {
-  drData.sentimentCycle = drData.sentimentCycle || {};
-  drData.sentimentCycle.phase = phase;
-  document.querySelectorAll('.dr-cycle-phase').forEach(function(el) {
-    el.classList.toggle('active', el.dataset.phase === phase);
-  });
+// 整体走势 + 整体仓位 重新计算
+function recalcDROverall() {
+  // 1. 综合走势
+  var overall = recalcDROverallTrend();
+  updateDRTrendResultUI(overall.trend, overall.hint);
+
+  // 2. 整体仓位 = 各指数命中规则中取最保守的（仓位区间最小的）
+  autoCalcDRPosition();
 }
 
-function onDRTemperatureChange(val) {
-  updateDRTemperatureUI(parseInt(val));
-  drData.sentimentCycle = drData.sentimentCycle || {};
-  drData.sentimentCycle.temperature = parseInt(val);
-}
+// 单个指数的走势判定（5-10 均线 + MACD 组合 → 6 种走势之一）
+function analyzeTrend(maState, macdState) {
+  var trend = '';
+  var reason = '';
 
-function updateDRTemperatureUI(val) {
-  var fill = document.getElementById('drTempFill');
-  var pointer = document.getElementById('drTempPointer');
-  var valueEl = document.getElementById('drTempValue');
-  if (fill) fill.style.width = val + '%';
-  if (pointer) pointer.style.left = val + '%';
-  if (valueEl) valueEl.textContent = val;
-}
-
-function saveDRSentimentToData() {
-  drData.sentimentCycle = drData.sentimentCycle || { phase: '', temperature: 50, indicators: {}, reason: '' };
-  var indicators = {};
-  document.querySelectorAll('.dr-indicator-field').forEach(function(el) {
-    indicators[el.dataset.indicator] = el.value;
-  });
-  drData.sentimentCycle.indicators = indicators;
-  drData.sentimentCycle.reason = getTextVal('drSentimentReason');
-}
-
-// ===== 自动计算情绪 =====
-function calcSentimentScore(indicators) {
-  var score = 0;
-  var weights = SENTIMENT_WEIGHTS;
-
-  // 涨跌比
-  var ad = indicators.advanceDecline || '';
-  if (ad === '强') score += weights.advanceDecline.strong;
-  else if (ad === '中') score += weights.advanceDecline.medium;
-  else if (ad === '弱') score += weights.advanceDecline.weak;
-
-  // 涨停跌停
-  var lu = indicators.limitUpDown || '';
-  if (lu === '强') score += weights.limitUpDown.strong;
-  else if (lu === '中') score += weights.limitUpDown.medium;
-  else if (lu === '弱') score += weights.limitUpDown.weak;
-
-  // 成交量
-  var vc = indicators.volumeChange || '';
-  if (vc === '放量') score += weights.volumeChange.up;
-  else if (vc === '平量') score += weights.volumeChange.flat;
-  else if (vc === '缩量') score += weights.volumeChange.down;
-
-  // 融资余额
-  var mb = indicators.marginBalance || '';
-  if (mb === '增加') score += weights.marginBalance.up;
-  else if (mb === '持平') score += weights.marginBalance.flat;
-  else if (mb === '减少') score += weights.marginBalance.down;
-
-  // 北向资金
-  var nb = indicators.northbound || '';
-  if (nb === '流入') score += weights.northbound.inflow;
-  else if (nb === '小幅流入') score += weights.northbound.smallInflow;
-  else if (nb === '持平') score += weights.northbound.flat;
-  else if (nb === '小幅流出') score += weights.northbound.smallOutflow;
-  else if (nb === '流出') score += weights.northbound.outflow;
-
-  return score;
-}
-
-function getPhaseByScore(score) {
-  for (var i = 0; i < SENTIMENT_PHASES.length; i++) {
-    if (score >= SENTIMENT_PHASES[i].min && score <= SENTIMENT_PHASES[i].max) {
-      return SENTIMENT_PHASES[i];
+  // 1. 5-10 金叉（刚发生）+ MACD 配合 → 反弹 / 趋势确立
+  if (maState === '5-10金叉') {
+    if (macdState === '水下金叉') {
+      trend = '反弹观察';
+      reason = '5-10 金叉 + MACD 水下金叉 → 反弹信号';
+    } else if (macdState === '水上金叉') {
+      trend = '多头趋势';
+      reason = '5-10 金叉 + MACD 水上金叉 → 趋势确立';
+    } else if (macdState === '水上' || macdState === '水上死叉' || macdState === '水上但背离') {
+      trend = '震荡整理';
+      reason = '5-10 金叉 + MACD 水上运行/死叉/背离 → 信号待确认';
+    } else if (macdState === '水下' || macdState === '水下死叉' || macdState === '顶背离后水下') {
+      trend = '震荡整理';
+      reason = '5-10 金叉 + MACD 水下 → 反弹待确认';
+    } else {
+      trend = '震荡整理';
+      reason = '5-10 金叉，等待 MACD 配合';
     }
   }
-  return SENTIMENT_PHASES[2];
+  // 2. 5-10 死叉 + MACD → 震荡 / 弱势
+  else if (maState === '5-10死叉') {
+    if (macdState === '水上' || macdState === '水上死叉' || macdState === '水上但背离') {
+      trend = '震荡整理';
+      reason = '5-10 死叉 + MACD 水上死叉/背离 → 短线震荡';
+    } else if (macdState === '水下' || macdState === '水下死叉' || macdState === '顶背离后水下') {
+      trend = '弱势下跌';
+      reason = '5-10 死叉 + MACD 水下 → 趋势转弱';
+    } else {
+      trend = '震荡整理';
+      reason = '5-10 死叉，等待 MACD 进一步信号';
+    }
+  }
+  // 3. 多头排列（5 在 10 上方持续）+ MACD 水上 → 多头趋势
+  else if (maState === '多头排列') {
+    if (macdState === '水上金叉') {
+      trend = '强势上涨';
+      reason = '5-10 多头排列 + MACD 水上金叉 → 强势';
+    } else if (macdState === '水上' || macdState === '水上死叉') {
+      trend = '多头趋势';
+      reason = '5-10 多头排列 + MACD 水上运行' + (macdState === '水上死叉' ? '（注意短线回调）' : '');
+    } else if (macdState === '水上但背离') {
+      trend = '趋势走弱';
+      reason = '5-10 多头排列 + MACD 顶背离，警惕回调';
+    } else if (macdState === '顶背离后水下' || macdState === '水下' || macdState === '水下死叉') {
+      trend = '弱势下跌';
+      reason = '5-10 多头排列但 MACD 水下 → 多头失败，转弱';
+    } else {
+      trend = '多头趋势';
+      reason = '5-10 多头排列 + MACD 水下金叉 → 修复中';
+    }
+  }
+  // 4. 空头排列（5 在 10 下方持续）+ MACD → 弱势
+  else if (maState === '空头排列') {
+    if (macdState === '顶背离后水下' || macdState === '水下' || macdState === '水下死叉') {
+      trend = '弱势下跌';
+      reason = '5-10 空头排列 + MACD 水下 → 持续下跌';
+    } else if (macdState === '水上但背离') {
+      trend = '趋势走弱';
+      reason = '5-10 空头排列 + MACD 顶背离 → 加速下跌风险';
+    } else if (macdState === '水下金叉') {
+      trend = '反弹观察';
+      reason = '5-10 空头排列 + MACD 水下金叉 → 反弹信号';
+    } else if (macdState === '水上' || macdState === '水上金叉' || macdState === '水上死叉') {
+      trend = '趋势走弱';
+      reason = '5-10 空头排列 + MACD 水上 → 弱势修复中';
+    } else {
+      trend = '弱势下跌';
+      reason = '5-10 空头排列，弱势格局';
+    }
+  }
+  else {
+    trend = '震荡整理';
+    reason = '均线状态：' + maState + ' + MACD：' + macdState + ' → 中性观望';
+  }
+
+  return { trend: trend, reason: reason };
 }
 
-function autoCalcSentiment() {
-  saveDRSentimentToData();
-  var indicators = (drData.sentimentCycle && drData.sentimentCycle.indicators) || {};
+// 综合走势 UI 更新
+function updateDRTrendResultUI(trend, hint) {
+  var valEl = document.getElementById('drTrendResultValue');
+  var hintEl = document.getElementById('drTrendResultHint');
+  if (!valEl) return;
+  valEl.className = 'dr-trend-result-value';
 
-  var hasAny = indicators.advanceDecline || indicators.limitUpDown || indicators.volumeChange || indicators.marginBalance || indicators.northbound;
-  if (!hasAny) {
-    drAlert('提示', '请至少填写一个情绪指标');
+  if (trend && DR_TREND_STYLES[trend]) {
+    valEl.textContent = trend;
+    valEl.classList.add(DR_TREND_STYLES[trend].cls);
+    if (hintEl) hintEl.textContent = hint || '';
+  } else {
+    valEl.textContent = '—';
+    if (hintEl) hintEl.textContent = hint || '请为每个指数选择「均线状态」和「MACD 状态」';
+  }
+}
+
+// ===== 仓位策略规则表（5 条规则，基于 5-10 均线 + MACD） =====
+var DR_POSITION_RULES = [
+  { id: 'rule1', desc: '日线 5-10 多头排列 + MACD 水上',
+    maStates: ['多头排列'], macdStates: ['水上', '水上金叉', '水上死叉'],
+    position: '10-16 成', margin: '可满融', posClass: 'pos-max', rank: 5 },
+  { id: 'rule2', desc: '日线 5-10 死叉 或 MACD 死叉',
+    maStates: ['5-10死叉', '多头排列'], macdStates: ['水上但背离'],
+    position: '5-8 成', margin: '不得融资', posClass: 'pos-mid', rank: 3 },
+  { id: 'rule3', desc: '日线 5-10 空头排列 + MACD 顶背离',
+    maStates: ['空头排列'], macdStates: ['水上但背离'],
+    position: '3-5 成', margin: '不融资', posClass: 'pos-low', rank: 2 },
+  { id: 'rule4', desc: '日线 5-10 空头排列 + MACD 水下',
+    maStates: ['空头排列'], macdStates: ['水下', '水下死叉', '顶背离后水下'],
+    position: '1-2 成', margin: '不融资', posClass: 'pos-min', rank: 1 },
+  { id: 'rule5', desc: '日线 5-10 金叉 且 MACD 水下金叉后',
+    maStates: ['5-10金叉'], macdStates: ['水下金叉'],
+    position: '8-10 成', margin: '可融资', posClass: 'pos-mid', rank: 4 }
+];
+
+// 单指数：读取规则表 → 命中规则
+function calcPositionByRules(maState, macdState) {
+  if (!maState || !macdState) return null;
+  for (var i = 0; i < DR_POSITION_RULES.length; i++) {
+    var rule = DR_POSITION_RULES[i];
+    if (rule.maStates.indexOf(maState) >= 0 && rule.macdStates.indexOf(macdState) >= 0) {
+      return rule;
+    }
+  }
+  return null;
+}
+
+// 整体仓位：取所有指数命中规则中 rank 最小（最保守）的
+function autoCalcDRPosition() {
+  if (!drData.marketRegime) drData.marketRegime = { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' };
+
+  // 收集每个指数命中的规则
+  var matchedRules = [];
+  var indices = Array.isArray(drData.indices) ? drData.indices : [];
+  indices.forEach(function(idx) {
+    if (idx.maState && idx.macdState) {
+      var r = calcPositionByRules(idx.maState, idx.macdState);
+      if (r) matchedRules.push({ rule: r, indexName: idx.name });
+    }
+  });
+
+  // 清除所有规则行的高亮
+  document.querySelectorAll('.dr-rules-table tbody tr').forEach(function(tr) {
+    tr.classList.remove('matched');
+  });
+
+  if (matchedRules.length === 0) {
+    drData.marketRegime.matchedRuleId = '';
+    drData.marketRegime.matchedRuleDesc = '';
+    drData.marketRegime.position = '';
+    drData.marketRegime.margin = '';
+    updateDRSuggestedPosUI('—', '', '请为每个指数选择「均线状态」和「MACD 状态」');
+    hideDRMatchedRule();
     return;
   }
 
-  var score = calcSentimentScore(indicators);
-  var phase = getPhaseByScore(score);
-
-  drData.sentimentCycle.temperature = score;
-  drData.sentimentCycle.phase = phase.name;
-
-  // 更新UI
-  var slider = document.getElementById('drTemperature');
-  if (slider) slider.value = score;
-  updateDRTemperatureUI(score);
-
-  document.querySelectorAll('.dr-cycle-phase').forEach(function(el) {
-    el.classList.toggle('active', el.dataset.phase === phase.name);
+  // 取 rank 最小（最保守）的规则
+  var weakest = matchedRules[0];
+  matchedRules.forEach(function(m) {
+    if (m.rule.rank < weakest.rule.rank) weakest = m;
   });
 
-  // 生成分析文字
-  var parts = [];
-  if (indicators.advanceDecline) parts.push('涨跌比' + indicators.advanceDecline);
-  if (indicators.limitUpDown) parts.push('涨停跌停' + indicators.limitUpDown);
-  if (indicators.volumeChange) parts.push('成交量' + indicators.volumeChange);
-  if (indicators.marginBalance) parts.push('融资余额' + indicators.marginBalance);
-  if (indicators.northbound) parts.push('北向资金' + indicators.northbound);
-  var autoReason = '综合指标 (' + parts.join('、') + ') → 市场情绪处于【' + phase.name + '】阶段，温度 ' + score + '/100。';
+  drData.marketRegime.matchedRuleId = weakest.rule.id;
+  drData.marketRegime.matchedRuleDesc = weakest.rule.desc + '（来自：' + weakest.indexName + '）';
+  drData.marketRegime.position = weakest.rule.position;
+  drData.marketRegime.margin = weakest.rule.margin;
 
-  var reasonEl = document.getElementById('drSentimentReason');
-  if (reasonEl && !reasonEl.value.trim()) {
-    reasonEl.value = autoReason;
-    drData.sentimentCycle.reason = autoReason;
-  }
-
-  // 显示计算结果提示
-  showAutoCalcResult(score, phase);
+  var hintParts = matchedRules.map(function(m) { return m.indexName + ':' + m.rule.position; });
+  updateDRSuggestedPosUI(weakest.rule.position, weakest.rule.posClass,
+    '各指数命中：' + hintParts.join(' / ') + ' → 取最保守：' + weakest.indexName);
+  updateDRMatchedRuleUI(weakest.rule, weakest.indexName);
+  highlightDRMatchedRuleRow(weakest.rule.id);
 }
 
-function showAutoCalcResult(score, phase) {
-  var toast = document.getElementById('drSaveToast');
-  if (toast) {
-    toast.textContent = '情绪温度 ' + score + '/100 → ' + phase.name;
-    toast.style.display = 'flex';
-    setTimeout(function() {
-      toast.textContent = '✅ 复盘已保存';
-    }, 3000);
+function updateDRSuggestedPosUI(position, posClass, hint) {
+  var valEl = document.getElementById('drSuggestedPosValue');
+  var hintEl = document.getElementById('drSuggestedPosHint');
+  if (!valEl) return;
+  valEl.className = 'dr-suggested-pos-value';
+  valEl.textContent = position;
+  if (posClass) valEl.classList.add(posClass);
+  if (hintEl) hintEl.textContent = hint;
+}
+
+function updateDRMatchedRuleUI(rule, indexName) {
+  var block = document.getElementById('drMatchedRule');
+  var descEl = document.getElementById('drMatchedRuleDesc');
+  var posEl = document.getElementById('drMatchedRulePos');
+  var marginEl = document.getElementById('drMatchedRuleMargin');
+  if (!block) return;
+  block.style.display = 'flex';
+  if (descEl) descEl.textContent = rule.desc + (indexName ? '（来自：' + indexName + '）' : '');
+  if (posEl) {
+    posEl.textContent = '仓位 ' + rule.position;
+    posEl.className = 'dr-matched-rule-tag';
+  }
+  if (marginEl) {
+    marginEl.textContent = rule.margin;
+    marginEl.className = 'dr-matched-rule-tag';
   }
 }
 
-function autoCalcSentimentSilent() {
-  var indicators = (drData.sentimentCycle && drData.sentimentCycle.indicators) || {};
-  var hasAny = indicators.advanceDecline || indicators.limitUpDown || indicators.volumeChange || indicators.marginBalance || indicators.northbound;
-  if (!hasAny) return;
+function hideDRMatchedRule() {
+  var block = document.getElementById('drMatchedRule');
+  if (block) block.style.display = 'none';
+}
 
-  var score = calcSentimentScore(indicators);
-  var phase = getPhaseByScore(score);
+function highlightDRMatchedRuleRow(ruleId) {
+  if (!ruleId) return;
+  var row = document.querySelector('.dr-rules-table tbody tr[data-rule-id="' + ruleId + '"]');
+  if (row) row.classList.add('matched');
+}
 
-  drData.sentimentCycle.temperature = score;
-  drData.sentimentCycle.phase = phase.name;
+// ===== 填充表单：仓位策略区 =====
+function renderDRMarketRegime() {
+  if (!drData.marketRegime) drData.marketRegime = { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' };
+  var mr = drData.marketRegime;
 
-  var slider = document.getElementById('drTemperature');
-  if (slider) slider.value = score;
-  updateDRTemperatureUI(score);
+  setTextVal('drScalingStrategy', mr.scalingStrategy || '');
+  setTextVal('drRegimeNote', mr.note || '');
 
-  document.querySelectorAll('.dr-cycle-phase').forEach(function(el) {
-    el.classList.toggle('active', el.dataset.phase === phase.name);
-  });
+  // 如果已记录命中规则 → 重新展示
+  if (mr.matchedRuleId) {
+    var rule = DR_POSITION_RULES.find(function(r) { return r.id === mr.matchedRuleId; });
+    if (rule) {
+      updateDRSuggestedPosUI(mr.position || rule.position, rule.posClass, '匹配规则：' + rule.desc);
+      updateDRMatchedRuleUI(rule, '');
+      highlightDRMatchedRuleRow(rule.id);
+      return;
+    }
+  }
+  // 否则尝试根据 indices 重新匹配
+  if (Array.isArray(drData.indices) && drData.indices.some(function(i) { return i.maState && i.macdState; })) {
+    autoCalcDRPosition();
+  } else {
+    updateDRSuggestedPosUI('—', '', '请为每个指数选择「均线状态」和「MACD 状态」自动计算仓位');
+    hideDRMatchedRule();
+  }
+}
+
+function saveDRMarketRegimeToData() {
+  if (!drData.marketRegime) drData.marketRegime = { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' };
+  drData.marketRegime.scalingStrategy = getTextVal('drScalingStrategy');
+  drData.marketRegime.note = getTextVal('drRegimeNote');
+}
+
+function saveDRIndicesToData() {
+  // indices 字段已在 onDRIndexChange 中实时更新，无需重复保存
 }
 
 // ===== 从表单保存到 drData =====
@@ -570,7 +764,7 @@ function saveCurrentFormToData() {
   saveDRIndicesToData();
   drData.overallReason = getTextVal('drMarketOverallReason');
 
-  saveDRSentimentToData();
+  saveDRMarketRegimeToData();
 
   drData.discipline = {
     moodScore: getDRMoodScore(),
@@ -907,18 +1101,18 @@ function renderReviewHistory() {
     var indices = r.market || [];
     var isActive = r.date === drCurrentDate;
     var shData = indices.find(function(m) { return m.key === 'sh'; }) || indices[0] || {};
-    var sc = r.sentimentCycle || {};
+    var mr = r.marketRegime || {};
     html += '<div class="dr-history-item' + (isActive ? ' active' : '') + '" onclick="jumpToReview(\'' + esc(r.date) + '\')">';
     html += '<div class="dr-history-date">' + esc(r.date) + '</div>';
     html += '<div class="dr-history-info">';
     html += '<span class="dr-history-badge">' + esc(shData.position || '-') + '</span>';
     html += '<span class="dr-history-trend">' + esc(shData.trend || '-') + '</span>';
     html += '<span class="dr-history-sentiment">' + esc(shData.sentiment || '-') + '</span>';
-    if (sc.phase) {
-      html += '<span class="dr-history-sentiment" style="background: rgba(67,97,238,0.1); color: var(--color-blue);">' + esc(sc.phase) + '</span>';
+    if (mr.regime) {
+      html += '<span class="dr-history-sentiment" style="background: rgba(67,97,238,0.1); color: var(--color-blue);">' + esc(mr.regime) + '</span>';
     }
-    if (sc.temperature !== undefined) {
-      html += '<span class="dr-history-sentiment">' + esc(sc.temperature) + '°</span>';
+    if (mr.position) {
+      html += '<span class="dr-history-sentiment">' + esc(mr.position) + '</span>';
     }
     html += '</div>';
     html += '</div>';

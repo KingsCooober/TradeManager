@@ -228,7 +228,25 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
-  )`);
+  )`, function() {
+    // 一次性数据修复：删除同 (user_id, review_date) 的重复记录，保留 updated_at 最新的
+    db.run(`
+      DELETE FROM daily_reviews
+      WHERE id NOT IN (
+        SELECT id FROM (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY user_id, review_date
+                   ORDER BY updated_at DESC, created_at DESC
+                 ) AS rn
+          FROM daily_reviews
+        ) WHERE rn = 1
+      )
+    `, function(err) {
+      if (err) console.error('清理重复复盘记录失败:', err.message);
+      else if (this.changes > 0) console.log('已清理 ' + this.changes + ' 条重复复盘记录');
+    });
+  });
 });
 
 // ===== API 路由 =====
@@ -608,27 +626,41 @@ app.post('/api/daily-review/:userId', (req, res) => {
     return res.status(400).json({ error: '无效的数据格式' });
   }
 
-  const reviewId = review.id || uuidv4();
-
-  db.run(
-    `INSERT OR REPLACE INTO daily_reviews (
-      id, user_id, review_date, market_json, themes_json,
-      trade_reviews_json, discipline_json, summary_json,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      reviewId, userId, review.date,
-      JSON.stringify(review.market || []),
-      JSON.stringify(review.themes || []),
-      JSON.stringify(review.tradeReviews || []),
-      JSON.stringify(review.discipline || {}),
-      JSON.stringify(Object.assign({}, review.summary || {}, { overallReason: review.overallReason || '', sentimentCycle: review.sentimentCycle || null })),
-      review.createdAt || new Date().toISOString(),
-      new Date().toISOString()
-    ],
-    function(err) {
+  // 先按 (user_id, review_date) 查找已有记录的 id，避免同日期生成多条
+  db.get(
+    'SELECT id FROM daily_reviews WHERE user_id = ? AND review_date = ?',
+    [userId, review.date],
+    (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ id: reviewId, message: '复盘已保存' });
+
+      // 优先用前端传的 id，其次用已有记录的 id，最后生成新 uuid
+      const reviewId = review.id || (row && row.id) || uuidv4();
+
+      db.run(
+        `INSERT OR REPLACE INTO daily_reviews (
+          id, user_id, review_date, market_json, themes_json,
+          trade_reviews_json, discipline_json, summary_json,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          reviewId, userId, review.date,
+          JSON.stringify(review.market || []),
+          JSON.stringify(review.themes || []),
+          JSON.stringify(review.tradeReviews || []),
+          JSON.stringify(review.discipline || {}),
+          JSON.stringify(Object.assign({}, review.summary || {}, {
+            overallReason: review.overallReason || '',
+            indices: review.indices || null,
+            marketRegime: review.marketRegime || null
+          })),
+          review.createdAt || new Date().toISOString(),
+          new Date().toISOString()
+        ],
+        function(err) {
+          if (err) return res.status(500).json({ error: err.message });
+          res.json({ id: reviewId, message: '复盘已保存' });
+        }
+      );
     }
   );
 });
