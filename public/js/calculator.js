@@ -1,4 +1,22 @@
 // ===== 开仓计算器 =====
+// 买点类型定义 - 在此数组中增删即可，页面会自动同步
+var BUY_TYPES = [
+  '15分钟回踩突破',
+  '60分钟回踩突破+日线金叉',
+  '日线回踩突破+金叉共振',
+  '大阳不破',
+];
+
+function renderBuyTypeOptions() {
+  var optionsEl = document.getElementById('buyTypeOptions');
+  if (!optionsEl) return;
+  var html = '';
+  BUY_TYPES.forEach(function(t) {
+    html += '<li data-value="' + esc(t) + '">' + esc(t) + '</li>';
+  });
+  optionsEl.innerHTML = html;
+  initCustomSelect('buyType');
+}
 
 // 四舍五入到指定倍数的函数
 function roundToMultiple(num, multiple) {
@@ -193,14 +211,13 @@ function setDirection(dir) {
 
 // 初始化计算器选择控件
 function initCalcSelectButtons() {
+  renderBuyTypeOptions();
+  
   // 初始化买点类型默认选中
-  setBuyType('15分钟回踩');
+  setBuyType(BUY_TYPES[1]);
   
   // 初始化方向默认选中
   setDirection('多');
-  
-  // 初始化买点类型下拉框
-  initCustomSelect('buyType');
   
   // 初始化方向下拉框
   initCustomSelect('dir');
@@ -329,7 +346,7 @@ function calcPosition() {
   
   var entry = parseFloat(calcEntryEl.value);
   var stop = parseFloat(calcStopEl.value);
-  var targetR = parseFloat(calcTargetREl.value) || 2;
+  var targetR = parseFloat(calcTargetREl.value) || 3;
   var dir = calcDirEl.value;
   var actualLotsRaw = calcActualLotsEl ? calcActualLotsEl.value : '';
   var actualLots = actualLotsRaw !== '' ? parseInt(actualLotsRaw) : null;
@@ -374,8 +391,8 @@ function calcPosition() {
   var tp = dir === '多' ? entry + tpDist : entry - tpDist;
   var tpDistPct = (tpDist / entry) * 100;
   
-  // 平报价：价格上涨1R时的价格（做多时为止损移到成本价的位置）
-  var breakeven = dir === '多' ? entry + stopDist : entry - stopDist;
+  // 平报价：价格上涨1.5R时的价格（做多时为止损移到成本价的位置）
+  var breakeven = dir === '多' ? entry + stopDist * 1.5 : entry - stopDist * 1.5;
 
   var diff = (actualLots * entry - sugPos);
   var hint = '（偏离理论 ' + diff.toFixed(2) + ' ￥）';
@@ -419,7 +436,7 @@ function addTradeFromCalc() {
   var calcDirEl = g('calcDir');
   var dir = calcDirEl ? calcDirEl.value : '多';
   var calcTargetREl = g('calcTargetR');
-  var targetR = calcTargetREl ? (parseFloat(calcTargetREl.value) || 2) : 2;
+  var targetR = calcTargetREl ? (parseFloat(calcTargetREl.value) || 3) : 3;
   var calcActualLotsEl = g('calcActualLots');
   var actualLotsRaw = calcActualLotsEl ? calcActualLotsEl.value : '';
   var sugPos = rAmt / (stopPct);
@@ -427,6 +444,9 @@ function addTradeFromCalc() {
   var actualLots = actualLotsRaw !== '' ? parseInt(actualLotsRaw) : 200;
   var tp = dir === '多' ? entry + stopDist * targetR : entry - stopDist * targetR;
   var actualPos = Math.round(actualLots * entry * 100) / 100;
+  
+  // 计算平保价格：价格上涨1.5R时的价格
+  var breakeven = dir === '多' ? entry + stopDist * 1.5 : entry - stopDist * 1.5;
   
   // 获取用户选择的开仓日期，默认为当天
   var calcOpenDateEl = g('calcOpenDate');
@@ -449,6 +469,7 @@ function addTradeFromCalc() {
     dir: dir,
     entry: entry,
     stop: stop,
+    breakEvenPrice: Math.round(breakeven * 100) / 100,
     target: parseFloat(tp.toFixed(4)),
     rrTarget: targetR || 0,
     posSize: actualPos,
@@ -456,6 +477,7 @@ function addTradeFromCalc() {
     riskAmount: Math.round(rAmt * 100) / 100,
     openFee: Math.round(openFee * 100) / 100,
     exit: '',
+    exitType: '',
     pnl: '',
     pnlR: '',
     status: 'open',
@@ -479,7 +501,7 @@ function clearCalc() {
   ['calcSymbol', 'calcEntry', 'calcStop'].forEach(function(id) {
     document.getElementById(id).value = '';
   });
-  document.getElementById('calcTargetR').value = '2';
+  document.getElementById('calcTargetR').value = '3';
   document.getElementById('calcActualLots').value = '200';
   document.getElementById('calcRecoLots').value = '';
   document.getElementById('lotHint').textContent = '';

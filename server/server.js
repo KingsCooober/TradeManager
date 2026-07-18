@@ -140,6 +140,7 @@ db.serialize(() => {
     direction TEXT,
     entry_price REAL,
     stop_loss REAL,
+    break_even_price REAL,
     take_profit REAL,
     stop_distance_pct REAL,
     tp_distance_pct REAL,
@@ -148,6 +149,7 @@ db.serialize(() => {
     actual_amount REAL,
     r_amount REAL,
     close_price REAL,
+    exit_type TEXT,
     pnl_amount REAL,
     pnl_r REAL,
     hold_days INTEGER,
@@ -156,6 +158,14 @@ db.serialize(() => {
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
   )`);
+
+  // 迁移：为已有表添加 exit_type 列
+  db.run(`ALTER TABLE trades ADD COLUMN exit_type TEXT DEFAULT ''`, function(err) {
+    if (err && !err.message.includes('duplicate column')) console.error('迁移 exit_type 失败:', err.message);
+  });
+  db.run(`ALTER TABLE trades ADD COLUMN break_even_price REAL DEFAULT 0`, function(err) {
+    if (err && !err.message.includes('duplicate column')) console.error('迁移 break_even_price 失败:', err.message);
+  });
 
   // 入金记录表
   db.run(`CREATE TABLE IF NOT EXISTS deposits (
@@ -351,16 +361,16 @@ app.post('/api/sync/:userId', (req, res) => {
     if (trades && trades.length > 0) {
       const stmt = db.prepare(`INSERT OR REPLACE INTO trades (
         id, user_id, open_date, close_date, symbol, type, direction, entry_price, stop_loss,
-        take_profit, stop_distance_pct, tp_distance_pct, position_size, actual_lots,
-        actual_amount, r_amount, close_price, pnl_amount, pnl_r, hold_days, status, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        break_even_price, take_profit, stop_distance_pct, tp_distance_pct, position_size, actual_lots,
+        actual_amount, r_amount, close_price, exit_type, pnl_amount, pnl_r, hold_days, status, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       
       trades.forEach(trade => {
         stmt.run([
           trade.id || uuidv4(), userId, trade.openDate, trade.closeDate, trade.symbol,
-          trade.type, trade.direction, trade.entryPrice, trade.stopLoss, trade.takeProfit,
-          trade.stopDistancePct, trade.tpDistancePct, trade.positionSize, trade.actualLots,
-          trade.actualAmount, trade.rAmount, trade.closePrice, trade.pnlAmount, trade.pnlR,
+          trade.type, trade.direction, trade.entryPrice, trade.stopLoss, trade.breakEvenPrice || 0,
+          trade.takeProfit, trade.stopDistancePct, trade.tpDistancePct, trade.positionSize, trade.actualLots,
+          trade.actualAmount, trade.rAmount, trade.closePrice, trade.exitType || '', trade.pnlAmount, trade.pnlR,
           trade.holdDays, trade.status, trade.notes
         ]);
       });
@@ -410,14 +420,14 @@ app.post('/api/trades/:userId', (req, res) => {
   db.run(
     `INSERT OR REPLACE INTO trades (
       id, user_id, open_date, close_date, symbol, type, direction, entry_price, stop_loss,
-      take_profit, stop_distance_pct, tp_distance_pct, position_size, actual_lots,
-      actual_amount, r_amount, close_price, pnl_amount, pnl_r, hold_days, status, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      break_even_price, take_profit, stop_distance_pct, tp_distance_pct, position_size, actual_lots,
+      actual_amount, r_amount, close_price, exit_type, pnl_amount, pnl_r, hold_days, status, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       tradeId, userId, trade.openDate, trade.closeDate, trade.symbol,
-      trade.type, trade.direction, trade.entryPrice, trade.stopLoss, trade.takeProfit,
-      trade.stopDistancePct, trade.tpDistancePct, trade.positionSize, trade.actualLots,
-      trade.actualAmount, trade.rAmount, trade.closePrice, trade.pnlAmount, trade.pnlR,
+      trade.type, trade.direction, trade.entryPrice, trade.stopLoss, trade.breakEvenPrice || 0,
+      trade.takeProfit, trade.stopDistancePct, trade.tpDistancePct, trade.positionSize, trade.actualLots,
+      trade.actualAmount, trade.rAmount, trade.closePrice, trade.exitType || '', trade.pnlAmount, trade.pnlR,
       trade.holdDays, trade.status, trade.notes
     ],
     function(err) {

@@ -15,6 +15,42 @@ function calcActualRisk(trade) {
   return 0;
 }
 
+function getBuyTypeSelect(trade) {
+  var html = '<div class="table-select-wrapper">' +
+    '<div class="table-select type-select" tabindex="0" data-trade-id="' + esc(trade.id) + '" data-field="buyType">' +
+    '<span class="table-select-value">' + esc(trade.buyType || '-') + '</span>' +
+    '<span class="table-select-arrow">▼</span>' +
+    '</div>' +
+    '<ul class="table-select-options" data-trade-id="' + esc(trade.id) + '" data-field="buyType">';
+  BUY_TYPES.forEach(function(t) {
+    html += '<li data-value="' + esc(t) + '"' + (trade.buyType === t ? ' class="selected"' : '') + '>' + esc(t) + '</li>';
+  });
+  html += '</ul></div>';
+  return html;
+}
+
+var EXIT_TYPES = ['', '止损', '目标止盈', '移动止盈', '平保'];
+var EXIT_TYPE_LABELS = { '': '-', '止损': '止损', '目标止盈': '目标止盈', '移动止盈': '移动止盈', '平保': '平保' };
+var EXIT_TYPE_COLORS = { '止损': 'var(--color-green)', '目标止盈': 'var(--color-red)', '移动止盈': 'var(--color-orange, #f97316)', '平保': 'var(--color-blue)' };
+
+function getExitTypeSelect(trade) {
+  var cur = trade.exitType || '';
+  var color = EXIT_TYPE_COLORS[cur] || 'var(--text-primary)';
+  var html = '<div class="table-select-wrapper">' +
+    '<div class="table-select exittype-select" tabindex="0" data-trade-id="' + esc(trade.id) + '" data-field="exitType" style="border-color:' + color + '">' +
+    '<span class="table-select-value" style="color:' + color + '">' + esc(EXIT_TYPE_LABELS[cur] || '-') + '</span>' +
+    '<span class="table-select-arrow">▼</span>' +
+    '</div>' +
+    '<ul class="table-select-options" data-trade-id="' + esc(trade.id) + '" data-field="exitType">';
+  EXIT_TYPES.forEach(function(t) {
+    var label = EXIT_TYPE_LABELS[t] || '-';
+    var c = EXIT_TYPE_COLORS[t] || '';
+    html += '<li data-value="' + esc(t) + '"' + (cur === t ? ' class="selected"' : '') + (c ? ' style="color:' + c + ';font-weight:600"' : '') + '>' + esc(label) + '</li>';
+  });
+  html += '</ul></div>';
+  return html;
+}
+
 function addEmptyTrade() {
   var today = getToday();
   var id = generateUUID();
@@ -28,6 +64,7 @@ function addEmptyTrade() {
     dir: '多',
     entry: '',
     stop: '',
+    breakEvenPrice: '',
     target: '',
     rrTarget: 0,
     posSize: '',
@@ -38,6 +75,7 @@ function addEmptyTrade() {
     pnlR: '',
     status: 'open',
     followedPlan: '是',
+    exitType: '',
     note: ''
   });
   markTradeDirty(id);
@@ -276,23 +314,25 @@ function renderTable() {
       html += '<tr><td style="color:var(--text-tertiary);text-align:center">' + (i + 1) + '</td>' +
       '<td style="text-align:center;color:var(--text-primary)">' + (t.date || '-') + '</td>' +
       '<td style="text-align:center;color:var(--text-primary);font-weight:500">' + (t.symbol || '-') + '</td>' +
-      '<td style="text-align:center;color:var(--text-secondary)">' + (t.buyType || '-') + '</td>' +
+      '<td style="text-align:center;color:var(--color-purple);font-weight:500">' + (t.buyType || '-') + '</td>' +
       '<td style="text-align:center;color:' + dC + ';font-weight:600">' + t.dir + '</td>' +
       '<td style="text-align:center;color:var(--text-primary);font-weight:500">' + (t.entry || '-') + '</td>' +
-      '<td style="text-align:right;color:var(--color-green)">' + (t.stop ? parseFloat(t.stop).toFixed(2) : '-') + '</td>' +
-      '<td style="text-align:right;color:var(--color-red)">' + (t.target ? parseFloat(t.target).toFixed(2) : '-') + rrL + '</td>' +
-      '<td style="text-align:right;color:var(--color-red)">' + tpD + '</td>' +
-      '<td style="text-align:right;color:var(--color-blue)">' + (t.posSize ? parseFloat(t.posSize).toLocaleString() + ' ￥' : '-') + '</td>' +
-      '<td style="text-align:right;color:var(--color-purple)">' + riskDisplay + '</td>' +
+      '<td style="text-align:center;color:var(--color-green)">' + (t.stop ? parseFloat(t.stop).toFixed(2) : '-') + '</td>' +
+      '<td style="text-align:center;color:var(--color-purple);font-weight:500">' + (t.breakEvenPrice ? parseFloat(t.breakEvenPrice).toFixed(2) : '-') + '</td>' +
+      '<td style="text-align:center;color:var(--color-red)">' + (t.target ? parseFloat(t.target).toFixed(2) : '-') + rrL + '</td>' +
+      '<td style="text-align:center;color:var(--color-red)">' + tpD + '</td>' +
+      '<td style="text-align:center;color:var(--color-blue)">' + (t.posSize ? parseFloat(t.posSize).toLocaleString() + ' ￥' : '-') + '</td>' +
+      '<td style="text-align:center;color:var(--color-purple)">' + riskDisplay + '</td>' +
       '<td><input type="number" class="in-exit" value="' + t.exit + '" placeholder="出场" step="0.1" onchange="updateTrade(' + t.id + ',\'exit\',this.value)"></td>' +
       '<td><input type="date" class="in-date" value="' + t.exitDate + '" onchange="updateTrade(' + sqesc(t.id) + ',\'exitDate\',this.value)"></td>' +
-      '<td style="' + exDC + ';text-align:right">' + exD + '</td>' +
-      '<td style="' + pC + ';text-align:right">' + (t.pnl !== '' && !isNaN(t.pnl) ? CNY(parseFloat(t.pnl)) : '-') + '</td>' +
-      '<td style="' + pRC + ';text-align:right">' + (t.pnlR !== '' && !isNaN(t.pnlR) ? fmtR(parseFloat(t.pnlR)) : '-') + '</td>' +
+      '<td style="text-align:center">' + getExitTypeSelect(t) + '</td>' +
+      '<td style="' + exDC + ';text-align:center">' + exD + '</td>' +
+      '<td style="' + pC + ';text-align:center">' + (t.pnl !== '' && !isNaN(t.pnl) ? CNY(parseFloat(t.pnl)) : '-') + '</td>' +
+      '<td style="' + pRC + ';text-align:center">' + (t.pnlR !== '' && !isNaN(t.pnlR) ? fmtR(parseFloat(t.pnlR)) : '-') + '</td>' +
       '<td style="text-align:center;white-space:nowrap">' + calcHoldDuration(t) + '</td>' +
       '<td style="text-align:center">' + statusSelect + '</td>' +
       '<td style="text-align:center">' + planSelect + '</td>' +
-      '<td><input type="text" class="in-note" value="' + esc(t.note || '') + '" placeholder="备注" onchange="updateTrade(' + sqesc(t.id) + ',\'note\',this.value)"></td>' +
+      '<td><textarea class="in-note" rows="2" placeholder="备注" onchange="updateTrade(' + sqesc(t.id) + ',\'note\',this.value)">' + esc(t.note || '') + '</textarea></td>' +
       '<td><button class="btn btn-danger btn-sm" onclick="openDeleteConfirm(' + sqesc(t.id) + ', ' + sqesc(t.symbol || '') + ', ' + sqesc(t.dir || '') + ', ' + sqesc(t.entry || '') + ')">删除</button></td></tr>';
   }
   tbody.innerHTML = html;

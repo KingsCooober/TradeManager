@@ -289,9 +289,9 @@ function clearAll() {
 
 // ===== 导出CSV =====
 function exportCSV() {
-  var headers = ['#', '日期', '品种', '方向', '入场价', '止损价', '止盈价', '止盈距离%', '仓位金额', '风险R', '出场价', '盈亏距离%', '盈亏金额', '盈亏R', '状态', '备注'];
+  var headers = ['#', '日期', '品种', '方向', '入场价', '止损价', '平保价', '止盈价', '止盈距离%', '仓位金额', '风险R', '出场价', '出场日期', '卖点类型', '盈亏距离%', '盈亏金额', '盈亏R', '状态', '备注'];
   var rows = trades.map(function(t, i) {
-    return [i + 1, t.date, t.symbol, t.dir, t.entry, t.stop, t.target, calcTpDist(t), t.posSize, t.riskAmount, t.exit, calcExitDist(t), t.pnl, t.pnlR, t.status, t.note];
+    return [i + 1, t.date, t.symbol, t.dir, t.entry, t.stop, t.breakEvenPrice, t.target, calcTpDist(t), t.posSize, t.riskAmount, t.exit, t.exitDate, t.exitType, calcExitDist(t), t.pnl, t.pnlR, t.status, t.note];
   });
   var csv = [headers].concat(rows).map(function(r) { return r.join(','); }).join('\n');
   var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });

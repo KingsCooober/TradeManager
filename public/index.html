@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Trade Manager - 交易管理</title>
-<link rel="stylesheet" href="css/main.css?v=4">
+<link rel="stylesheet" href="css/main.css?v=5">
 </head>
 <body>
 
@@ -132,7 +132,7 @@
 
       <div class="calc-inputs">
         <div class="calc-field wide"><label>品种 / 标的</label><input type="text" id="calcSymbol" placeholder="BTC / A股 / 指数"></div>
-        <div class="calc-field">
+        <div class="calc-field wide">
           <label>买点类型</label>
           <div class="custom-select-wrapper">
             <div class="custom-select" tabindex="0" id="buyTypeSelect">
@@ -140,13 +140,6 @@
               <span class="custom-select-arrow">▼</span>
             </div>
             <ul class="custom-select-options" id="buyTypeOptions">
-              <li data-value="5分钟回踩">5分钟回踩</li>
-              <li data-value="15分钟回踩">15分钟回踩</li>
-              <li data-value="60分钟回踩">60分钟回踩</li>
-              <li data-value="日线回踩">日线回踩</li>
-              <li data-value="金叉共振">金叉共振</li>
-              <li data-value="大阳不破">大阳不破</li>
-              <li data-value="N型反转">N型反转</li>
             </ul>
           </div>
           <input type="hidden" id="calcBuyType" value="15分钟回踩">
@@ -167,7 +160,7 @@
         </div>
         <div class="calc-field"><label>入场价格</label><input type="number" id="calcEntry" placeholder="0.00" step="any" oninput="calcPosition()"></div>
         <div class="calc-field"><label>止损价格</label><input type="number" id="calcStop" placeholder="0.00" step="any" oninput="calcPosition()"></div>
-        <div class="calc-field"><label>目标止盈 R 倍数</label><input type="number" id="calcTargetR" placeholder="如 2" step="0.5" min="0.5" value="2" oninput="calcPosition()"></div>
+        <div class="calc-field"><label>目标止盈 R 倍数</label><input type="number" id="calcTargetR" placeholder="如 3" step="0.5" min="0.5" value="3" oninput="calcPosition()"></div>
         <div class="calc-field"><label>推荐买入股数</label><input type="text" id="calcRecoLots" class="calc-readonly" readonly placeholder="—"></div>
         <div class="calc-field"><label>实际买入股数</label><input type="number" id="calcActualLots" value="200" step="100" min="0" oninput="onActualLotsInput()"></div>
       </div>
@@ -274,9 +267,9 @@
           <thead>
             <tr>
               <th>#</th><th>开仓日期</th><th>品种</th><th>买点类型</th><th>方向</th>
-              <th>入场价</th><th>止损价</th><th>止盈价</th>
+              <th>入场价</th><th>止损价</th><th>平保价</th><th>止盈价</th>
               <th>止盈%</th><th>仓位金额</th><th>风险R</th>
-              <th>出场价</th><th>出场日期</th><th>盈亏%</th><th>盈亏金额</th><th>盈亏R</th>
+              <th>出场价</th>               <th>出场日期</th><th>卖点类型</th><th>盈亏%</th><th>盈亏金额</th><th>盈亏R</th>
               <th>持仓天数</th><th>状态</th><th>是否按计划执行</th><th>备注</th><th>操作</th>
             </tr>
           </thead>
@@ -511,7 +504,7 @@
 <script src="js/sync.js?v=5"></script>
 <script src="js/storage.js?v=4"></script>
 <script src="js/calculator.js?v=4"></script>
-<script src="js/table.js?v=4"></script>
+<script src="js/table.js?v=5"></script>
 <script src="js/charts.js?v=4"></script>
 <script src="js/main.js?v=4"></script>
 <script>
