@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>每日复盘 - Trade Manager</title>
+<link rel="stylesheet" href="css/main.css?v=4">
+<link rel="stylesheet" href="css/daily-review.css?v=20260718007">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-left">
+    <button class="btn btn-ghost btn-sm" onclick="window.location.href='index.html'" aria-label="返回">← 返回</button>
+    <div class="app-logo">📋</div>
+    <div class="app-title">
+      <h1>每日复盘</h1>
+      <span class="app-subtitle">交易复盘与策略分析</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="syncStatus" class="sync-status-inline"></div>
+    <div id="headerSyncLoggedIn" style="display:none;align-items:center;gap:8px">
+      <span class="header-user-badge">👤 <span id="headerUsername">-</span></span>
+      <button class="btn btn-sm btn-primary" onclick="handleFullSync()">🔄 同步</button>
+      <button class="btn btn-sm btn-ghost" onclick="handleToggleAutoSync()" id="headerBtnAutoSync">自动: 关</button>
+      <button class="btn btn-sm btn-ghost" onclick="openChangePasswordModal()">🔐 修改密码</button>
+      <button class="btn btn-sm btn-ghost-danger" onclick="handleDRLogout()">退出</button>
+    </div>
+    <div id="headerSyncLoggedOut" style="display:flex;align-items:center;gap:8px">
+      <button class="btn btn-sm btn-primary" onclick="openDRLoginModal()">☁️ 登录同步</button>
+    </div>
+    <div id="adminMenu" style="display:none;align-items:center;gap:8px">
+      <span class="header-user-badge admin-badge">🔧 管理员</span>
+    </div>
+    <div class="theme-divider"></div>
+    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="切换明暗主题">
+      <span class="theme-icon-light">🌙</span>
+      <span class="theme-icon-dark">☀️</span>
+    </button>
+  </div>
+</header>
+
+<main class="dr-main">
+  <div class="dr-container">
+
+    <!-- 顶部工具栏 -->
+    <div class="dr-toolbar card">
+      <div class="dr-toolbar-left">
+        <h2>📋 每日复盘</h2>
+        <div class="dr-date-nav">
+          <button onclick="navigateDRDate(-1)" title="前一天">◀</button>
+          <input type="date" id="drDate" onchange="onDRDateChange()">
+          <button onclick="navigateDRDate(1)" title="后一天">▶</button>
+        </div>
+      </div>
+      <div class="dr-toolbar-right">
+        <button class="btn btn-sm btn-ghost" onclick="exportDRData()">📤 导出</button>
+        <button class="btn btn-sm btn-ghost" onclick="document.getElementById('importDRFile').click()">📥 导入</button>
+        <input type="file" id="importDRFile" accept=".json" style="display:none" onchange="importDRData(event)">
+        <button class="btn btn-sm btn-ghost-danger" onclick="deleteDRReview()">🗑 删除</button>
+        <button class="btn btn-sm btn-primary" onclick="saveDRReview()">💾 保存复盘</button>
+      </div>
+    </div>
+
+    <!-- 交易纪律（全局） -->
+    <div>
+      <div class="dr-section-header">
+        <h3>⚖️ 交易纪律</h3>
+      </div>
+      <div class="dr-section-body">
+        <div class="dr-discipline-rules" id="drDisciplineRules"></div>
+        <button class="dr-add-btn dr-discipline-add-btn" onclick="addDRDisciplineRule()">+ 添加纪律</button>
+      </div>
+    </div>
+
+    <!-- 概览卡片 -->
+    <div class="dr-summary-cards">
+      <div class="dr-summary-card">
+        <div class="dr-card-label">交易笔数</div>
+        <div class="dr-card-value" id="drCardTotal">0</div>
+      </div>
+      <div class="dr-summary-card">
+        <div class="dr-card-label">总盈亏</div>
+        <div class="dr-card-value" id="drCardPnl">-</div>
+      </div>
+      <div class="dr-summary-card">
+        <div class="dr-card-label">盈亏R</div>
+        <div class="dr-card-value" id="drCardTotalR">-</div>
+      </div>
+      <div class="dr-summary-card">
+        <div class="dr-card-label">胜率</div>
+        <div class="dr-card-value" id="drCardWinRate">-</div>
+      </div>
+      <div class="dr-summary-card">
+        <div class="dr-card-label">按计划率</div>
+        <div class="dr-card-value" id="drCardFollowRate">-</div>
+      </div>
+    </div>
+
+    <!-- 模块1: 大盘研判 -->
+    <div>
+      <div class="dr-section-header">
+        <h3>📊 大盘研判</h3>
+      </div>
+      <div class="dr-section-body">
+        <div class="dr-indices-grid" id="drIndicesList"></div>
+        <div class="dr-field" style="margin-top: 14px;">
+          <label for="drMarketOverallReason">综合判断理由</label>
+          <textarea class="dr-textarea" id="drMarketOverallReason" rows="3" placeholder="综合各指数走势，为什么做出以上判断？技术面/基本面/政策面..."></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模块2: 市场情绪周期 -->
+    <div>
+      <div class="dr-section-header">
+        <h3>🎭 市场情绪周期</h3>
+      </div>
+      <div class="dr-section-body">
+        <!-- 情绪周期阶段 -->
+        <div class="dr-sentiment-cycle">
+          <div class="dr-cycle-phases" id="drCyclePhases">
+            <div class="dr-cycle-phase" data-phase="极度悲观" onclick="setDRSentimentPhase('极度悲观')">
+              <div class="dr-cycle-dot"></div>
+              <div class="dr-cycle-label">极度悲观</div>
+            </div>
+            <div class="dr-cycle-arrow">→</div>
+            <div class="dr-cycle-phase" data-phase="悲观" onclick="setDRSentimentPhase('悲观')">
+              <div class="dr-cycle-dot"></div>
+              <div class="dr-cycle-label">悲观</div>
+            </div>
+            <div class="dr-cycle-arrow">→</div>
+            <div class="dr-cycle-phase" data-phase="中性" onclick="setDRSentimentPhase('中性')">
+              <div class="dr-cycle-dot"></div>
+              <div class="dr-cycle-label">中性</div>
+            </div>
+            <div class="dr-cycle-arrow">→</div>
+            <div class="dr-cycle-phase" data-phase="乐观" onclick="setDRSentimentPhase('乐观')">
+              <div class="dr-cycle-dot"></div>
+              <div class="dr-cycle-label">乐观</div>
+            </div>
+            <div class="dr-cycle-arrow">→</div>
+            <div class="dr-cycle-phase" data-phase="极度乐观" onclick="setDRSentimentPhase('极度乐观')">
+              <div class="dr-cycle-dot"></div>
+              <div class="dr-cycle-label">极度乐观</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 情绪温度计 -->
+        <div class="dr-temperature-section" style="margin-top: 18px;">
+          <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary); display: block; margin-bottom: 10px;">情绪温度</label>
+          <div class="dr-temperature-bar">
+            <div class="dr-temp-fill" id="drTempFill"></div>
+            <div class="dr-temp-pointer" id="drTempPointer"></div>
+          </div>
+          <div class="dr-temp-labels">
+            <span style="color: var(--color-green);">极度悲观 0</span>
+            <span style="color: var(--color-yellow);">中性 50</span>
+            <span style="color: var(--color-red);">极度乐观 100</span>
+          </div>
+          <div class="dr-temp-input-row">
+            <input type="range" id="drTemperature" min="0" max="100" value="50" class="dr-temp-slider" oninput="onDRTemperatureChange(this.value)">
+            <span class="dr-temp-value" id="drTempValue">50</span>
+          </div>
+        </div>
+
+        <!-- 多维度情绪指标 -->
+        <div style="margin-top: 18px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+            <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary);">多维度情绪指标</label>
+            <button class="btn btn-sm btn-primary" onclick="autoCalcSentiment()" title="根据指标自动判断情绪周期和温度">🎯 自动判断</button>
+          </div>
+          <div class="dr-sentiment-indicators">
+            <div class="dr-indicator-item">
+              <div class="dr-indicator-name">涨跌比</div>
+              <select class="dr-select dr-indicator-field" data-indicator="advanceDecline">
+                <option value="">请选择</option>
+                <option value="强">强（涨多跌少）</option>
+                <option value="中">中（涨跌各半）</option>
+                <option value="弱">弱（跌多涨少）</option>
+              </select>
+            </div>
+            <div class="dr-indicator-item">
+              <div class="dr-indicator-name">涨停跌停</div>
+              <select class="dr-select dr-indicator-field" data-indicator="limitUpDown">
+                <option value="">请选择</option>
+                <option value="强">强（涨停多跌停少）</option>
+                <option value="中">中（涨停跌停持平）</option>
+                <option value="弱">弱（跌停多涨停少）</option>
+              </select>
+            </div>
+            <div class="dr-indicator-item">
+              <div class="dr-indicator-name">成交量</div>
+              <select class="dr-select dr-indicator-field" data-indicator="volumeChange">
+                <option value="">请选择</option>
+                <option value="放量">放量</option>
+                <option value="平量">平量</option>
+                <option value="缩量">缩量</option>
+              </select>
+            </div>
+            <div class="dr-indicator-item">
+              <div class="dr-indicator-name">融资余额</div>
+              <select class="dr-select dr-indicator-field" data-indicator="marginBalance">
+                <option value="">请选择</option>
+                <option value="增加">增加</option>
+                <option value="持平">持平</option>
+                <option value="减少">减少</option>
+              </select>
+            </div>
+            <div class="dr-indicator-item">
+              <div class="dr-indicator-name">北向资金</div>
+              <select class="dr-select dr-indicator-field" data-indicator="northbound">
+                <option value="">请选择</option>
+                <option value="流入">大幅流入</option>
+                <option value="小幅流入">小幅流入</option>
+                <option value="持平">持平</option>
+                <option value="小幅流出">小幅流出</option>
+                <option value="流出">大幅流出</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- 情绪分析理由 -->
+        <div class="dr-field" style="margin-top: 14px;">
+          <label for="drSentimentReason">综合分析理由</label>
+          <textarea class="dr-textarea" id="drSentimentReason" rows="3" placeholder="结合以上指标，分析当前市场情绪所处周期及原因..."></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模块4: 主线与板块 -->
+    <div>
+      <div class="dr-section-header">
+        <h3>🔥 主线与板块</h3>
+      </div>
+      <div class="dr-section-body">
+        <div class="dr-themes-container" id="drThemesList"></div>
+        <button class="dr-add-btn" onclick="addDRTheme()">+ 添加主线</button>
+      </div>
+    </div>
+
+    <!-- 模块6: 今日交易复盘 -->
+    <div>
+      <div class="dr-section-header">
+        <h3>📋 今日交易复盘</h3>
+      </div>
+      <div class="dr-section-body">
+        <div class="dr-trades-list" id="drTradesList"></div>
+      </div>
+    </div>
+
+    <!-- 模块6: 心态与纪律 -->
+    <div>
+      <div class="dr-section-header">
+        <h3>🧠 心态与纪律</h3>
+      </div>
+      <div class="dr-section-body">
+        <div style="margin-bottom: 16px;">
+          <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary); display: block; margin-bottom: 6px;">心态评分</label>
+          <div class="dr-mood-score" id="drMoodScore">
+            <span class="dr-mood-star" onclick="setDRMoodScore(1)">★</span>
+            <span class="dr-mood-star" onclick="setDRMoodScore(2)">★</span>
+            <span class="dr-mood-star" onclick="setDRMoodScore(3)">★</span>
+            <span class="dr-mood-star" onclick="setDRMoodScore(4)">★</span>
+            <span class="dr-mood-star" onclick="setDRMoodScore(5)">★</span>
+          </div>
+        </div>
+        <div style="margin-bottom: 16px;">
+          <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary); display: block; margin-bottom: 6px;">情绪标签</label>
+          <div class="dr-mood-tags" id="drMoodTags"></div>
+        </div>
+        <div style="margin-bottom: 16px;">
+          <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary); display: block; margin-bottom: 6px;">纪律检查</label>
+          <div class="dr-check-grid">
+            <label class="dr-check-item"><input type="checkbox" id="drExecutedStop" checked> 执行了止损</label>
+            <label class="dr-check-item"><input type="checkbox" id="drExecutedTP"> 执行了止盈</label>
+            <label class="dr-check-item"><input type="checkbox" id="drChaseKilling"> 追涨杀跌</label>
+            <label class="dr-check-item"><input type="checkbox" id="drFrequentTrading"> 频繁交易</label>
+            <label class="dr-check-item"><input type="checkbox" id="drOvernightFull"> 满仓过夜</label>
+          </div>
+        </div>
+        <div class="dr-form-grid">
+          <div class="dr-field">
+            <label for="drPlannedPos">计划仓位</label>
+            <input type="text" class="dr-input" id="drPlannedPos" placeholder="如: 60%">
+          </div>
+          <div class="dr-field">
+            <label for="drActualPos">实际仓位</label>
+            <input type="text" class="dr-input" id="drActualPos" placeholder="如: 55%">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模块7: 每日总结 -->
+    <div>
+      <div class="dr-section-header">
+        <h3>📝 每日总结</h3>
+      </div>
+      <div class="dr-section-body">
+        <div class="dr-form-grid" style="grid-template-columns: 1fr;">
+          <div class="dr-field">
+            <label for="drGoodPoints">今日做得好的</label>
+            <textarea class="dr-textarea" id="drGoodPoints" rows="2" placeholder="今天有哪些值得继续保持的地方？"></textarea>
+          </div>
+          <div class="dr-field">
+            <label for="drBadPoints">今日做得不好的</label>
+            <textarea class="dr-textarea" id="drBadPoints" rows="2" placeholder="今天有哪些需要改进的地方？"></textarea>
+          </div>
+          <div class="dr-field">
+            <label for="drBiggestLesson">今日最大教训</label>
+            <textarea class="dr-textarea" id="drBiggestLesson" rows="2" placeholder="今天最重要的一个教训是什么？"></textarea>
+          </div>
+          <div class="dr-field">
+            <label for="drTomorrowNotes">明日注意事项</label>
+            <textarea class="dr-textarea" id="drTomorrowNotes" rows="2" placeholder="明天需要注意什么？"></textarea>
+          </div>
+          <div class="dr-field">
+            <label for="drWatchList">关注标的</label>
+            <textarea class="dr-textarea" id="drWatchList" rows="2" placeholder="明天关注哪些标的？"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模块8: 历史复盘 -->
+    <div>
+      <div class="dr-section-header">
+        <h3>📚 历史复盘</h3>
+      </div>
+      <div class="dr-section-body">
+        <div class="dr-history-section" id="drHistoryList"></div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<div id="drSaveToast" class="dr-save-toast">✅ 复盘已保存</div>
+
+<!-- 纪律弹窗 -->
+<div id="drDisciplineModal" class="modal-overlay" onclick="if(event.target===this)closeDRDisciplineModal()">
+  <div class="modal-content" style="max-width: 480px; padding: 28px;">
+    <div class="modal-header">
+      <h2 id="drDisciplineModalTitle">添加交易纪律</h2>
+      <button class="modal-close" onclick="closeDRDisciplineModal()">✕</button>
+    </div>
+    <div class="modal-field">
+      <textarea id="drDisciplineInput" class="dr-textarea" rows="3" placeholder="请输入交易纪律..." style="font-size: 15px;"></textarea>
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-gray" onclick="closeDRDisciplineModal()">取消</button>
+      <button class="btn btn-primary" onclick="confirmDRDiscipline()">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 纪律删除确认弹窗 -->
+<div id="drDisciplineDelModal" class="modal-overlay" onclick="if(event.target===this)closeDRDisciplineDelModal()">
+  <div class="modal-content" style="max-width: 400px; padding: 28px;">
+    <div class="modal-header">
+      <h2>确认删除</h2>
+      <button class="modal-close" onclick="closeDRDisciplineDelModal()">✕</button>
+    </div>
+    <p style="color: var(--text-secondary); margin-bottom: 20px;">确定要删除这条交易纪律吗？</p>
+    <div class="modal-buttons">
+      <button class="btn btn-gray" onclick="closeDRDisciplineDelModal()">取消</button>
+      <button class="btn btn-danger" onclick="confirmDRDisciplineDel()">删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 通用提示弹窗 -->
+<div id="drAlertModal" class="modal-overlay" onclick="if(event.target===this)closeDRAlertModal()">
+  <div class="modal-content" style="max-width: 400px; padding: 28px;">
+    <div class="modal-header">
+      <h2 id="drAlertModalTitle">提示</h2>
+      <button class="modal-close" onclick="closeDRAlertModal()">✕</button>
+    </div>
+    <p id="drAlertModalMsg" style="color: var(--text-secondary); margin-bottom: 20px;"></p>
+    <div class="modal-buttons">
+      <button class="btn btn-primary" onclick="closeDRAlertModal()">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 通用确认弹窗 -->
+<div id="drConfirmModal" class="modal-overlay" onclick="if(event.target===this)closeDRConfirmModal()">
+  <div class="modal-content" style="max-width: 400px; padding: 28px;">
+    <div class="modal-header">
+      <h2 id="drConfirmModalTitle">确认</h2>
+      <button class="modal-close" onclick="closeDRConfirmModal()">✕</button>
+    </div>
+    <p id="drConfirmModalMsg" style="color: var(--text-secondary); margin-bottom: 20px;"></p>
+    <div class="modal-buttons">
+      <button class="btn btn-gray" onclick="closeDRConfirmModal()">取消</button>
+      <button class="btn btn-primary" id="drConfirmModalOkBtn" onclick="if(drConfirmCallback)drConfirmCallback()">确定</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/utils.js?v=4"></script>
+<script src="js/database.js?v=4"></script>
+<script src="js/sync.js?v=5"></script>
+<script src="js/daily-review.js?v=20260718011"></script>
+<script>
+function toggleTheme() {
+  var html = document.documentElement;
+  var current = html.getAttribute('data-theme');
+  var next = current === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  localStorage.setItem('app_theme', next);
+}
+(function() {
+  var saved = localStorage.getItem('app_theme');
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+</script>
+</body>
+</html>

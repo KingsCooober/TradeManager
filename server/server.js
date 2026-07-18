@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const http = require('http');
+const https = require('https');
 const sqlite3 = require('sqlite3').verbose();
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
@@ -12,6 +14,100 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
+
+// 行情代理：绕过 CORS 限制
+// 多数据源 fallback：东方财富 → 新浪 → 腾讯
+app.get('/api/quote', (req, res) => {
+  const secid = req.query.secid;
+  if (!secid || !/^[01]\.\d{6}$/.test(secid)) {
+    return res.status(400).json({ error: 'invalid secid', expected: '1.600000 或 0.000001' });
+  }
+  const code = secid.split('.')[1];
+  const market = secid.split('.')[0]; // 0=深, 1=沪
+  const sinaSymbol = (market === '1' ? 'sh' : 'sz') + code;
+
+  // 优先用东方财富（数据最全）
+  const eastmoneyUrl = `https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=f43,f44,f45,f46,f47,f48,f58,f60,f168,f169,f170`;
+
+  const fetchWithTimeout = (url, options, timeoutMs = 4000) => {
+    return new Promise((resolve, reject) => {
+      const mod = url.startsWith('https') ? require('https') : require('http');
+      const req = mod.get(url, options, (r) => {
+        let data = '';
+        r.on('data', c => data += c);
+        r.on('end', () => resolve({ status: r.statusCode, body: data }));
+      });
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+      req.on('error', reject);
+      req.setTimeout(timeoutMs);
+    });
+  };
+
+  // 方案1：东方财富
+  fetchWithTimeout(eastmoneyUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': '*/*',
+    },
+  }).then(r => {
+    const json = JSON.parse(r.body);
+    if (json && json.data && json.data.f43 != null) {
+      const d = json.data;
+      return res.json({
+        rc: 0,
+        data: {
+          symbol: code,
+          name: d.f58 || '',
+          price: d.f43 / 100,
+          open: d.f46 != null ? d.f46 / 100 : null,
+          high: d.f44 != null ? d.f44 / 100 : null,
+          low: d.f45 != null ? d.f45 / 100 : null,
+          preClose: d.f60 != null ? d.f60 / 100 : null,
+          change: d.f169 != null ? d.f169 / 100 : null,
+          changePct: d.f170 != null ? d.f170 / 100 : null,
+          source: 'eastmoney',
+        },
+      });
+    }
+    throw new Error('no data');
+  }).catch(e1 => {
+    // 方案2：新浪 hq.sinajs.cn（最宽松，CORS 也通）
+    const sinaUrl = `https://hq.sinajs.cn/list=${sinaSymbol}`;
+    fetchWithTimeout(sinaUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://finance.sina.com.cn/',
+      },
+    }).then(r => {
+      // 返回格式: var hq_str_sh600519="贵州茅台,1488.00,1490.00,...";
+      const m = r.body.match(/="([^"]+)"/);
+      if (!m) throw new Error('sina parse fail');
+      const parts = m[1].split(',');
+      if (parts.length < 32) throw new Error('sina fields insufficient');
+      const name = parts[0];
+      const open = parseFloat(parts[1]);
+      const preClose = parseFloat(parts[2]);
+      const price = parseFloat(parts[3]);
+      const high = parseFloat(parts[4]);
+      const low = parseFloat(parts[5]);
+      const change = price - preClose;
+      const changePct = (change / preClose) * 100;
+      res.json({
+        rc: 0,
+        data: {
+          symbol: code, name, price, open, high, low, preClose,
+          change, changePct, source: 'sina',
+        },
+      });
+    }).catch(e2 => {
+      res.status(502).json({
+        error: 'all sources failed',
+        eastmoney: e1.message,
+        sina: e2.message,
+      });
+    });
+  });
+});
 
 // 数据库初始化
 const db = new sqlite3.Database(path.join(__dirname, 'data.db'));
@@ -104,6 +200,21 @@ db.serialize(() => {
     follow_system TEXT DEFAULT '否',
     lesson TEXT,
     improvement TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+
+  // 每日复盘表
+  db.run(`CREATE TABLE IF NOT EXISTS daily_reviews (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    review_date TEXT NOT NULL,
+    market_json TEXT,
+    themes_json TEXT,
+    trade_reviews_json TEXT,
+    discipline_json TEXT,
+    summary_json TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
@@ -386,6 +497,8 @@ app.delete('/api/clear/:userId', (req, res) => {
     db.run('DELETE FROM withdrawals WHERE user_id = ?', [userId]);
     // 清空日记2
     db.run('DELETE FROM diary2 WHERE user_id = ?', [userId]);
+    // 清空每日复盘
+    db.run('DELETE FROM daily_reviews WHERE user_id = ?', [userId]);
     
     console.log(`[清空] 用户 ${userId} 的数据已清空`);
     res.json({ message: '所有数据已清空' });
@@ -446,6 +559,68 @@ app.post('/api/diary/:userId', (req, res) => {
     
     res.json({ message: '复盘总结数据已保存', count: diary.length });
   });
+});
+
+// ===== 每日复盘 API =====
+
+// 获取用户某日的复盘
+app.get('/api/daily-review/:userId', (req, res) => {
+  const { userId } = req.params;
+  const { date } = req.query;
+
+  if (date) {
+    db.get(
+      'SELECT * FROM daily_reviews WHERE user_id = ? AND review_date = ?',
+      [userId, date],
+      (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ review: row || null });
+      }
+    );
+  } else {
+    db.all(
+      'SELECT * FROM daily_reviews WHERE user_id = ? ORDER BY review_date DESC',
+      [userId],
+      (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ reviews: rows || [] });
+      }
+    );
+  }
+});
+
+// 保存每日复盘
+app.post('/api/daily-review/:userId', (req, res) => {
+  const { userId } = req.params;
+  const { review } = req.body;
+
+  if (!review || !review.date) {
+    return res.status(400).json({ error: '无效的数据格式' });
+  }
+
+  const reviewId = review.id || uuidv4();
+
+  db.run(
+    `INSERT OR REPLACE INTO daily_reviews (
+      id, user_id, review_date, market_json, themes_json,
+      trade_reviews_json, discipline_json, summary_json,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      reviewId, userId, review.date,
+      JSON.stringify(review.market || []),
+      JSON.stringify(review.themes || []),
+      JSON.stringify(review.tradeReviews || []),
+      JSON.stringify(review.discipline || {}),
+      JSON.stringify(Object.assign({}, review.summary || {}, { overallReason: review.overallReason || '', sentimentCycle: review.sentimentCycle || null })),
+      review.createdAt || new Date().toISOString(),
+      new Date().toISOString()
+    ],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: reviewId, message: '复盘已保存' });
+    }
+  );
 });
 
 // ===== 管理员 API =====
