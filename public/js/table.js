@@ -101,35 +101,49 @@ function updateTrade(id, field, value) {
   if (!t) return;
 
   t[field] = value;
-  
+
   // 标记为待同步
   markTradeDirty(idStr);
+
+  // 如果清空了出场价，意味着交易回退到未平仓状态
+  // 联动清空盈亏金额、pnlR、出场日期、出场类型、closeTime
+  if (field === 'exit' && (value === '' || value === null || value === undefined)) {
+    t.pnl = '';
+    t.pnlR = '';
+    t.exitDate = '';
+    t.exitType = '';
+    t.status = 'open';
+    t.closeTime = '';
+    updateAll();
+    try { localStorage.setItem('trades_v4', JSON.stringify(trades)); } catch(e) {}
+    return;
+  }
 
   // 当填写出场价、入场价、仓位时自动计算盈亏（扣除手续费）
   if (field === 'exit' || field === 'entry' || field === 'posSize' || field === 'actualLots') {
     var e = parseFloat(t.entry),
         ex = parseFloat(t.exit),
         lots = parseFloat(t.actualLots) || 0;
-    
+
     // 如果posSize为空但有actualLots和entry，自动计算posSize
     if ((!t.posSize || isNaN(parseFloat(t.posSize))) && lots > 0 && !isNaN(e) && e > 0) {
       t.posSize = Math.round(e * lots * 100) / 100;
     }
-    
+
     var pos = parseFloat(t.posSize) || 0;
     if (!isNaN(e) && !isNaN(ex) && pos > 0 && e !== 0) {
       var pct = t.dir === '多' ? (ex - e) / e : (e - ex) / e;
       var grossPnl = pos * pct; // 毛盈亏
-      
+
       // 计算手续费（开仓 + 出场）
       var feeRate = getFeeRate() / 100;
       var openFee = pos * feeRate; // 开仓手续费
       var exitFee = lots > 0 ? (ex * lots * feeRate) : (pos * feeRate); // 出场手续费
       var totalFees = openFee + exitFee;
-      
+
       // 净盈亏 = 毛盈亏 - 手续费
       t.pnl = Math.round((grossPnl - totalFees) * 100) / 100;
-      
+
       if (t.riskAmount && !isNaN(parseFloat(t.riskAmount)) && parseFloat(t.riskAmount) !== 0) {
         var riskForPnlR = calcActualRisk(t) || parseFloat(t.riskAmount);
         t.pnlR = Math.round(parseFloat(t.pnl) / riskForPnlR * 100) / 100;
@@ -188,7 +202,7 @@ function updateTrade(id, field, value) {
 function renderTable() {
   var tbody = document.getElementById('tradeBody');
   if (trades.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="21" style="color:var(--text-tertiary);padding:30px;text-align:center">暂无交易记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text-tertiary);padding:30px;text-align:center">暂无交易记录</td></tr>';
     return;
   }
   var html = '';
@@ -214,7 +228,7 @@ function renderTable() {
       var statusText = { 'open': '持仓', 'win': '盈利', 'loss': '亏损', 'be': '保本' }[t.status] || '持仓';
       // 获取状态对应的CSS类
       var statusClass = 'status-' + t.status;
-      
+
       // 状态下拉框
       var statusSelect = '<div class="table-select-wrapper">' +
         '<div class="table-select ' + statusClass + '" tabindex="0" data-trade-id="' + esc(t.id) + '" data-field="status">' +
@@ -228,7 +242,7 @@ function renderTable() {
         '<li data-value="be"' + (t.status === 'be' ? ' class="selected"' : '') + '>保本</li>' +
         '</ul>' +
         '</div>';
-      
+
       // 是否按计划执行下拉框
       var planSelect = '<div class="table-select-wrapper">' +
         '<div class="table-select plan-select ' + (t.followedPlan === '是' ? 'plan-yes' : 'plan-no') + '" tabindex="0" data-trade-id="' + esc(t.id) + '" data-field="followedPlan">' +
@@ -240,30 +254,34 @@ function renderTable() {
         '<li data-value="否"' + (t.followedPlan === '否' ? ' class="selected"' : '') + '>否</li>' +
         '</ul>' +
         '</div>';
-      
-      html += '<tr><td style="color:var(--text-tertiary);text-align:center">' + (i + 1) + '</td>' +
-      '<td style="text-align:center;color:var(--text-primary)">' + (t.date || '-') + '</td>' +
-      '<td style="text-align:center;color:var(--text-primary);font-weight:500">' + (t.symbol || '-') + '</td>' +
-      '<td style="text-align:center;color:var(--color-purple);font-weight:500">' + (t.buyType || '-') + '</td>' +
-      '<td style="text-align:center;color:' + dC + ';font-weight:600">' + t.dir + '</td>' +
-      '<td style="text-align:center;color:var(--text-primary);font-weight:500">' + (t.entry || '-') + '</td>' +
-      '<td style="text-align:center;color:var(--color-green)">' + (t.stop ? parseFloat(t.stop).toFixed(2) : '-') + '</td>' +
-      '<td style="text-align:center;color:var(--color-purple);font-weight:500">' + (t.breakEvenPrice ? parseFloat(t.breakEvenPrice).toFixed(2) : '-') + '</td>' +
-      '<td style="text-align:center;color:var(--color-red)">' + (t.target ? parseFloat(t.target).toFixed(2) : '-') + rrL + '</td>' +
-      '<td style="text-align:center;color:var(--color-red)">' + tpD + '</td>' +
-      '<td style="text-align:center;color:var(--color-blue)">' + (t.posSize ? parseFloat(t.posSize).toLocaleString() + ' ￥' : '-') + '</td>' +
-      '<td style="text-align:center;color:var(--color-purple)">' + riskDisplay + '</td>' +
-      '<td><input type="number" class="in-exit" value="' + t.exit + '" placeholder="出场" step="0.1" onchange="updateTrade(' + sqesc(t.id) + ',\'exit\',this.value)"></td>' +
-      '<td><input type="date" class="in-date" value="' + t.exitDate + '" onchange="updateTrade(' + sqesc(t.id) + ',\'exitDate\',this.value)"></td>' +
-      '<td style="text-align:center">' + getExitTypeSelect(t) + '</td>' +
-      '<td style="' + exDC + ';text-align:center">' + exD + '</td>' +
-      '<td style="' + pC + ';text-align:center">' + (t.pnl !== '' && !isNaN(t.pnl) ? CNY(parseFloat(t.pnl)) : '-') + '</td>' +
-      '<td style="' + pRC + ';text-align:center">' + (t.pnlR !== '' && !isNaN(t.pnlR) ? fmtR(parseFloat(t.pnlR)) : '-') + '</td>' +
-      '<td style="text-align:center;white-space:nowrap">' + calcHoldDuration(t) + '</td>' +
-      '<td style="text-align:center">' + statusSelect + '</td>' +
-      '<td style="text-align:center">' + planSelect + '</td>' +
-      '<td><textarea class="in-note" rows="2" placeholder="备注" onchange="updateTrade(' + sqesc(t.id) + ',\'note\',this.value)">' + esc(t.note || '') + '</textarea></td>' +
-      '<td><button class="btn btn-danger btn-sm" onclick="openDeleteConfirm(' + sqesc(t.id) + ', ' + sqesc(t.symbol || '') + ', ' + sqesc(t.dir || '') + ', ' + sqesc(t.entry || '') + ')">删除</button></td></tr>';
+
+      html += '<tr data-trade-id="' + esc(t.id) + '">' +
+      '<td class="col-num" style="color:var(--text-tertiary);text-align:center">' + (i + 1) + '</td>' +
+      '<td class="col-date" style="text-align:center;color:var(--text-primary)">' + (t.date || '-') + '</td>' +
+      '<td class="col-symbol" style="text-align:center;color:var(--text-primary);font-weight:500">' + (t.symbol || '-') + '</td>' +
+      '<td class="col-buytype col-secondary" style="text-align:center;color:var(--color-purple);font-weight:500">' + (t.buyType || '-') + '</td>' +
+      '<td class="col-dir" style="text-align:center;color:' + dC + ';font-weight:600">' + t.dir + '</td>' +
+      '<td class="col-entry" style="text-align:center;color:var(--text-primary);font-weight:500">' + (t.entry || '-') + '</td>' +
+      '<td class="col-stop col-secondary" style="text-align:center;color:var(--color-green)">' + (t.stop ? parseFloat(t.stop).toFixed(2) : '-') + '</td>' +
+      '<td class="col-breakeven col-secondary" style="text-align:center;color:var(--color-purple);font-weight:500">' + (t.breakEvenPrice ? parseFloat(t.breakEvenPrice).toFixed(2) : '-') + '</td>' +
+      '<td class="col-target col-secondary" style="text-align:center;color:var(--color-red)">' + (t.target ? parseFloat(t.target).toFixed(2) : '-') + rrL + '</td>' +
+      '<td class="col-tpdist col-secondary" style="text-align:center;color:var(--color-red)">' + tpD + '</td>' +
+      '<td class="col-possize col-secondary" style="text-align:center;color:var(--color-blue)">' + (t.posSize ? parseFloat(t.posSize).toLocaleString() + ' ￥' : '-') + '</td>' +
+      '<td class="col-risk col-secondary" style="text-align:center;color:var(--color-purple)">' + riskDisplay + '</td>' +
+      '<td class="col-exit" style="text-align:center"><input type="number" class="in-exit" value="' + t.exit + '" placeholder="出场" step="0.1" onchange="updateTrade(' + sqesc(t.id) + ',\'exit\',this.value)"></td>' +
+      '<td class="col-exitdate col-secondary" style="text-align:center"><input type="date" class="in-date" value="' + t.exitDate + '" onchange="updateTrade(' + sqesc(t.id) + ',\'exitDate\',this.value)"></td>' +
+      '<td class="col-exittype col-secondary" style="text-align:center">' + getExitTypeSelect(t) + '</td>' +
+      '<td class="col-exitdist col-secondary" style="' + exDC + ';text-align:center">' + exD + '</td>' +
+      '<td class="col-pnl" style="' + pC + ';text-align:center">' + (t.pnl !== '' && !isNaN(t.pnl) ? CNY(parseFloat(t.pnl)) : '-') + '</td>' +
+      '<td class="col-pnlr" style="' + pRC + ';text-align:center">' + (t.pnlR !== '' && !isNaN(t.pnlR) ? fmtR(parseFloat(t.pnlR)) : '-') + '</td>' +
+      '<td class="col-hold col-secondary" style="text-align:center;white-space:nowrap">' + calcHoldDuration(t) + '</td>' +
+      '<td class="col-status" style="text-align:center">' + statusSelect + '</td>' +
+      '<td class="col-plan col-secondary" style="text-align:center">' + planSelect + '</td>' +
+      '<td class="col-note col-secondary"><textarea class="in-note" rows="2" placeholder="备注" onchange="updateTrade(' + sqesc(t.id) + ',\'note\',this.value)">' + esc(t.note || '') + '</textarea></td>' +
+      '<td class="col-actions" style="text-align:center;white-space:nowrap">' +
+        '<button class="btn btn-sm btn-ghost" onclick="openTradeDetail(' + sqesc(t.id) + ')" title="查看 / 编辑详情" aria-label="详情">🔍</button>' +
+        '<button class="btn btn-danger btn-sm" onclick="openDeleteConfirm(' + sqesc(t.id) + ', ' + sqesc(t.symbol || '') + ', ' + sqesc(t.dir || '') + ', ' + sqesc(t.entry || '') + ')" title="删除" aria-label="删除">🗑</button>' +
+      '</td></tr>';
   }
   tbody.innerHTML = html;
 }
@@ -560,3 +578,378 @@ function initSortButtons() {
 document.addEventListener('DOMContentLoaded', function() {
   initSortButtons();
 });
+
+// ===== 表格列显示切换 =====
+function toggleTableColumns() {
+  var table = document.getElementById('tradeTable');
+  if (!table) return;
+  var showAll = table.classList.toggle('show-all-columns');
+  var btn = document.getElementById('toggleColumnsBtn');
+  if (btn) {
+    btn.textContent = showAll ? '收敛列' : '展开全部列';
+    btn.setAttribute('aria-pressed', showAll ? 'true' : 'false');
+  }
+  // 持久化用户偏好
+  try { localStorage.setItem('trade_table_show_all', showAll ? '1' : '0'); } catch(e) {}
+}
+
+function initTableColumnsState() {
+  var table = document.getElementById('tradeTable');
+  if (!table) return;
+  var pref = null;
+  try { pref = localStorage.getItem('trade_table_show_all'); } catch(e) {}
+  if (pref === '1') {
+    table.classList.add('show-all-columns');
+    var btn = document.getElementById('toggleColumnsBtn');
+    if (btn) {
+      btn.textContent = '收敛列';
+      btn.setAttribute('aria-pressed', 'true');
+    }
+  }
+}
+
+// ===== 交易详情弹窗 =====
+function openTradeDetail(id) {
+  var t = null;
+  var idStr = String(id);
+  for (var i = 0; i < trades.length; i++) {
+    if (String(trades[i].id) === idStr) { t = trades[i]; break; }
+  }
+  if (!t) return;
+
+  var html = '';
+  function row(label, val, color) {
+    var c = color ? ' style="color:' + color + '"' : '';
+    html += '<div class="trade-detail-row"><span class="trade-detail-label">' + esc(label) + '</span><span class="trade-detail-val"' + c + '>' + (val === undefined || val === '' || val === null ? '—' : val) + '</span></div>';
+  }
+  function num(v, decimals) {
+    if (v === '' || v === undefined || v === null || isNaN(parseFloat(v))) return '—';
+    return decimals !== undefined ? parseFloat(v).toFixed(decimals) : v;
+  }
+
+  row('品种', t.symbol || '—');
+  row('买点类型', t.buyType || '—', 'var(--color-purple)');
+  row('方向', t.dir, t.dir === '多' ? 'var(--color-red)' : 'var(--color-green)');
+  row('开仓日期', t.date || '—');
+  row('出场日期', t.exitDate || '—');
+  row('持仓天数', calcHoldDuration(t));
+  row('入场价', num(t.entry, 4));
+  row('止损价', num(t.stop, 4), 'var(--color-green)');
+  row('平保价', num(t.breakEvenPrice, 4), 'var(--color-purple)');
+  row('止盈目标', t.target ? parseFloat(t.target).toFixed(4) + (t.rrTarget ? ' (' + t.rrTarget + 'R)' : '') : '—', 'var(--color-red)');
+  row('止盈距离', calcTpDist(t), 'var(--color-red)');
+  row('出场价', num(t.exit, 4));
+  row('出场距离', calcExitDist(t));
+  row('卖点类型', t.exitType || '—');
+  row('仓位金额', t.posSize ? '￥' + parseFloat(t.posSize).toLocaleString() : '—', 'var(--color-blue)');
+  row('实际买入股数', t.actualLots ? t.actualLots + ' 股' : '—');
+  row('风险 R 金额', (function() {
+    var ar = calcActualRisk(t);
+    return ar > 0 ? '￥' + ar.toFixed(2) : (t.riskAmount ? '￥' + parseFloat(t.riskAmount).toFixed(2) : '—');
+  })(), 'var(--color-purple)');
+  row('开仓手续费', t.openFee ? '￥' + parseFloat(t.openFee).toFixed(2) : '—');
+  row('盈亏金额', t.pnl !== '' && !isNaN(t.pnl) ? CNY(parseFloat(t.pnl)) : '—', parseFloat(t.pnl) >= 0 ? 'var(--color-red)' : 'var(--color-green)');
+  row('盈亏 R', t.pnlR !== '' && !isNaN(t.pnlR) ? fmtR(parseFloat(t.pnlR)) : '—', parseFloat(t.pnlR) >= 0 ? 'var(--color-red)' : 'var(--color-green)');
+  row('状态', { 'open': '持仓中', 'win': '盈利', 'loss': '亏损', 'be': '保本' }[t.status] || '—');
+  row('是否按计划执行', t.followedPlan || '—');
+  if (t.note) row('备注', esc(t.note));
+
+  var body = document.getElementById('tradeDetailBody');
+  if (body) body.innerHTML = html;
+
+  var titleEl = document.getElementById('tradeDetailTitle');
+  if (titleEl) titleEl.textContent = '🔍 交易详情' + (t.symbol ? ' - ' + t.symbol : '');
+
+  // 保存当前详情对应的 trade id
+  var modal = document.getElementById('tradeDetailModal');
+  if (modal) {
+    modal.dataset.tradeId = idStr;
+    modal.style.display = 'flex';
+    // 绑定编辑按钮事件
+    var editBtn = document.getElementById('tradeDetailEditBtn');
+    if (editBtn) {
+      editBtn.onclick = function() { openEditTradeModal(idStr); };
+    }
+  }
+}
+
+function closeTradeDetailModal() {
+  var modal = document.getElementById('tradeDetailModal');
+  if (modal) modal.style.display = 'none';
+}
+
+// ===== 交易编辑弹窗（新增 / 编辑） =====
+function openAddTradeModal() {
+  // 重置所有字段
+  var fields = ['te_id', 'te_symbol', 'te_dir', 'te_buyType', 'te_entry', 'te_stop',
+    'te_breakEvenPrice', 'te_target', 'te_rrTarget', 'te_posSize', 'te_actualLots',
+    'te_riskAmount', 'te_openFee', 'te_date', 'te_exit', 'te_exitDate', 'te_exitType',
+    'te_pnl', 'te_pnlR', 'te_status', 'te_followedPlan', 'te_note'];
+  fields.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (el.tagName === 'SELECT') {
+      el.value = (id === 'te_dir' ? '多' : id === 'te_status' ? 'open' : id === 'te_followedPlan' ? '是' : id === 'te_exitType' ? '' : '');
+    } else if (el.type === 'date') {
+      el.value = getToday();
+    } else {
+      el.value = '';
+    }
+  });
+  // 默认目标 R 倍数
+  var rrEl = document.getElementById('te_rrTarget');
+  if (rrEl) rrEl.value = '3';
+  var actualLotsEl = document.getElementById('te_actualLots');
+  if (actualLotsEl) actualLotsEl.value = '200';
+
+  var titleEl = document.getElementById('tradeEditTitle');
+  if (titleEl) titleEl.textContent = '＋ 新增交易';
+  var delBtn = document.getElementById('te_deleteBtn');
+  if (delBtn) delBtn.style.display = 'none';
+
+  var modal = document.getElementById('tradeEditModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function openEditTradeModal(id) {
+  var t = null;
+  var idStr = String(id);
+  for (var i = 0; i < trades.length; i++) {
+    if (String(trades[i].id) === idStr) { t = trades[i]; break; }
+  }
+  if (!t) return;
+
+  // 关闭详情弹窗（如果有）
+  closeTradeDetailModal();
+
+  function setVal(id, val) {
+    var el = document.getElementById(id);
+    if (el) el.value = (val === undefined || val === null) ? '' : val;
+  }
+  setVal('te_id', t.id);
+  setVal('te_symbol', t.symbol || '');
+  setVal('te_dir', t.dir || '多');
+  setVal('te_buyType', t.buyType || '');
+  setVal('te_entry', t.entry !== '' ? t.entry : '');
+  setVal('te_stop', t.stop !== '' ? t.stop : '');
+  setVal('te_breakEvenPrice', t.breakEvenPrice !== '' ? t.breakEvenPrice : '');
+  setVal('te_target', t.target !== '' ? t.target : '');
+  setVal('te_rrTarget', t.rrTarget !== '' && t.rrTarget !== undefined ? t.rrTarget : 3);
+  setVal('te_posSize', t.posSize !== '' ? t.posSize : '');
+  setVal('te_actualLots', t.actualLots !== '' && t.actualLots !== undefined ? t.actualLots : '');
+  setVal('te_riskAmount', t.riskAmount !== '' ? t.riskAmount : '');
+  setVal('te_openFee', t.openFee !== '' ? t.openFee : '');
+  setVal('te_date', t.date || getToday());
+  setVal('te_exit', t.exit !== '' ? t.exit : '');
+  setVal('te_exitDate', t.exitDate || t.date || getToday());
+  setVal('te_exitType', t.exitType || '');
+  setVal('te_pnl', t.pnl !== '' ? t.pnl : '');
+  setVal('te_pnlR', t.pnlR !== '' ? t.pnlR : '');
+  setVal('te_status', t.status || 'open');
+  setVal('te_followedPlan', t.followedPlan || '是');
+  setVal('te_note', t.note || '');
+
+  var titleEl = document.getElementById('tradeEditTitle');
+  if (titleEl) titleEl.textContent = '✏️ 编辑交易' + (t.symbol ? ' - ' + t.symbol : '');
+  var delBtn = document.getElementById('te_deleteBtn');
+  if (delBtn) delBtn.style.display = 'inline-block';
+
+  // 绑定出场价联动逻辑：清空出场价时同步清空盈亏相关字段
+  bindExitPriceLiveClear();
+
+  var modal = document.getElementById('tradeEditModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+// 当用户清空出场价时，实时清空盈亏金额、盈亏R、出场日期、出场类型
+// 因为出场价空了意味着这笔交易未平仓，盈亏相关字段不应再有值
+function bindExitPriceLiveClear() {
+  var exitEl = document.getElementById('te_exit');
+  if (!exitEl) return;
+  // 移除旧监听器（避免重复绑定）
+  if (exitEl._liveClearHandler) {
+    exitEl.removeEventListener('input', exitEl._liveClearHandler);
+  }
+  var handler = function() {
+    var val = exitEl.value.trim();
+    if (val === '') {
+      var fieldsToClear = ['te_pnl', 'te_pnlR', 'te_exitDate', 'te_exitType'];
+      fieldsToClear.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      var statusEl = document.getElementById('te_status');
+      if (statusEl) statusEl.value = 'open';
+    }
+  };
+  exitEl._liveClearHandler = handler;
+  exitEl.addEventListener('input', handler);
+}
+
+function closeTradeEditModal() {
+  var modal = document.getElementById('tradeEditModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function saveTradeFromModal() {
+  function getVal(id) {
+    var el = document.getElementById(id);
+    if (!el) return '';
+    var v = el.value;
+    return v === null ? '' : v;
+  }
+  function num(id) {
+    var v = getVal(id);
+    if (v === '' || v === undefined || v === null) return '';
+    var n = parseFloat(v);
+    return isNaN(n) ? '' : n;
+  }
+
+  var id = getVal('te_id');
+  var symbol = getVal('te_symbol').trim();
+  var entry = num('te_entry');
+  var stop = num('te_stop');
+
+  if (!symbol && !entry) {
+    alert('请至少填写品种或入场价');
+    return;
+  }
+
+  var tradeData = {
+    symbol: symbol,
+    dir: getVal('te_dir') || '多',
+    buyType: getVal('te_buyType').trim(),
+    entry: entry,
+    stop: stop,
+    breakEvenPrice: num('te_breakEvenPrice'),
+    target: num('te_target'),
+    rrTarget: num('te_rrTarget') !== '' ? num('te_rrTarget') : 0,
+    posSize: num('te_posSize'),
+    actualLots: num('te_actualLots') !== '' ? parseInt(getVal('te_actualLots')) : '',
+    riskAmount: num('te_riskAmount'),
+    openFee: num('te_openFee'),
+    date: getVal('te_date') || getToday(),
+    exit: num('te_exit'),
+    exitDate: getVal('te_exitDate') || getVal('te_date') || getToday(),
+    exitType: getVal('te_exitType'),
+    pnl: num('te_pnl'),
+    pnlR: num('te_pnlR'),
+    status: getVal('te_status') || 'open',
+    followedPlan: getVal('te_followedPlan') || '是',
+    note: getVal('te_note').trim()
+  };
+
+  // 如果出场价被清空，意味着交易回退到未平仓状态
+  // 此时盈亏金额、pnlR、出场日期、出场类型应一并清空，状态改回 open
+  if (tradeData.exit === '') {
+    tradeData.pnl = '';
+    tradeData.pnlR = '';
+    tradeData.exitDate = '';
+    tradeData.exitType = '';
+    tradeData.status = 'open';
+  }
+
+  // 自动计算盈亏（如果入场价、出场价、仓位金额齐全且用户未填盈亏）
+  if (tradeData.entry !== '' && tradeData.exit !== '' && tradeData.posSize !== '' && tradeData.pnl === '') {
+    var e = parseFloat(tradeData.entry), ex = parseFloat(tradeData.exit), pos = parseFloat(tradeData.posSize);
+    if (e && ex && pos && e !== 0) {
+      var pct = tradeData.dir === '多' ? (ex - e) / e : (e - ex) / e;
+      var grossPnl = pos * pct;
+      var feeRate = getFeeRate() / 100;
+      var lots = parseFloat(tradeData.actualLots) || 0;
+      var openFee = pos * feeRate;
+      var exitFee = lots > 0 ? (ex * lots * feeRate) : (pos * feeRate);
+      tradeData.pnl = Math.round((grossPnl - openFee - exitFee) * 100) / 100;
+    }
+  }
+  // 自动计算 pnlR（如果风险金额存在且 pnl 已知）
+  if (tradeData.pnl !== '' && tradeData.riskAmount !== '' && parseFloat(tradeData.riskAmount) !== 0 && tradeData.pnlR === '') {
+    tradeData.pnlR = Math.round(parseFloat(tradeData.pnl) / parseFloat(tradeData.riskAmount) * 100) / 100;
+  }
+
+  if (id) {
+    // 编辑模式：更新现有 trade
+    var idStr = String(id);
+    for (var i = 0; i < trades.length; i++) {
+      if (String(trades[i].id) === idStr) {
+        Object.keys(tradeData).forEach(function(k) { trades[i][k] = tradeData[k]; });
+        // 编辑后记录 closeTime 如果状态从 open 变为非 open
+        if (trades[i].status !== 'open' && !trades[i].closeTime) {
+          trades[i].closeTime = new Date().toISOString();
+        }
+        markTradeDirty(idStr);
+        break;
+      }
+    }
+  } else {
+    // 新增模式
+    tradeData.id = generateUUID();
+    tradeData.openTime = new Date().toISOString();
+    trades.push(tradeData);
+    markTradeDirty(tradeData.id);
+  }
+
+  updateAll();
+
+  if (typeof triggerAutoSave === 'function') {
+    triggerAutoSave();
+  }
+
+  // 显示保存成功提示
+  var el = document.getElementById('syncStatus');
+  if (el) {
+    el.textContent = '✓ 已保存交易：' + (tradeData.symbol || '未命名');
+    el.style.color = '#00e676';
+    setTimeout(function() { el.textContent = ''; }, 3000);
+  }
+
+  closeTradeEditModal();
+}
+
+function deleteTradeFromEditModal() {
+  var id = document.getElementById('te_id').value;
+  if (!id) return;
+  if (!confirm('确认删除此交易记录？此操作不可撤销。')) return;
+
+  var idStr = String(id);
+  // 先关闭编辑弹窗
+  closeTradeEditModal();
+
+  // 找到对应 trade 取信息用于删除确认
+  var t = trades.find(function(x) { return String(x.id) === idStr; });
+  var symbol = t ? (t.symbol || '') : '';
+  var dir = t ? (t.dir || '') : '';
+  var entry = t ? (t.entry || '') : '';
+
+  // 复用现有删除流程
+  pendingDeleteTradeId = id;
+  // 直接执行删除（用户已确认）
+  trades = trades.filter(function(x) { return String(x.id) !== idStr; });
+  markTradeDeleted(idStr);
+  updateAll();
+  if (typeof triggerAutoSave === 'function') {
+    triggerAutoSave();
+  }
+  if (typeof syncModule !== 'undefined' && syncModule.isLoggedIn()) {
+    syncModule.deleteTradeFromServer(idStr).catch(function(err) {
+      console.error('删除服务器记录失败:', err);
+    });
+  }
+  var el = document.getElementById('syncStatus');
+  if (el) {
+    el.textContent = '✓ 已删除交易：' + (symbol || '未命名');
+    el.style.color = '#ff5252';
+    setTimeout(function() { el.textContent = ''; }, 3000);
+  }
+}
+
+// 在详情弹窗中快速跳转到该交易的编辑（聚焦表格行）
+function focusTradeInTable(id) {
+  closeTradeDetailModal();
+  var row = document.querySelector('tr[data-trade-id="' + CSS.escape(String(id)) + '"]');
+  if (row) {
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('row-highlight');
+    setTimeout(function() { row.classList.remove('row-highlight'); }, 2000);
+  }
+}

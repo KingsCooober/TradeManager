@@ -99,6 +99,39 @@
   font-size: 15px;
 }
 
+/* 自动保存提示：默认隐藏，触发 .show 时显示 */
+.dr-autosave-hint {
+  font-size: 12px;
+  color: var(--color-green);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.dr-autosave-hint.show {
+  opacity: 1;
+}
+
+/* 今日交易卡片中的「跳转编辑」链接 */
+.dr-trade-edit-link {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--color-blue);
+  text-decoration: none;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-input);
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.dr-trade-edit-link:hover {
+  background: var(--color-blue);
+  color: #fff;
+  border-color: var(--color-blue);
+}
+
 .dr-main {
   padding: 20px;
   max-width: 1400px;

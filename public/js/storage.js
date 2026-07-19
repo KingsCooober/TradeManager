@@ -277,6 +277,33 @@ function addWithdrawal(amount, date) {
   }
 }
 
+// 删除入金记录
+function deleteDeposit(id) {
+  // 先从内存数组移除
+  var idx = deposits.findIndex(function(d) { return String(d.id) === String(id); });
+  if (idx === -1) return Promise.resolve(false);
+  deposits.splice(idx, 1);
+  if (dbInitialized && db) {
+    return deleteDepositFromDB(id).then(function() { return true; });
+  } else {
+    saveFunds();
+    return Promise.resolve(true);
+  }
+}
+
+// 删除出金记录
+function deleteWithdrawal(id) {
+  var idx = withdrawals.findIndex(function(d) { return String(d.id) === String(id); });
+  if (idx === -1) return Promise.resolve(false);
+  withdrawals.splice(idx, 1);
+  if (dbInitialized && db) {
+    return deleteWithdrawalFromDB(id).then(function() { return true; });
+  } else {
+    saveFunds();
+    return Promise.resolve(true);
+  }
+}
+
 // 获取累计入金
 function getTotalDeposit() {
   return deposits.reduce(function(s, v) { return s + v.amount; }, 0);

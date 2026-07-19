@@ -416,12 +416,40 @@ function calcPosition() {
 }
 
 function addTradeFromCalc() {
+  // 兼容旧调用：直接执行（无确认弹窗）
+  executeAddTradeFromCalc(true);
+}
+
+// 加载并渲染计算器中的"交易纪律提醒"区域
+function loadCalcDisciplineReminder() {
+  var list = document.getElementById('disciplineReminderList');
+  if (!list) return;
+  var rules = [];
+  try {
+    var stored = localStorage.getItem('daily_discipline_rules');
+    if (stored) rules = JSON.parse(stored) || [];
+  } catch(e) { rules = []; }
+  if (!Array.isArray(rules) || rules.length === 0) {
+    list.innerHTML = '<div class="discipline-reminder-empty">尚未设置交易纪律，建议前往「每日复盘」页面添加</div>';
+    return;
+  }
+  var html = '';
+  rules.forEach(function(r) {
+    html += '<li>' + esc(r) + '</li>';
+  });
+  list.innerHTML = html;
+}
+
+// 待添加交易对象的临时缓存
+var pendingTrade = null;
+
+function confirmAddTradeFromCalc() {
   function g(id) { return document.getElementById(id); }
-  
+
   var calcEntryEl = g('calcEntry');
   var calcStopEl = g('calcStop');
   if (!calcEntryEl || !calcStopEl) return;
-  
+
   var entry = parseFloat(calcEntryEl.value);
   var stop = parseFloat(calcStopEl.value);
   if (!entry || !stop) {
@@ -439,27 +467,18 @@ function addTradeFromCalc() {
   var targetR = calcTargetREl ? (parseFloat(calcTargetREl.value) || 3) : 3;
   var calcActualLotsEl = g('calcActualLots');
   var actualLotsRaw = calcActualLotsEl ? calcActualLotsEl.value : '';
-  var sugPos = rAmt / (stopPct);
-  var recoLots = Math.round(sugPos / entry * 10) / 10;
   var actualLots = actualLotsRaw !== '' ? parseInt(actualLotsRaw) : 200;
   var tp = dir === '多' ? entry + stopDist * targetR : entry - stopDist * targetR;
   var actualPos = Math.round(actualLots * entry * 100) / 100;
-  
-  // 计算平保价格：价格上涨1.5R时的价格
   var breakeven = dir === '多' ? entry + stopDist * 1.5 : entry - stopDist * 1.5;
-  
-  // 获取用户选择的开仓日期，默认为当天
   var calcOpenDateEl = g('calcOpenDate');
   var openDate = calcOpenDateEl && calcOpenDateEl.value ? calcOpenDateEl.value : getToday();
-  
-  // 计算开仓手续费
   var feeRate = getFeeRate() / 100;
   var openFee = actualPos * feeRate;
-
   var calcSymbolEl = g('calcSymbol');
   var calcBuyTypeEl = g('calcBuyType');
 
-  trades.push({
+  pendingTrade = {
     id: generateUUID(),
     date: openDate,
     exitDate: openDate,
@@ -483,18 +502,161 @@ function addTradeFromCalc() {
     status: 'open',
     followedPlan: '是',
     note: ''
-  });
-  
-  // 标记为待同步
-  markTradeDirty(trades[trades.length - 1].id);
+  };
+
+  // 渲染确认弹窗
+  renderTradeConfirmModal(pendingTrade);
+  document.getElementById('tradeConfirmModal').style.display = 'flex';
+  var agreeCheckbox = document.getElementById('tradeConfirmAgree');
+  if (agreeCheckbox) agreeCheckbox.checked = false;
+}
+
+function renderTradeConfirmModal(trade) {
+  // 摘要
+  var summaryEl = document.getElementById('tradeConfirmSummary');
+  if (summaryEl) {
+    var html = '';
+    html += '<div class="trade-confirm-summary-row"><span class="trade-confirm-summary-label">品种</span><span class="trade-confirm-summary-val">' + esc(trade.symbol || '—') + '</span></div>';
+    html += '<div class="trade-confirm-summary-row"><span class="trade-confirm-summary-label">方向 / 买点</span><span class="trade-confirm-summary-val">' + esc(trade.dir) + ' / ' + esc(trade.buyType || '—') + '</span></div>';
+    html += '<div class="trade-confirm-summary-row"><span class="trade-confirm-summary-label">入场价 / 止损价</span><span class="trade-confirm-summary-val">' + trade.entry + ' / ' + trade.stop + '</span></div>';
+    html += '<div class="trade-confirm-summary-row"><span class="trade-confirm-summary-label">止盈目标 / 平保价</span><span class="trade-confirm-summary-val">' + trade.target + ' / ' + trade.breakEvenPrice + '</span></div>';
+    html += '<div class="trade-confirm-summary-row"><span class="trade-confirm-summary-label">实际买入股数 / 金额</span><span class="trade-confirm-summary-val">' + trade.actualLots + ' 股 / ￥' + trade.posSize + '</span></div>';
+    html += '<div class="trade-confirm-summary-row"><span class="trade-confirm-summary-label">单笔 R / 开仓手续费</span><span class="trade-confirm-summary-val">￥' + trade.riskAmount + ' / ￥' + trade.openFee + '</span></div>';
+    html += '<div class="trade-confirm-summary-row"><span class="trade-confirm-summary-label">开仓日期</span><span class="trade-confirm-summary-val">' + esc(trade.date) + '</span></div>';
+    summaryEl.innerHTML = html;
+  }
+
+  // 纪律列表
+  var listEl = document.getElementById('tradeConfirmDisciplineList');
+  if (listEl) {
+    var rules = [];
+    try {
+      var stored = localStorage.getItem('daily_discipline_rules');
+      if (stored) rules = JSON.parse(stored) || [];
+    } catch(e) { rules = []; }
+    if (!Array.isArray(rules) || rules.length === 0) {
+      listEl.innerHTML = '<div class="trade-confirm-discipline-empty">尚未设置交易纪律（建议前往「每日复盘」页面添加）</div>';
+    } else {
+      var html = '';
+      rules.forEach(function(r, i) {
+        html += '<div class="trade-confirm-discipline-item"><span class="num">' + (i + 1) + '</span><span>' + esc(r) + '</span></div>';
+      });
+      listEl.innerHTML = html;
+    }
+  }
+}
+
+function closeTradeConfirmModal() {
+  var modal = document.getElementById('tradeConfirmModal');
+  if (modal) modal.style.display = 'none';
+  pendingTrade = null;
+}
+
+function executeAddTradeFromCalc(skipConfirm) {
+  // 跳过确认弹窗（兼容旧调用）
+  if (!skipConfirm) {
+    var agreeCheckbox = document.getElementById('tradeConfirmAgree');
+    if (agreeCheckbox && !agreeCheckbox.checked) {
+      alert('请先勾选「我已确认本次开仓符合上述交易纪律」');
+      return;
+    }
+  }
+
+  // 如果没有 pendingTrade，则直接构造一笔
+  if (!pendingTrade) {
+    if (skipConfirm) {
+      // 旧的直接添加路径：构造一个 trade
+      pendingTrade = buildTradeFromCalc();
+      if (!pendingTrade) return;
+    } else {
+      return;
+    }
+  }
+
+  trades.push(pendingTrade);
+  markTradeDirty(pendingTrade.id);
 
   updateAll();
   clearCalc();
-  
-  // 自动保存到数据库（带防抖）
+
   if (typeof triggerAutoSave === 'function') {
     triggerAutoSave();
   }
+
+  // 关闭弹窗
+  if (!skipConfirm) {
+    closeTradeConfirmModal();
+    // 显示成功提示
+    var el = document.getElementById('syncStatus');
+    if (el) {
+      el.textContent = '✓ 已添加交易：' + (pendingTrade.symbol || '未命名');
+      el.style.color = '#00e676';
+      setTimeout(function() { el.textContent = ''; }, 3000);
+    }
+  }
+
+  pendingTrade = null;
+}
+
+// 从计算器输入构造一笔交易（用于兼容旧调用路径）
+function buildTradeFromCalc() {
+  function g(id) { return document.getElementById(id); }
+  var calcEntryEl = g('calcEntry');
+  var calcStopEl = g('calcStop');
+  if (!calcEntryEl || !calcStopEl) return null;
+  var entry = parseFloat(calcEntryEl.value);
+  var stop = parseFloat(calcStopEl.value);
+  if (!entry || !stop) {
+    alert('请填写入场价和止损价');
+    return null;
+  }
+  var cap = getCurrentCapital(),
+      rPct = getRiskPct();
+  var rAmt = cap * rPct / 100,
+      stopDist = Math.abs(entry - stop),
+      stopPct = stopDist / entry;
+  var calcDirEl = g('calcDir');
+  var dir = calcDirEl ? calcDirEl.value : '多';
+  var calcTargetREl = g('calcTargetR');
+  var targetR = calcTargetREl ? (parseFloat(calcTargetREl.value) || 3) : 3;
+  var calcActualLotsEl = g('calcActualLots');
+  var actualLotsRaw = calcActualLotsEl ? calcActualLotsEl.value : '';
+  var actualLots = actualLotsRaw !== '' ? parseInt(actualLotsRaw) : 200;
+  var tp = dir === '多' ? entry + stopDist * targetR : entry - stopDist * targetR;
+  var actualPos = Math.round(actualLots * entry * 100) / 100;
+  var breakeven = dir === '多' ? entry + stopDist * 1.5 : entry - stopDist * 1.5;
+  var calcOpenDateEl = g('calcOpenDate');
+  var openDate = calcOpenDateEl && calcOpenDateEl.value ? calcOpenDateEl.value : getToday();
+  var feeRate = getFeeRate() / 100;
+  var openFee = actualPos * feeRate;
+  var calcSymbolEl = g('calcSymbol');
+  var calcBuyTypeEl = g('calcBuyType');
+
+  return {
+    id: generateUUID(),
+    date: openDate,
+    exitDate: openDate,
+    openTime: new Date().toISOString(),
+    symbol: calcSymbolEl ? calcSymbolEl.value || '' : '',
+    buyType: calcBuyTypeEl ? calcBuyTypeEl.value || '15分钟回踩' : '15分钟回踩',
+    dir: dir,
+    entry: entry,
+    stop: stop,
+    breakEvenPrice: Math.round(breakeven * 100) / 100,
+    target: parseFloat(tp.toFixed(4)),
+    rrTarget: targetR || 0,
+    posSize: actualPos,
+    actualLots: actualLots,
+    riskAmount: Math.round(rAmt * 100) / 100,
+    openFee: Math.round(openFee * 100) / 100,
+    exit: '',
+    exitType: '',
+    pnl: '',
+    pnlR: '',
+    status: 'open',
+    followedPlan: '是',
+    note: ''
+  };
 }
 
 function clearCalc() {

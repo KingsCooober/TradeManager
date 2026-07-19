@@ -33,6 +33,60 @@ const SYNC_CONFIG = {
 let currentUser = null;
 let syncTimer = null;
 
+// 上次同步成功的时间戳（毫秒）
+let lastSyncTime = null;
+try {
+  var storedSyncTime = localStorage.getItem('last_sync_time');
+  if (storedSyncTime) lastSyncTime = parseInt(storedSyncTime) || null;
+} catch(e) {}
+
+// 同步状态指示器状态：idle | syncing | success | error | offline
+function setSyncIndicatorState(state, message) {
+  var indicator = document.getElementById('syncIndicator');
+  if (!indicator) return;
+  indicator.classList.remove('sync-indicator-idle', 'sync-indicator-syncing', 'sync-indicator-success', 'sync-indicator-error', 'sync-indicator-offline');
+  var stateClass = 'sync-indicator-' + state;
+  indicator.classList.add(stateClass);
+  // 更新 tooltip 文字
+  indicator.setAttribute('title', message || buildSyncTooltip());
+}
+
+// 构建同步 tooltip 文字（包含上次同步时间）
+function buildSyncTooltip() {
+  if (!lastSyncTime) return '从未同步';
+  var diff = Date.now() - lastSyncTime;
+  var txt;
+  if (diff < 60 * 1000) {
+    txt = Math.max(1, Math.floor(diff / 1000)) + ' 秒前同步';
+  } else if (diff < 60 * 60 * 1000) {
+    txt = Math.floor(diff / 60000) + ' 分钟前同步';
+  } else if (diff < 24 * 60 * 60 * 1000) {
+    txt = Math.floor(diff / 3600000) + ' 小时前同步';
+  } else {
+    var d = new Date(lastSyncTime);
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    var dateStr = (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hh + ':' + mm;
+    txt = '上次同步：' + dateStr;
+  }
+  return txt;
+}
+
+// 记录同步成功时间
+function recordSyncSuccess() {
+  lastSyncTime = Date.now();
+  try { localStorage.setItem('last_sync_time', String(lastSyncTime)); } catch(e) {}
+}
+
+// 更新指示器 tooltip（用于定时刷新相对时间）
+function refreshSyncIndicatorTooltip() {
+  var indicator = document.getElementById('syncIndicator');
+  if (!indicator) return;
+  // 仅在非"同步中"状态刷新相对时间
+  if (indicator.classList.contains('sync-indicator-syncing')) return;
+  indicator.setAttribute('title', buildSyncTooltip());
+}
+
 // 已删除记录的ID列表（用于同步删除操作）
 let pendingDeletedTrades = JSON.parse(localStorage.getItem('pending_deleted_trades') || '[]');
 let pendingDeletedDeposits = JSON.parse(localStorage.getItem('pending_deleted_deposits') || '[]');
@@ -274,10 +328,13 @@ async function syncToServer() {
     localStorage.setItem('pending_deleted_withdrawals', '[]');
     
     console.log('同步到服务器成功');
+    recordSyncSuccess();
+    setSyncIndicatorState('success', buildSyncTooltip());
     showSyncStatus('已同步到服务器', 'success');
     return true;
   } catch (err) {
     console.error('同步到服务器失败:', err);
+    setSyncIndicatorState('error', '同步失败：' + err.message);
     showSyncStatus('同步失败: ' + err.message, 'error');
     return false;
   }
@@ -340,10 +397,13 @@ async function syncFromServer() {
     updateAll();
     
     console.log('从服务器同步成功');
+    recordSyncSuccess();
+    setSyncIndicatorState('success', buildSyncTooltip());
     showSyncStatus('已从服务器同步 ' + (serverData.trades?.length || 0) + ' 条交易', 'success');
     return true;
   } catch (err) {
     console.error('从服务器同步失败:', err);
+    setSyncIndicatorState('error', '同步失败：' + err.message);
     showSyncStatus('同步失败: ' + err.message, 'error');
     return false;
   }
@@ -351,13 +411,20 @@ async function syncFromServer() {
 
 async function fullSync() {
   showSyncStatus('正在同步...', 'info');
-  
+  setSyncIndicatorState('syncing', '正在同步...');
+
   // 先上传到服务器
   const uploadOk = await syncToServer();
-  if (!uploadOk) return false;
-  
+  if (!uploadOk) {
+    setSyncIndicatorState('error', '同步失败');
+    return false;
+  }
+
   // 再从服务器下载
   const downloadOk = await syncFromServer();
+  if (!downloadOk) {
+    setSyncIndicatorState('error', '同步失败');
+  }
   return downloadOk;
 }
 
@@ -465,7 +532,8 @@ async function clearServerData() {
       showSyncStatus('已清空服务器数据', 'success');
       // 清除同步状态
       lastSyncTime = null;
-      localStorage.removeItem('last_sync_time');
+      try { localStorage.removeItem('last_sync_time'); } catch(e) {}
+      setSyncIndicatorState('idle', '从未同步');
     } else {
       const err = await res.json();
       throw new Error(err.error || '清空失败');
@@ -609,5 +677,9 @@ window.syncModule = {
   saveSettingsToServer,
   showSyncStatus,
   updateSyncUI,
-  initSync
+  initSync,
+  setSyncIndicatorState,
+  buildSyncTooltip,
+  refreshSyncIndicatorTooltip,
+  getLastSyncTime: function() { return lastSyncTime; }
 };

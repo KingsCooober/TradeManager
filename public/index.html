@@ -4,12 +4,71 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Trade Manager - 交易管理</title>
-<link rel="stylesheet" href="css/main.css?v=6">
+<link rel="stylesheet" href="css/main.css?v=15">
 </head>
 <body>
 
 <!-- ===== 顶部导航栏 ===== -->
 <header class="app-header" id="appHeader"></header>
+
+<!-- ===== 页面引导提示 ===== -->
+<div class="page-intro">
+  <div class="page-intro-text">
+    <strong>📊 交易管理</strong> — 实时记录开仓 / 平仓，自动计算仓位与盈亏。
+    <span class="page-intro-hint">盘后请到「📋 每日复盘」做总结，单笔深度分析见「📖 复盘总结」。</span>
+  </div>
+  <div class="page-intro-steps">
+    <span class="page-intro-step">① 设置账户参数</span>
+    <span class="page-intro-step-arrow">→</span>
+    <span class="page-intro-step">② 计算器算仓位</span>
+    <span class="page-intro-step-arrow">→</span>
+    <span class="page-intro-step">③ 添加到交易记录</span>
+    <span class="page-intro-step-arrow">→</span>
+    <span class="page-intro-step">④ 平仓时回填盈亏</span>
+  </div>
+</div>
+
+<!-- ===== 今日仪表盘小卡片 ===== -->
+<div class="today-dashboard" id="todayDashboard">
+  <div class="today-dashboard-title">📅 今日 · <span id="todayDashboardDate">-</span></div>
+  <div class="today-dashboard-cards">
+    <div class="today-metric-card today-metric-open" title="今日新建的持仓数">
+      <div class="today-metric-icon">🚀</div>
+      <div class="today-metric-body">
+        <div class="today-metric-label">今日开仓</div>
+        <div class="today-metric-value" id="todayOpenedCount">0</div>
+      </div>
+    </div>
+    <div class="today-metric-card today-metric-close" title="今日平仓数">
+      <div class="today-metric-icon">🏁</div>
+      <div class="today-metric-body">
+        <div class="today-metric-label">今日平仓</div>
+        <div class="today-metric-value" id="todayClosedCount">0</div>
+      </div>
+    </div>
+    <div class="today-metric-card today-metric-pnl" title="今日平仓产生的累计盈亏">
+      <div class="today-metric-icon">💰</div>
+      <div class="today-metric-body">
+        <div class="today-metric-label">今日盈亏</div>
+        <div class="today-metric-value" id="todayPnl">0.00 ￥</div>
+      </div>
+    </div>
+    <div class="today-metric-card today-metric-winrate" title="今日平仓胜率">
+      <div class="today-metric-icon">🎯</div>
+      <div class="today-metric-body">
+        <div class="today-metric-label">今日胜率</div>
+        <div class="today-metric-value" id="todayWinRate">-</div>
+      </div>
+    </div>
+    <div class="today-metric-card today-metric-holding" title="当前持仓中的交易数">
+      <div class="today-metric-icon">📦</div>
+      <div class="today-metric-body">
+        <div class="today-metric-label">当前持仓</div>
+        <div class="today-metric-value" id="todayHoldingCount">0</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ===== 主内容区：左右分布 ===== -->
 <div class="main-layout">
@@ -25,8 +84,8 @@
       <div class="field"><label>累计盈亏</label><span class="val" id="totalPnl">0.00 ￥</span></div>
       <div class="field"><label>账户收益率</label><span class="val" id="totalReturn">0.00%</span></div>
       <div class="field-divider"></div>
-      <div class="field"><label>累计入金</label><span class="val glow-green" id="totalDeposit">0.00 ￥</span></div>
-      <div class="field"><label>累计出金</label><span class="val glow-red" id="totalWithdraw">0.00 ￥</span></div>
+      <div class="field"><label>累计入金</label><span class="val glow-red" id="totalDeposit">0.00 ￥</span></div>
+      <div class="field"><label>累计出金</label><span class="val glow-green" id="totalWithdraw">0.00 ￥</span></div>
       <div class="field"><label>手续费率 (%)</label><input type="number" id="feeRate" value="0.1" step="0.01" min="0" max="10" onchange="updateAll()"></div>
       <div class="field"><label>累计手续费</label><span class="val" id="totalFees">0.00 ￥</span></div>
       <div class="card-actions">
@@ -85,9 +144,16 @@
   <main class="right-main">
 
     <!-- 开仓仓位计算器 -->
-    <div class="card calc-card">
-      <div class="card-header"><h2>🧮 开仓仓位计算器</h2></div>
+    <div class="card calc-card" id="calcCard">
+      <div class="card-header card-header-collapsible">
+        <h2>🧮 开仓仓位计算器</h2>
+        <button type="button" class="btn btn-sm btn-ghost calc-toggle-btn" id="calcToggleBtn" onclick="toggleCalcCard()" aria-expanded="false" aria-controls="calcCardBody">
+          <span class="toggle-text-collapsed">展开 ▼</span>
+          <span class="toggle-text-expanded">收起 ▲</span>
+        </button>
+      </div>
 
+      <div class="calc-card-body" id="calcCardBody">
       <div class="calc-inputs">
         <div class="calc-field wide"><label>品种 / 标的</label><input type="text" id="calcSymbol" placeholder="BTC / A股 / 指数"></div>
         <div class="calc-field wide">
@@ -147,7 +213,7 @@
           <div class="r-label" style="color:var(--color-blue)">平保价格</div>
           <div class="r-val" style="color:var(--color-blue)" id="res_breakeven">-</div>
         </div>
-        <div class="result-box">
+        <div class="result-box result-box-highlight">
           <div class="r-label">建议仓位金额</div>
           <div class="r-val glow-yellow" id="res_posSize">-</div>
         </div>
@@ -178,10 +244,45 @@
           <label class="calc-date-label">📅 开仓日期</label>
           <input type="date" id="calcOpenDate" class="calc-date-input" onchange="updateCalcDate()">
         </div>
-        <button class="btn btn-primary" onclick="addTradeFromCalc()">＋ 添加到交易记录</button>
-        <button class="btn btn-ghost" onclick="clearCalc()">清空</button>
+        <button type="button" class="btn btn-primary" onclick="confirmAddTradeFromCalc()">＋ 添加到交易记录</button>
+        <button type="button" class="btn btn-ghost" onclick="clearCalc()">清空</button>
+      </div>
+
+      <!-- 交易纪律提醒 -->
+      <div class="discipline-reminder" id="disciplineReminder">
+        <div class="discipline-reminder-header">
+          <span class="discipline-reminder-title">📋 交易纪律提醒</span>
+          <a href="daily-review.html#discipline" class="discipline-reminder-edit" title="前往每日复盘页编辑交易纪律">编辑</a>
+        </div>
+        <ul class="discipline-reminder-list" id="disciplineReminderList"></ul>
+      </div>
       </div>
     </div>
+
+<!-- ===== 添加交易确认弹窗（含纪律勾选） ===== -->
+<div id="tradeConfirmModal" class="modal-overlay">
+  <div class="modal-content" style="max-width: 460px;">
+    <div class="modal-header">
+      <h2>🛡️ 开仓前确认</h2>
+      <button class="modal-close" onclick="closeTradeConfirmModal()" aria-label="关闭">✕</button>
+    </div>
+    <div class="trade-confirm-body">
+      <div class="trade-confirm-summary" id="tradeConfirmSummary"></div>
+      <div class="trade-confirm-discipline" id="tradeConfirmDiscipline">
+        <p class="trade-confirm-discipline-title">请确认本次交易符合以下纪律：</p>
+        <div class="trade-confirm-discipline-list" id="tradeConfirmDisciplineList"></div>
+      </div>
+      <label class="trade-confirm-check">
+        <input type="checkbox" id="tradeConfirmAgree">
+        <span>我已确认本次开仓符合上述交易纪律</span>
+      </label>
+    </div>
+    <div class="modal-buttons">
+      <button type="button" class="btn btn-ghost" onclick="closeTradeConfirmModal()">取消</button>
+      <button type="button" class="btn btn-primary" onclick="executeAddTradeFromCalc()">确认添加</button>
+    </div>
+  </div>
+</div>
 
     <!-- 交易记录 -->
     <div class="card trade-card">
@@ -200,11 +301,13 @@
           <span class="toolbar-stat">累计 R: <b id="s_totalR">-</b></span>
         </div>
         <div class="toolbar-actions">
-          <button class="btn btn-sm btn-danger" onclick="clearAll()">清空记录</button>
+          <button class="btn btn-sm btn-primary" onclick="openAddTradeModal()" title="打开新增交易弹窗，可一次录入完整交易">＋ 新增交易</button>
+          <button class="btn btn-sm btn-ghost" id="toggleColumnsBtn" onclick="toggleTableColumns()" aria-pressed="false" title="在精简列和全部列之间切换">展开全部列</button>
           <button class="btn btn-sm btn-ghost" onclick="exportCSV()">导出 CSV</button>
           <button class="btn btn-sm btn-ghost" onclick="exportData()">导出 JSON</button>
           <button class="btn btn-sm btn-ghost" onclick="document.getElementById('importFile').click()">导入 JSON</button>
           <input type="file" id="importFile" accept=".json" style="display:none" onchange="importFromFile(event)">
+          <button class="btn btn-sm btn-ghost" onclick="openSettingsModal()" title="数据管理 / 清空记录 / 危险操作">⚙️ 设置</button>
         </div>
         <div class="sort-controls">
           <span class="sort-label">排序:</span>
@@ -224,11 +327,29 @@
         <table id="tradeTable">
           <thead>
             <tr>
-              <th>#</th><th>开仓日期</th><th>品种</th><th>买点类型</th><th>方向</th>
-              <th>入场价</th><th>止损价</th><th>平保价</th><th>止盈价</th>
-              <th>止盈%</th><th>仓位金额</th><th>风险R</th>
-              <th>出场价</th>               <th>出场日期</th><th>卖点类型</th><th>盈亏%</th><th>盈亏金额</th><th>盈亏R</th>
-              <th>持仓天数</th><th>状态</th><th>是否按计划执行</th><th>备注</th><th>操作</th>
+              <th class="col-num">#</th>
+              <th class="col-date">开仓日期</th>
+              <th class="col-symbol">品种</th>
+              <th class="col-buytype col-secondary">买点类型</th>
+              <th class="col-dir">方向</th>
+              <th class="col-entry">入场价</th>
+              <th class="col-stop col-secondary">止损价</th>
+              <th class="col-breakeven col-secondary">平保价</th>
+              <th class="col-target col-secondary">止盈价</th>
+              <th class="col-tpdist col-secondary">止盈%</th>
+              <th class="col-possize col-secondary">仓位金额</th>
+              <th class="col-risk col-secondary">风险R</th>
+              <th class="col-exit">出场价</th>
+              <th class="col-exitdate col-secondary">出场日期</th>
+              <th class="col-exittype col-secondary">卖点类型</th>
+              <th class="col-exitdist col-secondary">盈亏%</th>
+              <th class="col-pnl">盈亏金额</th>
+              <th class="col-pnlr">盈亏R</th>
+              <th class="col-hold col-secondary">持仓天数</th>
+              <th class="col-status">状态</th>
+              <th class="col-plan col-secondary">是否按计划</th>
+              <th class="col-note col-secondary">备注</th>
+              <th class="col-actions">操作</th>
             </tr>
           </thead>
           <tbody id="tradeBody"></tbody>
@@ -236,13 +357,111 @@
       </div>
     </div>
 
+<!-- ===== 交易详情弹窗 ===== -->
+<div id="tradeDetailModal" class="modal-overlay">
+  <div class="modal-content" style="max-width: 520px;">
+    <div class="modal-header">
+      <h2 id="tradeDetailTitle">🔍 交易详情</h2>
+      <button class="modal-close" onclick="closeTradeDetailModal()" aria-label="关闭">✕</button>
+    </div>
+    <div id="tradeDetailBody" class="trade-detail-body"></div>
+    <div class="modal-buttons">
+      <button type="button" class="btn btn-ghost" onclick="closeTradeDetailModal()">关闭</button>
+      <button type="button" class="btn btn-primary" id="tradeDetailEditBtn">✏️ 编辑此交易</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 交易编辑弹窗（新增 / 编辑） ===== -->
+<div id="tradeEditModal" class="modal-overlay">
+  <div class="modal-content" style="max-width: 580px;">
+    <div class="modal-header">
+      <h2 id="tradeEditTitle">＋ 新增交易</h2>
+      <button class="modal-close" onclick="closeTradeEditModal()" aria-label="关闭">✕</button>
+    </div>
+    <div class="trade-edit-body">
+      <input type="hidden" id="te_id">
+
+      <fieldset class="trade-edit-section">
+        <legend>① 开仓信息</legend>
+        <div class="trade-edit-grid">
+          <label class="te-field te-wide"><span>品种 / 标的</span><input type="text" id="te_symbol" placeholder="如 BTC / 平安银行"></label>
+          <label class="te-field"><span>方向</span>
+            <select id="te_dir">
+              <option value="多">多</option>
+              <option value="空">空</option>
+            </select>
+          </label>
+          <label class="te-field te-wide"><span>买点类型</span><input type="text" id="te_buyType" placeholder="如 15分钟回踩"></label>
+          <label class="te-field"><span>入场价</span><input type="number" id="te_entry" step="any" placeholder="0.00"></label>
+          <label class="te-field"><span>止损价</span><input type="number" id="te_stop" step="any" placeholder="0.00"></label>
+          <label class="te-field"><span>平保价</span><input type="number" id="te_breakEvenPrice" step="any" placeholder="0.00"></label>
+          <label class="te-field"><span>止盈目标价</span><input type="number" id="te_target" step="any" placeholder="0.00"></label>
+          <label class="te-field"><span>目标 R 倍数</span><input type="number" id="te_rrTarget" step="0.5" placeholder="3"></label>
+          <label class="te-field"><span>仓位金额 (￥)</span><input type="number" id="te_posSize" step="any" placeholder="0"></label>
+          <label class="te-field"><span>实际买入股数</span><input type="number" id="te_actualLots" step="1" placeholder="200"></label>
+          <label class="te-field"><span>风险 R 金额 (￥)</span><input type="number" id="te_riskAmount" step="any" placeholder="0"></label>
+          <label class="te-field"><span>开仓手续费 (￥)</span><input type="number" id="te_openFee" step="any" placeholder="0"></label>
+          <label class="te-field"><span>开仓日期</span><input type="date" id="te_date"></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="trade-edit-section">
+        <legend>② 平仓信息（可选，已平仓时填写）</legend>
+        <div class="trade-edit-grid">
+          <label class="te-field"><span>出场价</span><input type="number" id="te_exit" step="any" placeholder="0.00"></label>
+          <label class="te-field"><span>出场日期</span><input type="date" id="te_exitDate"></label>
+          <label class="te-field"><span>卖点类型</span>
+            <select id="te_exitType">
+              <option value="">-</option>
+              <option value="止损">止损</option>
+              <option value="目标止盈">目标止盈</option>
+              <option value="移动止盈">移动止盈</option>
+              <option value="平保">平保</option>
+            </select>
+          </label>
+          <label class="te-field"><span>盈亏金额 (￥)</span><input type="number" id="te_pnl" step="any" placeholder="留空自动计算"></label>
+          <label class="te-field"><span>盈亏 R</span><input type="number" id="te_pnlR" step="0.01" placeholder="留空自动计算"></label>
+          <label class="te-field"><span>状态</span>
+            <select id="te_status">
+              <option value="open">持仓中</option>
+              <option value="win">盈利</option>
+              <option value="loss">亏损</option>
+              <option value="be">保本</option>
+            </select>
+          </label>
+          <label class="te-field"><span>是否按计划</span>
+            <select id="te_followedPlan">
+              <option value="是">是</option>
+              <option value="否">否</option>
+            </select>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="trade-edit-section">
+        <legend>③ 备注</legend>
+        <textarea id="te_note" rows="3" placeholder="交易心得 / 复盘要点..."></textarea>
+      </fieldset>
+    </div>
+    <div class="modal-buttons">
+      <button type="button" class="btn btn-ghost" onclick="closeTradeEditModal()">取消</button>
+      <button type="button" class="btn btn-danger" id="te_deleteBtn" style="display:none;" onclick="deleteTradeFromEditModal()">删除</button>
+      <button type="button" class="btn btn-primary" onclick="saveTradeFromModal()">💾 保存</button>
+    </div>
+  </div>
+</div>
+
   </main>
 </div>
 
 <!-- ===== 入金弹窗 ===== -->
 <div id="depositModal" class="modal-overlay">
-  <div class="modal-content">
-    <h3 style="color:var(--color-green)">入金记录</h3>
+  <div class="modal-content funds-modal-content">
+    <div class="funds-modal-header">
+      <h3 style="color:var(--color-red)">💰 入金记录</h3>
+      <button class="modal-close-btn" onclick="closeDepositModal()" aria-label="关闭">✕</button>
+    </div>
     <div class="modal-field">
       <label>金额（元）</label>
       <input type="number" id="depositAmount" placeholder="请输入金额">
@@ -252,16 +471,26 @@
       <input type="date" id="depositDate" class="modal-date-input">
     </div>
     <div class="modal-buttons">
-      <button class="btn btn-success" style="flex:1" onclick="confirmDeposit()">确认</button>
-      <button class="btn btn-gray" style="flex:1" onclick="closeDepositModal()">取消</button>
+      <button class="btn btn-danger" style="flex:1" onclick="confirmDeposit()">＋ 添加</button>
+      <button class="btn btn-gray" style="flex:1" onclick="closeDepositModal()">关闭</button>
+    </div>
+    <div class="funds-history-section">
+      <div class="funds-history-header">
+        <span class="funds-history-title">📜 历史记录</span>
+        <span class="funds-history-stats" id="depositHistoryStats">共 0 笔</span>
+      </div>
+      <div class="funds-history-list" id="depositHistoryList"></div>
     </div>
   </div>
 </div>
 
 <!-- ===== 出金弹窗 ===== -->
 <div id="withdrawModal" class="modal-overlay">
-  <div class="modal-content">
-    <h3 style="color:var(--color-blue)">出金记录</h3>
+  <div class="modal-content funds-modal-content">
+    <div class="funds-modal-header">
+      <h3 style="color:var(--color-green)">💸 出金记录</h3>
+      <button class="modal-close-btn" onclick="closeWithdrawModal()" aria-label="关闭">✕</button>
+    </div>
     <div class="modal-field">
       <label>金额（元）</label>
       <input type="number" id="withdrawAmount" placeholder="请输入金额">
@@ -271,8 +500,95 @@
       <input type="date" id="withdrawDate" class="modal-date-input">
     </div>
     <div class="modal-buttons">
-      <button class="btn btn-danger" style="flex:1" onclick="confirmWithdraw()">确认</button>
-      <button class="btn btn-gray" style="flex:1" onclick="closeWithdrawModal()">取消</button>
+      <button class="btn btn-success" style="flex:1" onclick="confirmWithdraw()">－ 添加</button>
+      <button class="btn btn-gray" style="flex:1" onclick="closeWithdrawModal()">关闭</button>
+    </div>
+    <div class="funds-history-section">
+      <div class="funds-history-header">
+        <span class="funds-history-title">📜 历史记录</span>
+        <span class="funds-history-stats" id="withdrawHistoryStats">共 0 笔</span>
+      </div>
+      <div class="funds-history-list" id="withdrawHistoryList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 设置弹窗（数据管理） ===== -->
+<div id="settingsModal" class="modal-overlay">
+  <div class="modal-content settings-modal-content">
+    <div class="funds-modal-header">
+      <h3 style="color:var(--color-purple)">⚙️ 设置 / 数据管理</h3>
+      <button class="modal-close-btn" onclick="closeSettingsModal()" aria-label="关闭">✕</button>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">📊 数据统计</div>
+      <div class="settings-stats-grid">
+        <div class="settings-stat-item">
+          <span class="settings-stat-label">交易记录</span>
+          <span class="settings-stat-val" id="settingsTradeCount">0</span>
+        </div>
+        <div class="settings-stat-item">
+          <span class="settings-stat-label">入金笔数</span>
+          <span class="settings-stat-val glow-red" id="settingsDepositCount">0</span>
+        </div>
+        <div class="settings-stat-item">
+          <span class="settings-stat-label">出金笔数</span>
+          <span class="settings-stat-val glow-green" id="settingsWithdrawCount">0</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section settings-danger-section">
+      <div class="settings-section-title">⚠️ 危险操作</div>
+      <div class="settings-danger-card">
+        <div class="settings-danger-info">
+          <div class="settings-danger-name">清空所有交易记录</div>
+          <div class="settings-danger-desc">将永久删除所有交易记录（含本地数据库和服务器），入金/出金记录保留。<strong>此操作不可撤销！</strong></div>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="openClearTradesConfirm()">🗑️ 清空交易</button>
+      </div>
+      <div class="settings-danger-card">
+        <div class="settings-danger-info">
+          <div class="settings-danger-name">清空所有资金记录</div>
+          <div class="settings-danger-desc">将永久删除所有入金 / 出金记录。<strong>此操作不可撤销！</strong></div>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="openClearFundsConfirm()">🗑️ 清空资金</button>
+      </div>
+      <div class="settings-danger-card">
+        <div class="settings-danger-info">
+          <div class="settings-danger-name">清空全部数据</div>
+          <div class="settings-danger-desc">将永久删除所有交易记录 + 资金记录 + 账户参数。<strong>等同于重置应用！</strong></div>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="openClearAllConfirm()">💥 清空全部</button>
+      </div>
+    </div>
+
+    <div class="modal-buttons">
+      <button class="btn btn-gray" style="flex:1" onclick="closeSettingsModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 二次确认弹窗（清空操作通用） ===== -->
+<div id="clearConfirmModal" class="modal-overlay">
+  <div class="modal-content clear-confirm-content">
+    <div class="funds-modal-header">
+      <h3 style="color:var(--color-red)" id="clearConfirmTitle">⚠️ 二次确认</h3>
+      <button class="modal-close-btn" onclick="closeClearConfirm()" aria-label="关闭">✕</button>
+    </div>
+    <div class="clear-confirm-warning" id="clearConfirmWarning">
+      即将执行 <strong id="clearConfirmAction">清空</strong> 操作。
+      此操作 <strong style="color:var(--color-red)">不可撤销</strong>，所有数据将被永久删除。
+    </div>
+    <div class="clear-confirm-instruction">
+      如确认继续，请在下方输入框中输入 <code id="clearConfirmCode">CLEAR</code> 以验证：
+    </div>
+    <input type="text" id="clearConfirmInput" class="clear-confirm-input" placeholder="请输入验证文字" autocomplete="off">
+    <div class="clear-confirm-hint" id="clearConfirmHint"></div>
+    <div class="modal-buttons">
+      <button class="btn btn-gray" style="flex:1" onclick="closeClearConfirm()">取消</button>
+      <button class="btn btn-danger" style="flex:1" id="clearConfirmBtn" onclick="executeClearAction()" disabled>确认清空</button>
     </div>
   </div>
 </div>
@@ -458,14 +774,14 @@
 
 <!-- 模块化 JS -->
 <script src="js/utils.js?v=5"></script>
-<script src="js/header.js?v=2"></script>
+<script src="js/header.js?v=3"></script>
 <script src="js/database.js?v=4"></script>
-<script src="js/sync.js?v=5"></script>
-<script src="js/storage.js?v=5"></script>
-<script src="js/calculator.js?v=4"></script>
-<script src="js/table.js?v=7"></script>
+<script src="js/sync.js?v=6"></script>
+<script src="js/storage.js?v=6"></script>
+<script src="js/calculator.js?v=5"></script>
+<script src="js/table.js?v=12"></script>
 <script src="js/charts.js?v=4"></script>
-<script src="js/main.js?v=5"></script>
+<script src="js/main.js?v=13"></script>
 <script>
 function toggleSyncPanel() {
   var panel = document.getElementById('syncPanel');

@@ -5,12 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="description" content="每日复盘 - 交易管理工具，记录每日交易纪律、大盘走势、仓位策略、心态评分与每日总结">
 <title>每日复盘 - Trade Manager</title>
-<link rel="stylesheet" href="css/main.css?v=6">
-<link rel="stylesheet" href="css/daily-review.css?v=20260719004">
+<link rel="stylesheet" href="css/main.css?v=15">
+<link rel="stylesheet" href="css/daily-review.css?v=20260719006">
 </head>
 <body>
 
 <header class="app-header" id="appHeader"></header>
+
+<!-- ===== 页面引导提示 ===== -->
+<div class="page-intro">
+  <div class="page-intro-text">
+    <strong>📋 每日复盘</strong> — 每日盘后总结：纪律自检 / 大盘走势 / 心态评分 / 复盘笔记。
+    <span class="page-intro-hint">自动保存，可 Ctrl+S 手动保存；今日交易由「📊 交易管理」自动同步。</span>
+  </div>
+  <div class="page-intro-steps">
+    <span class="page-intro-step">① 检查交易纪律</span>
+    <span class="page-intro-step-arrow">→</span>
+    <span class="page-intro-step">② 记录大盘走势</span>
+    <span class="page-intro-step-arrow">→</span>
+    <span class="page-intro-step">③ 评估心态 / 仓位</span>
+    <span class="page-intro-step-arrow">→</span>
+    <span class="page-intro-step">④ 写每日总结</span>
+  </div>
+</div>
 
 <noscript>
   <div style="padding:16px;margin:16px;background:#fef3c7;color:#92400e;border:1px solid #f59e0b;border-radius:8px;text-align:center;">
@@ -33,16 +50,16 @@
         </div>
       </div>
       <div class="dr-toolbar-right">
+        <span id="drAutoSaveHint" class="dr-autosave-hint" aria-live="polite"></span>
         <button type="button" class="btn btn-sm btn-ghost" onclick="exportDRData()" aria-label="导出复盘数据">📤 导出</button>
         <button type="button" class="btn btn-sm btn-ghost" onclick="document.getElementById('importDRFile').click()" aria-label="导入复盘数据">📥 导入</button>
         <input type="file" id="importDRFile" accept=".json,application/json" style="display:none" onchange="importDRData(event)">
         <button type="button" class="btn btn-sm btn-ghost-danger" onclick="deleteDRReview()" aria-label="删除当前复盘">🗑 删除</button>
-        <button type="button" class="btn btn-sm btn-primary" onclick="saveDRReview()" aria-label="保存当前复盘">💾 保存复盘</button>
       </div>
     </div>
 
     <!-- 交易纪律（全局） -->
-    <section class="dr-section">
+    <section class="dr-section" id="discipline">
       <div class="dr-section-header">
         <h3>⚖️ 交易纪律</h3>
       </div>
@@ -382,10 +399,10 @@
 </div>
 
 <script src="js/utils.js?v=5"></script>
-<script src="js/header.js?v=2"></script>
+<script src="js/header.js?v=3"></script>
 <script src="js/database.js?v=4"></script>
-<script src="js/sync.js?v=5"></script>
-<script src="js/daily-review.js?v=20260719009"></script>
+<script src="js/sync.js?v=6"></script>
+<script src="js/daily-review.js?v=20260720001"></script>
 <script>
 renderAppHeader('daily');
 </script>

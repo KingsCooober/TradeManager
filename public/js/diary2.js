@@ -10,8 +10,168 @@ let diary2IsLoggedIn = false;
 function initDiary2() {
   loadDiaryData();
   setupEventListeners();
+  // 自动从交易记录同步（与 index 数据联动）
+  syncFromTrades();
   applyFilters();
   checkLoginStatus();
+  // 注册全局搜索（diary2 页：搜索复盘记录）
+  setupDiary2GlobalSearch();
+}
+
+function setupDiary2GlobalSearch() {
+  window.performGlobalSearch = function(q) {
+    if (!Array.isArray(diary2Data)) return [];
+    var ql = q.toLowerCase();
+    var results = [];
+    for (var i = 0; i < diary2Data.length; i++) {
+      var d = diary2Data[i];
+      var fields = [d.tradeDate, d.symbol, d.dir, d.tradeLogic, d.mood, d.lesson, d.improvement, d.followSystem]
+        .filter(function(v) { return v !== null && v !== undefined; }).join(' ');
+      if (fields.toLowerCase().indexOf(ql) !== -1) {
+        var pnlStr = d.pnlPercent !== undefined ? (parseFloat(d.pnlPercent) >= 0 ? '+' : '') + d.pnlPercent + '%' : '-';
+        results.push({
+          label: (d.tradeDate || '') + ' · ' + (d.symbol || '') + ' · ' + pnlStr,
+          sublabel: d.tradeLogic ? '逻辑：' + d.tradeLogic.slice(0, 50) : (d.lesson ? '教训：' + d.lesson.slice(0, 50) : '未填写'),
+          onClick: (function(recId) {
+            return function() {
+              if (typeof viewDiary === 'function') viewDiary(recId);
+            };
+          })(d.id)
+        });
+      }
+    }
+    return results;
+  };
+}
+
+// 从 index 的交易记录（localStorage trades_v4）同步到 diary2
+// 仅对 diary2 中尚不存在的 (tradeDate, symbol) 组合创建复盘条目
+// 已有的复盘记录（包含 tradeLogic/mood/lesson 等用户填写的内容）不会被覆盖
+function syncFromTrades() {
+  var tradesRaw = null;
+  try { tradesRaw = localStorage.getItem('trades_v4'); } catch(e) { return 0; }
+  if (!tradesRaw) return 0;
+  var tradesData = [];
+  try { tradesData = JSON.parse(tradesRaw) || []; } catch(e) { return 0; }
+  if (!Array.isArray(tradesData) || tradesData.length === 0) return 0;
+
+  // 加载现有的 trades 同步状态
+  var lastSyncedIds = {};
+  try {
+    var stored = localStorage.getItem('diary2_synced_trade_ids');
+    if (stored) lastSyncedIds = JSON.parse(stored) || {};
+  } catch(e) {}
+
+  var addedCount = 0;
+  tradesData.forEach(function(t) {
+    if (!t.id || !t.date || !t.symbol) return;
+    var tradeIdStr = String(t.id);
+    // 已同步过的 trade 跳过
+    if (lastSyncedIds[tradeIdStr]) return;
+    // 检查 diary2Data 中是否已有相同 tradeId 的记录
+    var existsByTradeId = diary2Data.some(function(d) {
+      return d.tradeId && String(d.tradeId) === tradeIdStr;
+    });
+    if (existsByTradeId) {
+      lastSyncedIds[tradeIdStr] = true;
+      return;
+    }
+    // 检查是否已有相同 (tradeDate, symbol) 的记录
+    var existsByDateSymbol = diary2Data.some(function(d) {
+      return d.tradeDate === t.date && d.symbol === t.symbol;
+    });
+    if (existsByDateSymbol) {
+      lastSyncedIds[tradeIdStr] = true;
+      return;
+    }
+
+    // 计算盈亏百分比（用于显示）
+    var pnlPercent = 0;
+    if (t.entry && t.exit && parseFloat(t.entry) > 0) {
+      var e = parseFloat(t.entry), ex = parseFloat(t.exit);
+      var pct = t.dir === '多' ? (ex - e) / e : (e - ex) / e;
+      pnlPercent = Math.round(pct * 10000) / 100;
+    } else if (t.posSize && t.pnl && parseFloat(t.posSize) > 0) {
+      pnlPercent = Math.round(parseFloat(t.pnl) / parseFloat(t.posSize) * 10000) / 100;
+    }
+
+    diary2Data.push({
+      id: 'trade_' + tradeIdStr,
+      tradeId: tradeIdStr,           // 关联到原 trade 的 id
+      tradeDate: t.date,
+      symbol: t.symbol,
+      dir: t.dir || '',
+      entry: t.entry || '',
+      exit: t.exit || '',
+      pnl: t.pnl !== '' ? t.pnl : 0,
+      pnlR: t.pnlR !== '' ? t.pnlR : 0,
+      pnlPercent: pnlPercent,
+      tradeLogic: '',
+      mood: '',
+      followSystem: t.followedPlan || '是',
+      lesson: '',
+      improvement: t.note || '',     // 把 trade 的备注作为改进措施的初始值
+      createdAt: t.openTime || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      _autoSynced: true
+    });
+    lastSyncedIds[tradeIdStr] = true;
+    addedCount++;
+  });
+
+  // 保存同步状态
+  try { localStorage.setItem('diary2_synced_trade_ids', JSON.stringify(lastSyncedIds)); } catch(e) {}
+
+  if (addedCount > 0) {
+    saveDiaryData();
+    showSyncStatus('已从交易记录同步 ' + addedCount + ' 条', 'success');
+  }
+  return addedCount;
+}
+
+// 手动触发从交易记录同步
+function manualSyncFromTrades() {
+  // 重置同步状态以强制重新检查
+  try { localStorage.removeItem('diary2_synced_trade_ids'); } catch(e) {}
+  // 同时清理已删除的 trade 对应的 diary 条目
+  cleanupDeletedTrades();
+  var added = syncFromTrades();
+  if (added === 0) {
+    showSyncStatus('没有新交易需要同步', 'info');
+  }
+  applyFilters();
+}
+
+// 清理已删除的 trade 对应的自动同步条目
+// 仅清理用户未填写复盘内容的条目
+function cleanupDeletedTrades() {
+  var tradesRaw = null;
+  try { tradesRaw = localStorage.getItem('trades_v4'); } catch(e) { return; }
+  if (!tradesRaw) return;
+  var tradesData = [];
+  try { tradesData = JSON.parse(tradesRaw) || []; } catch(e) { return; }
+  var currentTradeIds = {};
+  tradesData.forEach(function(t) {
+    if (t.id) currentTradeIds[String(t.id)] = true;
+  });
+
+  var before = diary2Data.length;
+  diary2Data = diary2Data.filter(function(d) {
+    // 仅自动同步且无复盘内容的条目可以清理
+    if (!d._autoSynced || !d.tradeId) return true;
+    if (currentTradeIds[String(d.tradeId)]) return true;
+    // 原 trade 已被删除，检查是否填写了复盘内容
+    if (d.tradeLogic || d.mood || d.lesson || d.improvement) {
+      // 用户已填写复盘内容，保留（移除 _autoSynced 标记，转为独立条目）
+      d._autoSynced = false;
+      d.tradeId = null;
+      return true;
+    }
+    return false;  // 未填写复盘内容，删除
+  });
+  if (diary2Data.length !== before) {
+    saveDiaryData();
+  }
 }
 
 function loadDiaryData() {
@@ -285,13 +445,19 @@ function renderTable() {
     return;
   }
   
-  tbody.innerHTML = pageData.map(item => `
+  tbody.innerHTML = pageData.map(item => {
+    var dirBadge = '';
+    if (item.dir === '多') dirBadge = '<span class="dir-badge dir-long" title="多头">多</span> ';
+    else if (item.dir === '空') dirBadge = '<span class="dir-badge dir-short" title="空头">空</span> ';
+    var syncBadge = item._autoSynced ? '<span class="sync-badge" title="自动从交易记录同步">🔗</span> ' : '';
+    var pnlVal = parseFloat(item.pnlPercent) || 0;
+    return `
     <tr>
       <td class="text-center">${item.tradeDate}</td>
-      <td class="text-center"><strong>${escapeHtml(item.symbol)}</strong></td>
+      <td class="text-center">${syncBadge}${dirBadge}<strong>${escapeHtml(item.symbol)}</strong></td>
       <td class="text-center">
-        <span class="pnl-badge ${parseFloat(item.pnlPercent) > 0 ? 'positive' : parseFloat(item.pnlPercent) < 0 ? 'negative' : 'zero'}">
-          ${item.pnlPercent > 0 ? '+' : ''}${item.pnlPercent}%
+        <span class="pnl-badge ${pnlVal > 0 ? 'positive' : pnlVal < 0 ? 'negative' : 'zero'}">
+          ${pnlVal > 0 ? '+' : ''}${item.pnlPercent}%
         </span>
       </td>
       <td class="text-left">
@@ -327,7 +493,8 @@ function renderTable() {
         </div>
       </td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
   
   updatePagination();
 }
@@ -351,7 +518,8 @@ function updatePagination() {
 }
 
 function changePageSize() {
-  diary2PageSize = parseInt(document.getElementById('diary2PageSize').value) || 20;
+  var el = document.getElementById('pageSize') || document.getElementById('diary2PageSize');
+  diary2PageSize = parseInt(el.value) || 20;
   diary2CurrentPage = 1;
   renderTable();
 }
@@ -409,11 +577,43 @@ function viewDiary(id) {
   document.getElementById('viewTitle').textContent = `📖 ${item.tradeDate} - ${item.symbol}`;
   
   const content = document.getElementById('viewDiaryContent');
+  var dirHtml = '';
+  if (item.dir) {
+    dirHtml = `
+    <div class="view-row">
+      <div class="view-label">方向</div>
+      <div class="view-value">
+        <span class="dir-badge ${item.dir === '多' ? 'dir-long' : 'dir-short'}">${escapeHtml(item.dir)}</span>
+      </div>
+    </div>`;
+  }
+  var tradeInfoHtml = '';
+  if (item.entry || item.exit) {
+    tradeInfoHtml = `
+    <div class="view-row">
+      <div class="view-label">入场价 / 出场价</div>
+      <div class="view-value">${escapeHtml(item.entry) || '-'} / ${escapeHtml(item.exit) || '-'}</div>
+    </div>`;
+  }
+  var pnlHtml = '';
+  if (item.pnl || item.pnlR) {
+    var pnlNum = parseFloat(item.pnl) || 0;
+    pnlHtml = `
+    <div class="view-row">
+      <div class="view-label">盈亏金额 / R 倍数</div>
+      <div class="view-value">
+        <span style="color:${pnlNum >= 0 ? 'var(--color-red)' : 'var(--color-green)'}">${pnlNum >= 0 ? '+' : ''}${item.pnl || 0} ￥</span>
+        ${item.pnlR ? ' / ' + escapeHtml(item.pnlR) + 'R' : ''}
+      </div>
+    </div>`;
+  }
   content.innerHTML = `
     <div class="view-row">
       <div class="view-label">代码/名称</div>
       <div class="view-value">${escapeHtml(item.symbol)}</div>
     </div>
+    ${dirHtml}
+    ${tradeInfoHtml}
     <div class="view-row">
       <div class="view-label">盈亏比例</div>
       <div class="view-value">
@@ -422,6 +622,7 @@ function viewDiary(id) {
         </span>
       </div>
     </div>
+    ${pnlHtml}
     <div class="view-row">
       <div class="view-label">买入/卖出逻辑</div>
       <div class="view-value">${escapeHtml(item.tradeLogic) || '-'}</div>

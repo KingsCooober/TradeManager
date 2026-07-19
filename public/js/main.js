@@ -120,6 +120,9 @@ function updateAll() {
       totalFees = getTotalFees(),
       rPct = getRiskPct(),
       maxR = getMaxRisk();
+
+  // 更新今日仪表盘
+  updateTodayDashboard();
   
   var availableCapital = init + td - tw;
   var totalReturn = availableCapital > 0 ? (tradePnl / availableCapital) * 100 : 0;
@@ -199,14 +202,133 @@ function initModalDatePicker() {
   }
 }
 
+// ===== 今日仪表盘 =====
+function updateTodayDashboard() {
+  var todayStr = getToday();
+  var dateEl = document.getElementById('todayDashboardDate');
+  if (dateEl) dateEl.textContent = todayStr;
+
+  var openedCount = 0;
+  var closedCount = 0;
+  var todayPnl = 0;
+  var todayWins = 0;
+  var holdingCount = 0;
+
+  if (typeof trades !== 'undefined' && Array.isArray(trades)) {
+    for (var i = 0; i < trades.length; i++) {
+      var t = trades[i];
+      // 今日开仓（按 t.date 字段判断）
+      if (t.date === todayStr) openedCount++;
+      // 今日平仓（按 t.closeTime ISO 字符串前 10 位判断）
+      if (t.closeTime && typeof t.closeTime === 'string' && t.closeTime.slice(0, 10) === todayStr) {
+        closedCount++;
+        if (t.pnl !== '' && !isNaN(parseFloat(t.pnl))) {
+          todayPnl += parseFloat(t.pnl);
+          if (parseFloat(t.pnl) > 0) todayWins++;
+        }
+      }
+      // 当前持仓
+      if (t.status === 'open') holdingCount++;
+    }
+  }
+
+  var openedEl = document.getElementById('todayOpenedCount');
+  if (openedEl) openedEl.textContent = openedCount;
+  var closedEl = document.getElementById('todayClosedCount');
+  if (closedEl) closedEl.textContent = closedCount;
+  var pnlEl = document.getElementById('todayPnl');
+  if (pnlEl) {
+    pnlEl.textContent = (todayPnl >= 0 ? '+' : '') + CNY(todayPnl);
+    pnlEl.className = 'today-metric-value ' + (todayPnl > 0 ? 'glow-red' : todayPnl < 0 ? 'glow-green' : '');
+  }
+  var winRateEl = document.getElementById('todayWinRate');
+  if (winRateEl) {
+    if (closedCount === 0) {
+      winRateEl.textContent = '-';
+    } else {
+      var rate = Math.round(todayWins / closedCount * 100);
+      winRateEl.textContent = rate + '%';
+    }
+  }
+  var holdingEl = document.getElementById('todayHoldingCount');
+  if (holdingEl) holdingEl.textContent = holdingCount;
+}
+
+// ===== 全局搜索（index 页：搜索交易记录） =====
+window.performGlobalSearch = function(q) {
+  if (typeof trades === 'undefined' || !Array.isArray(trades)) return [];
+  var ql = q.toLowerCase();
+  var results = [];
+  for (var i = 0; i < trades.length; i++) {
+    var t = trades[i];
+    var fields = [t.date, t.symbol, t.dir, t.note, t.exitType, t.status].filter(function(v) { return v !== null && v !== undefined; }).join(' ');
+    if (fields.toLowerCase().indexOf(ql) !== -1) {
+      var pnlStr = t.pnl !== '' && !isNaN(parseFloat(t.pnl)) ? (parseFloat(t.pnl) >= 0 ? '+' : '') + CNY(parseFloat(t.pnl)) : '未平仓';
+      results.push({
+        label: (t.date || '') + ' · ' + (t.symbol || '') + ' · ' + (t.dir || '') + ' · ' + pnlStr,
+        sublabel: t.note ? '备注：' + t.note : '状态：' + (t.status || '-'),
+        onClick: (function(tradeId) {
+          return function() {
+            if (typeof openTradeDetail === 'function') openTradeDetail(tradeId);
+          };
+        })(t.id)
+      });
+    }
+  }
+  return results;
+};
+
 function showDepositModal() {
   document.getElementById('depositModal').style.display = 'flex';
   document.getElementById('depositAmount').value = '';
   document.getElementById('depositDate').value = getToday();
+  renderDepositHistory();
 }
 
 function closeDepositModal() {
   document.getElementById('depositModal').style.display = 'none';
+}
+
+function renderDepositHistory() {
+  var container = document.getElementById('depositHistoryList');
+  if (!container) return;
+  if (!deposits || deposits.length === 0) {
+    container.innerHTML = '<div class="funds-history-empty">暂无入金记录</div>';
+    return;
+  }
+  // 按日期倒序展示
+  var sorted = deposits.slice().sort(function(a, b) {
+    return (b.date || '').localeCompare(a.date || '');
+  });
+  container.innerHTML = sorted.map(function(d) {
+    return '<div class="funds-history-item">' +
+      '<div class="funds-history-info">' +
+        '<span class="funds-history-date">' + escapeHtml(d.date) + '</span>' +
+        '<span class="funds-history-amount glow-red">+' + CNY(d.amount) + '</span>' +
+      '</div>' +
+      '<button class="btn btn-sm btn-ghost-danger" onclick="deleteDepositRecord(\'' + escapeHtml(String(d.id)) + '\')" title="删除">🗑️</button>' +
+    '</div>';
+  }).join('');
+  var statsEl = document.getElementById('depositHistoryStats');
+  if (statsEl) {
+    statsEl.textContent = '共 ' + deposits.length + ' 笔，累计 ' + CNY(getTotalDeposit());
+  }
+}
+
+function deleteDepositRecord(id) {
+  if (!confirm('确认删除此入金记录？')) return;
+  deleteDeposit(id).then(function(ok) {
+    if (ok) {
+      updateAll();
+      renderDepositHistory();
+      if (typeof triggerAutoSave === 'function') triggerAutoSave();
+    } else {
+      alert('未找到该记录');
+    }
+  }).catch(function(err) {
+    console.error('删除入金失败:', err);
+    alert('删除入金记录失败');
+  });
 }
 
 function confirmDeposit() {
@@ -218,8 +340,8 @@ function confirmDeposit() {
   var date = document.getElementById('depositDate').value || getToday();
   addDeposit(amt, date).then(function() {
     updateAll();
-    closeDepositModal();
-    // 自动保存到数据库（带防抖）
+    document.getElementById('depositAmount').value = '';
+    renderDepositHistory();
     if (typeof triggerAutoSave === 'function') {
       triggerAutoSave();
     }
@@ -233,10 +355,52 @@ function showWithdrawModal() {
   document.getElementById('withdrawModal').style.display = 'flex';
   document.getElementById('withdrawAmount').value = '';
   document.getElementById('withdrawDate').value = getToday();
+  renderWithdrawHistory();
 }
 
 function closeWithdrawModal() {
   document.getElementById('withdrawModal').style.display = 'none';
+}
+
+function renderWithdrawHistory() {
+  var container = document.getElementById('withdrawHistoryList');
+  if (!container) return;
+  if (!withdrawals || withdrawals.length === 0) {
+    container.innerHTML = '<div class="funds-history-empty">暂无出金记录</div>';
+    return;
+  }
+  var sorted = withdrawals.slice().sort(function(a, b) {
+    return (b.date || '').localeCompare(a.date || '');
+  });
+  container.innerHTML = sorted.map(function(d) {
+    return '<div class="funds-history-item">' +
+      '<div class="funds-history-info">' +
+        '<span class="funds-history-date">' + escapeHtml(d.date) + '</span>' +
+        '<span class="funds-history-amount glow-green">-' + CNY(d.amount) + '</span>' +
+      '</div>' +
+      '<button class="btn btn-sm btn-ghost-danger" onclick="deleteWithdrawRecord(\'' + escapeHtml(String(d.id)) + '\')" title="删除">🗑️</button>' +
+    '</div>';
+  }).join('');
+  var statsEl = document.getElementById('withdrawHistoryStats');
+  if (statsEl) {
+    statsEl.textContent = '共 ' + withdrawals.length + ' 笔，累计 ' + CNY(getTotalWithdraw());
+  }
+}
+
+function deleteWithdrawRecord(id) {
+  if (!confirm('确认删除此出金记录？')) return;
+  deleteWithdrawal(id).then(function(ok) {
+    if (ok) {
+      updateAll();
+      renderWithdrawHistory();
+      if (typeof triggerAutoSave === 'function') triggerAutoSave();
+    } else {
+      alert('未找到该记录');
+    }
+  }).catch(function(err) {
+    console.error('删除出金失败:', err);
+    alert('删除出金记录失败');
+  });
 }
 
 function confirmWithdraw() {
@@ -248,8 +412,8 @@ function confirmWithdraw() {
   var date = document.getElementById('withdrawDate').value || getToday();
   addWithdrawal(amt, date).then(function() {
     updateAll();
-    closeWithdrawModal();
-    // 自动保存到数据库（带防抖）
+    document.getElementById('withdrawAmount').value = '';
+    renderWithdrawHistory();
     if (typeof triggerAutoSave === 'function') {
       triggerAutoSave();
     }
@@ -261,11 +425,107 @@ function confirmWithdraw() {
 
 // ===== 清空记录 =====
 function clearAll() {
-  if (!confirm('确认清空所有交易记录？此操作不可撤销！')) return;
+  // 保留旧函数作为兼容入口，但重定向到新的设置弹窗
+  openSettingsModal();
+}
 
+// ===== 设置弹窗（数据管理） =====
+var clearActionType = null;  // 'trades' / 'funds' / 'all'
+
+function openSettingsModal() {
+  document.getElementById('settingsModal').style.display = 'flex';
+  // 更新统计
+  var tcEl = document.getElementById('settingsTradeCount');
+  if (tcEl) tcEl.textContent = (typeof trades !== 'undefined' && trades) ? trades.length : 0;
+  var dcEl = document.getElementById('settingsDepositCount');
+  if (dcEl) dcEl.textContent = (typeof deposits !== 'undefined' && deposits) ? deposits.length : 0;
+  var wcEl = document.getElementById('settingsWithdrawCount');
+  if (wcEl) wcEl.textContent = (typeof withdrawals !== 'undefined' && withdrawals) ? withdrawals.length : 0;
+}
+
+function closeSettingsModal() {
+  document.getElementById('settingsModal').style.display = 'none';
+}
+
+function openClearTradesConfirm() {
+  openClearConfirmInternal('trades', '清空所有交易记录', '清空交易', 'CLEAR-TRADES');
+}
+function openClearFundsConfirm() {
+  openClearConfirmInternal('funds', '清空所有资金记录', '清空资金', 'CLEAR-FUNDS');
+}
+function openClearAllConfirm() {
+  openClearConfirmInternal('all', '清空全部数据', '清空全部', 'CLEAR-ALL');
+}
+
+function openClearConfirmInternal(type, title, actionLabel, verifyCode) {
+  clearActionType = type;
+  document.getElementById('clearConfirmTitle').textContent = '⚠️ ' + title;
+  document.getElementById('clearConfirmAction').textContent = actionLabel;
+  document.getElementById('clearConfirmCode').textContent = verifyCode;
+  document.getElementById('clearConfirmInput').value = '';
+  document.getElementById('clearConfirmBtn').disabled = true;
+  document.getElementById('clearConfirmHint').textContent = '';
+  document.getElementById('clearConfirmModal').style.display = 'flex';
+}
+
+function closeClearConfirm() {
+  document.getElementById('clearConfirmModal').style.display = 'none';
+  clearActionType = null;
+}
+
+// 监听输入验证
+document.addEventListener('input', function(e) {
+  if (e.target && e.target.id === 'clearConfirmInput') {
+    var expected = document.getElementById('clearConfirmCode').textContent;
+    var actual = e.target.value;
+    var btn = document.getElementById('clearConfirmBtn');
+    var hint = document.getElementById('clearConfirmHint');
+    if (actual === expected) {
+      btn.disabled = false;
+      hint.textContent = '✓ 验证通过，可点击确认清空';
+      hint.style.color = 'var(--color-green)';
+    } else {
+      btn.disabled = true;
+      hint.textContent = '请准确输入 "' + expected + '" 以解锁确认按钮';
+      hint.style.color = 'var(--text-tertiary)';
+    }
+  }
+});
+
+function executeClearAction() {
+  if (!clearActionType) return;
+  var type = clearActionType;
+  closeClearConfirm();
+
+  if (type === 'trades') {
+    clearAllTradesData();
+  } else if (type === 'funds') {
+    clearAllFundsData();
+  } else if (type === 'all') {
+    clearAllTradesData();
+    clearAllFundsData();
+    // 清空账户参数
+    localStorage.removeItem('account_params_v1');
+    // 重置输入框为默认值
+    var initEl = document.getElementById('initCapital');
+    if (initEl) initEl.value = 100000;
+    var riskPctEl = document.getElementById('riskPct');
+    if (riskPctEl) riskPctEl.value = 2;
+    var maxRiskEl = document.getElementById('maxRisk');
+    if (maxRiskEl) maxRiskEl.value = 3;
+    var feeRateEl = document.getElementById('feeRate');
+    if (feeRateEl) feeRateEl.value = 0.1;
+  }
+
+  updateAll();
+  // 重新打开设置弹窗以刷新统计
+  openSettingsModal();
+  alert('清空操作已完成');
+}
+
+function clearAllTradesData() {
   // 先清空本地
   trades = [];
-
   // 清空 IndexedDB
   if (dbInitialized && db) {
     clearAllTradesFromDB().then(function() {
@@ -274,22 +534,32 @@ function clearAll() {
       console.error('清空数据库失败:', err);
     });
   }
-
   // 清空 LocalStorage 备份
   localStorage.setItem('trades_v4', '[]');
-
   // 如果已登录，通知服务器清空
-  var syncModule = window.syncModule;
-  if (syncModule && typeof syncModule.clearServerData === 'function') {
-    syncModule.clearServerData().then(function() {
+  if (window.syncModule && typeof window.syncModule.clearServerData === 'function') {
+    window.syncModule.clearServerData().then(function() {
       console.log('服务器数据已清空');
     }).catch(function(err) {
       console.error('清空服务器失败:', err);
     });
   }
+}
 
-  // 更新界面
-  updateAll();
+function clearAllFundsData() {
+  deposits = [];
+  withdrawals = [];
+  if (dbInitialized && db) {
+    // 假设 DB 中也有 funds store - 这里只是清空内存和 localStorage
+    // 完整的 DB 清空需要 addDepositToDB 等函数支持
+    console.log('内存中的资金记录已清空');
+  }
+  localStorage.removeItem('funds_v1');
+  if (window.syncModule && typeof window.syncModule.clearServerFundsData === 'function') {
+    window.syncModule.clearServerFundsData().catch(function(err) {
+      console.error('清空服务器资金数据失败:', err);
+    });
+  }
 }
 
 // ===== 导出CSV =====
@@ -327,11 +597,12 @@ function updateHeaderSyncUI() {
   var headerUsername = document.getElementById('headerUsername');
   var headerBtnAutoSync = document.getElementById('headerBtnAutoSync');
   var loggedOut = document.getElementById('headerSyncLoggedOut');
+  var indicator = document.getElementById('syncIndicator');
 
   if (user) {
     // 更新管理员菜单显示
     updateAdminMenu();
-    
+
     // 如果不是管理员，显示普通用户登录状态
     if (user.role !== 'admin') {
       if (loggedIn) { loggedIn.style.display = 'flex'; }
@@ -343,16 +614,30 @@ function updateHeaderSyncUI() {
         var isAuto = (typeof SYNC_CONFIG !== 'undefined' && SYNC_CONFIG.autoSync === true);
         headerBtnAutoSync.textContent = '自动: ' + (isAuto ? '开' : '关');
       }
+      // 初始化同步指示器（已登录但未同步）
+      if (indicator && typeof syncModule.setSyncIndicatorState === 'function') {
+        if (syncModule.getLastSyncTime && syncModule.getLastSyncTime()) {
+          syncModule.setSyncIndicatorState('success', syncModule.buildSyncTooltip());
+        } else {
+          syncModule.setSyncIndicatorState('idle', '已登录，尚未同步');
+        }
+      }
     } else {
       // 管理员不显示普通用户的登录状态
       if (loggedIn) { loggedIn.style.display = 'none'; }
       if (loggedOut) { loggedOut.style.display = 'none'; }
+      if (indicator && typeof syncModule.setSyncIndicatorState === 'function') {
+        syncModule.setSyncIndicatorState('idle', '管理员模式');
+      }
     }
   } else {
     if (loggedIn) { loggedIn.style.display = 'none'; }
     if (loggedOut) { loggedOut.style.display = 'flex'; }
     if (document.getElementById('adminMenu')) {
       document.getElementById('adminMenu').style.display = 'none';
+    }
+    if (indicator && typeof syncModule.setSyncIndicatorState === 'function') {
+      syncModule.setSyncIndicatorState('offline', '未登录，无法同步');
     }
   }
 }
@@ -927,16 +1212,74 @@ function updateAdminMenu() {
   }
 }
 
+// ===== 计算器卡片折叠 =====
+function toggleCalcCard() {
+  var card = document.getElementById('calcCard');
+  var btn = document.getElementById('calcToggleBtn');
+  if (!card) return;
+  var expanded = card.classList.toggle('expanded');
+  if (btn) btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  // 折叠状态变更后保存用户偏好
+  try { localStorage.setItem('calcCardExpanded', expanded ? '1' : '0'); } catch(e) {}
+}
+
+// 根据用户偏好初始化计算器折叠状态（默认折叠）
+function initCalcCardState() {
+  var card = document.getElementById('calcCard');
+  var btn = document.getElementById('calcToggleBtn');
+  if (!card) return;
+  var pref = null;
+  try { pref = localStorage.getItem('calcCardExpanded'); } catch(e) {}
+  // 默认折叠；仅当用户之前显式展开过才展开
+  var expanded = (pref === '1');
+  if (expanded) {
+    card.classList.add('expanded');
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+  } else {
+    card.classList.remove('expanded');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+}
+
 // ===== 初始化 =====
 document.addEventListener('DOMContentLoaded', function() {
   // 重置实际手数修改标志
   userModifiedActualLots = false;
-  
+
   // 初始化同步模块
   syncModule.initSync();
   syncModule.updateSyncUI();
   updateHeaderSyncUI();
-  
+
+  // 初始化计算器折叠状态
+  initCalcCardState();
+
+  // 初始化交易表格列显示状态（精简 / 全部）
+  if (typeof initTableColumnsState === 'function') {
+    initTableColumnsState();
+  }
+
+  // 加载计算器中的交易纪律提醒
+  if (typeof loadCalcDisciplineReminder === 'function') {
+    loadCalcDisciplineReminder();
+  }
+  // 监听 localStorage 跨页面变化（在其他页面编辑纪律后自动刷新）
+  window.addEventListener('storage', function(e) {
+    if (e.key === 'daily_discipline_rules' && typeof loadCalcDisciplineReminder === 'function') {
+      loadCalcDisciplineReminder();
+    }
+    if (e.key === 'last_sync_time' && typeof syncModule !== 'undefined' && syncModule.refreshSyncIndicatorTooltip) {
+      syncModule.refreshSyncIndicatorTooltip();
+    }
+  });
+
+  // 每 30 秒刷新一次同步指示器的相对时间 tooltip
+  setInterval(function() {
+    if (typeof syncModule !== 'undefined' && syncModule.refreshSyncIndicatorTooltip) {
+      syncModule.refreshSyncIndicatorTooltip();
+    }
+  }, 30000);
+
   // 初始化数据库，然后加载数据
   initStorage().then(function() {
     loadAccountParams();
@@ -946,7 +1289,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initCalcSelectButtons();
     updateAll();
     console.log('应用初始化完成');
-    
+
     // 如果已登录，自动同步一次
     if (syncModule.isLoggedIn()) {
       syncModule.syncFromServer();

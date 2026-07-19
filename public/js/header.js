@@ -40,13 +40,18 @@ function renderAppHeader(page) {
       '<div class="app-logo">📊</div>' +
       '<div class="app-title"><h1>Trade Manager</h1></div>' +
       '<nav class="header-tabs">' +
-        '<a href="index.html" class="header-tab' + (page === 'index' ? ' active' : '') + '" data-page="index">📊 交易管理</a>' +
-        '<a href="daily-review.html" class="header-tab' + (page === 'daily' ? ' active' : '') + '" data-page="daily">📋 每日复盘</a>' +
-        '<a href="diary2.html" class="header-tab' + (page === 'diary' ? ' active' : '') + '" data-page="diary">📖 复盘总结</a>' +
+        '<a href="index.html" class="header-tab' + (page === 'index' ? ' active' : '') + '" data-page="index" title="实时记录开仓 / 平仓 / 仓位管理；计算器辅助决策">📊 交易管理</a>' +
+        '<a href="daily-review.html" class="header-tab' + (page === 'daily' ? ' active' : '') + '" data-page="daily" title="每日盘后总结：纪律 / 大盘 / 心态 / 复盘笔记">📋 每日复盘</a>' +
+        '<a href="diary2.html" class="header-tab' + (page === 'diary' ? ' active' : '') + '" data-page="diary" title="历史交易深度复盘：筛选 / 排序 / 单笔分析">📖 复盘总结</a>' +
       '</nav>' +
     '</div>' +
     '<div class="header-right">' +
+      '<span id="syncIndicator" class="sync-indicator sync-indicator-idle" title="从未同步" aria-label="同步状态">●</span>' +
       '<div id="syncStatus" class="sync-status-inline" aria-live="polite"></div>' +
+      '<div class="header-search-wrapper">' +
+        '<input type="text" id="globalSearchInput" class="header-search-input" placeholder="🔍 搜索..." autocomplete="off" aria-label="全局搜索" />' +
+        '<div id="globalSearchResults" class="header-search-results" style="display:none;"></div>' +
+      '</div>' +
       '<div id="headerSyncLoggedIn" style="display:none;align-items:center;gap:8px">' +
         '<span class="header-user-badge">👤 <span id="headerUsername">-</span></span>' +
         '<button type="button" class="btn btn-sm btn-primary" onclick="handleFullSync()" aria-label="立即同步">🔄 同步</button>' +
@@ -68,4 +73,101 @@ function renderAppHeader(page) {
         '<span class="theme-icon-light">🌙</span><span class="theme-icon-dark">☀️</span>' +
       '</button>' +
     '</div>';
+}
+
+// ===== 全局搜索逻辑 =====
+// 各页面可通过定义 window.performGlobalSearch(query) 覆盖搜索行为
+// 该函数应返回一个数组，每项格式：{ label, sublabel, onClick }
+function setupGlobalSearch() {
+  // 延迟绑定以等待 DOM 渲染完成
+  setTimeout(function() {
+    var input = document.getElementById('globalSearchInput');
+    var resultsBox = document.getElementById('globalSearchResults');
+    if (!input || !resultsBox) return;
+
+    var debounceTimer = null;
+    input.addEventListener('input', function() {
+      var q = input.value.trim();
+      if (debounceTimer) clearTimeout(debounceTimer);
+      if (!q) {
+        resultsBox.style.display = 'none';
+        resultsBox.innerHTML = '';
+        return;
+      }
+      debounceTimer = setTimeout(function() { doGlobalSearch(q); }, 200);
+    });
+
+    // 点击外部关闭搜索结果
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('.header-search-wrapper')) {
+        resultsBox.style.display = 'none';
+      }
+    });
+
+    // ESC 关闭
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        resultsBox.style.display = 'none';
+        input.blur();
+      }
+    });
+  }, 50);
+}
+
+function doGlobalSearch(q) {
+  var resultsBox = document.getElementById('globalSearchResults');
+  if (!resultsBox) return;
+  var results = [];
+  if (typeof window.performGlobalSearch === 'function') {
+    try {
+      results = window.performGlobalSearch(q) || [];
+    } catch (e) {
+      console.error('全局搜索出错:', e);
+      results = [];
+    }
+  }
+  if (results.length === 0) {
+    resultsBox.innerHTML = '<div class="search-result-empty">未找到匹配项</div>';
+  } else {
+    resultsBox.innerHTML = results.slice(0, 8).map(function(r, i) {
+      var sub = r.sublabel ? '<span class="search-result-sublabel">' + escapeHtml(r.sublabel) + '</span>' : '';
+      return '<div class="search-result-item" data-idx="' + i + '">' +
+        '<span class="search-result-label">' + escapeHtml(r.label) + '</span>' +
+        sub +
+      '</div>';
+    }).join('');
+    // 绑定点击事件
+    var items = resultsBox.querySelectorAll('.search-result-item');
+    var inputEl = document.getElementById('globalSearchInput');
+    items.forEach(function(item) {
+      item.addEventListener('click', function() {
+        var idx = parseInt(item.getAttribute('data-idx'));
+        var r = results[idx];
+        if (r && typeof r.onClick === 'function') {
+          r.onClick();
+        }
+        resultsBox.style.display = 'none';
+        if (inputEl) inputEl.value = '';
+      });
+    });
+  }
+  resultsBox.style.display = 'block';
+}
+
+// 在 DOMContentLoaded 时初始化
+document.addEventListener('DOMContentLoaded', function() {
+  setupGlobalSearch();
+});
+
+// HTML 转义（避免重复定义）
+if (typeof window.escapeHtml !== 'function') {
+  window.escapeHtml = function(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
 }

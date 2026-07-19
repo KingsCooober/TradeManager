@@ -37,12 +37,53 @@ function initDailyReview() {
   checkDRLoginStatus();
   setupDREventListeners();
   loadAllTrades();
+  // 注册全局搜索（每日复盘页：搜索历史复盘）
+  setupDRGlobalSearch();
+}
+
+function setupDRGlobalSearch() {
+  window.performGlobalSearch = function(q) {
+    if (!Array.isArray(drAllReviews)) return [];
+    var ql = q.toLowerCase();
+    var results = [];
+    for (var i = 0; i < drAllReviews.length; i++) {
+      var r = drAllReviews[i];
+      // 拼接可搜索字段：日期 / 总结 / 纪律备注 / 心态
+      var summary = r.summary || {};
+      var discipline = r.discipline || {};
+      var fields = [r.date, summary.text, summary.improvement, discipline.note, discipline.moodNote, r.overallReason]
+        .filter(function(v) { return v !== null && v !== undefined; }).join(' ');
+      if (fields.toLowerCase().indexOf(ql) !== -1) {
+        var preview = summary.text ? summary.text.slice(0, 60) : (discipline.note ? discipline.note.slice(0, 60) : '（无总结内容）');
+        results.push({
+          label: '📅 ' + (r.date || '') + ' · 每日复盘',
+          sublabel: preview,
+          onClick: (function(recDate) {
+            return function() {
+              if (typeof loadReviewForDate === 'function') {
+                loadReviewForDate(recDate);
+                if (typeof drCurrentDate !== 'undefined') drCurrentDate = recDate;
+                var di = document.getElementById('drDate');
+                if (di) di.value = recDate;
+              }
+            };
+          })(r.date)
+        });
+      }
+    }
+    return results;
+  };
 }
 
 function setupDREventListeners() {
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
       closeDRModal();
+    }
+    // Ctrl+S / Cmd+S 手动保存（与自动保存一致，但会弹 toast 提示）
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      if (typeof saveDRReview === 'function') saveDRReview();
     }
   });
   document.addEventListener('change', function(e) {
@@ -69,23 +110,45 @@ function checkDRLoginStatus() {
     if (loggedOut) loggedOut.style.display = 'none';
     var usernameEl = document.getElementById('headerUsername');
     if (usernameEl) usernameEl.textContent = user.username;
+    if (syncModule.setSyncIndicatorState) {
+      if (syncModule.getLastSyncTime && syncModule.getLastSyncTime()) {
+        syncModule.setSyncIndicatorState('success', syncModule.buildSyncTooltip());
+      } else {
+        syncModule.setSyncIndicatorState('idle', '已登录，尚未同步');
+      }
+    }
     loadFromServerDR();
   } else {
     var loggedIn = document.getElementById('headerSyncLoggedIn');
     var loggedOut = document.getElementById('headerSyncLoggedOut');
     if (loggedIn) loggedIn.style.display = 'none';
     if (loggedOut) loggedOut.style.display = 'flex';
+    if (typeof syncModule !== 'undefined' && syncModule.setSyncIndicatorState) {
+      syncModule.setSyncIndicatorState('offline', '未登录，无法同步');
+    }
   }
 }
 
 function loadFromServerDR() {
   if (!drCurrentUserId) return;
+  if (typeof syncModule !== 'undefined' && syncModule.setSyncIndicatorState) {
+    syncModule.setSyncIndicatorState('syncing', '正在加载复盘数据...');
+  }
   fetch('/api/daily-review/' + drCurrentUserId, {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' }
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
+    if (typeof syncModule !== 'undefined' && syncModule.setSyncIndicatorState) {
+      try {
+        var t = localStorage.getItem('last_sync_time');
+        if (t) {
+          localStorage.setItem('last_sync_time', String(Date.now()));
+        }
+        syncModule.setSyncIndicatorState('success', '已加载复盘数据 ' + new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'}));
+      } catch(e) {}
+    }
     if (data.reviews && data.reviews.length > 0) {
         drAllReviews = data.reviews.map(function(r) {
           var summary = safeJSON(r.summary_json) || {};
@@ -111,19 +174,39 @@ function loadFromServerDR() {
       loadReviewForDate(drCurrentDate);
     }
   })
-  .catch(function(e) { console.error('从服务器加载复盘失败:', e); });
+  .catch(function(e) {
+    console.error('从服务器加载复盘失败:', e);
+    if (typeof syncModule !== 'undefined' && syncModule.setSyncIndicatorState) {
+      syncModule.setSyncIndicatorState('error', '复盘数据加载失败');
+    }
+  });
 }
 
 function syncToServerDR() {
   if (!drCurrentUserId || !drData.date) return;
+  if (typeof syncModule !== 'undefined' && syncModule.setSyncIndicatorState) {
+    syncModule.setSyncIndicatorState('syncing', '正在保存复盘...');
+  }
   fetch('/api/daily-review/' + drCurrentUserId, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ review: drData })
   })
   .then(function(r) { return r.json(); })
-  .then(function() { showDRStatus('已同步到服务器', 'success'); })
-  .catch(function(e) { console.error('同步失败:', e); });
+  .then(function() {
+    showDRStatus('已同步到服务器', 'success');
+    if (typeof syncModule !== 'undefined' && syncModule.setSyncIndicatorState) {
+      try { localStorage.setItem('last_sync_time', String(Date.now())); } catch(e) {}
+      var hh = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'});
+      syncModule.setSyncIndicatorState('success', '复盘已同步 ' + hh);
+    }
+  })
+  .catch(function(e) {
+    console.error('同步失败:', e);
+    if (typeof syncModule !== 'undefined' && syncModule.setSyncIndicatorState) {
+      syncModule.setSyncIndicatorState('error', '复盘同步失败');
+    }
+  });
 }
 
 function handleDRLogout() {
@@ -203,6 +286,22 @@ function autoSaveDR() {
   saveCurrentFormToData();
   saveDRData();
   drDataDirty = false;
+  showDRAutoSaveHint();
+}
+
+// 显示「已自动保存 HH:MM」提示（持续 4 秒后淡出）
+function showDRAutoSaveHint() {
+  var el = document.getElementById('drAutoSaveHint');
+  if (!el) return;
+  var now = new Date();
+  var hh = String(now.getHours()).padStart(2, '0');
+  var mm = String(now.getMinutes()).padStart(2, '0');
+  el.textContent = '✓ 已自动保存 ' + hh + ':' + mm;
+  el.classList.add('show');
+  clearTimeout(el._hideTimer);
+  el._hideTimer = setTimeout(function() {
+    el.classList.remove('show');
+  }, 4000);
 }
 
 function onDRDateChange() {
@@ -856,6 +955,7 @@ function renderDRTrades(dayTrades) {
     html += '<span class="dr-trade-exit">出场 ' + esc(t.exit || '-') + '</span>';
     html += '<span class="dr-trade-pnl" style="color:' + pnlColor + '">' + (t.pnl !== '' ? CNY(parseFloat(t.pnl)) : '-') + '</span>';
     html += '<span class="dr-trade-r">' + fmtR(parseFloat(t.pnlR) || 0) + '</span>';
+    html += '<a href="index.html#trade-' + esc(t.id) + '" class="dr-trade-edit-link" title="跳转到交易管理页编辑此笔交易" aria-label="编辑此笔交易">✏️ 编辑</a>';
     html += '</div>';
 
     html += '<div class="dr-trade-fields">';
