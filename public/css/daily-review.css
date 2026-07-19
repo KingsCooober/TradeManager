@@ -1,5 +1,104 @@
 /* ===== 每日复盘页面样式 ===== */
 
+/* 屏幕阅读器专用：视觉隐藏但可被读屏软件识别 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 语义区块容器（用于 section 元素的统一样式，如需要） */
+.dr-section {
+  /* 当前无额外样式，预留以便后续统一控制 */
+}
+
+/* 章节头部的辅助提示文字（右侧灰色小字） */
+.dr-section-hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 折叠策略表后的小字提示 */
+.dr-summary-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+/* 策略规则表底部的说明文字 */
+.dr-strategy-tip {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 子模块之间增加间距 */
+.dr-subsection--spaced {
+  margin-top: 24px;
+}
+
+/* details 折叠区与上方元素增加间距 */
+.dr-strategy-ref--spaced {
+  margin-top: 14px;
+}
+
+/* 字段与上方元素增加间距 */
+.dr-field--spaced {
+  margin-top: 14px;
+}
+
+/* 表单分块（心态评分、情绪标签、纪律检查等） */
+.dr-form-block {
+  margin-bottom: 16px;
+}
+
+/* 小型标签文字（用于区块内子标题） */
+.dr-label-mini {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* 单列网格（覆盖默认两列布局） */
+.dr-form-grid--single {
+  grid-template-columns: 1fr;
+}
+
+/* 规则表列宽 */
+.dr-rules-table .col-form { width: 55%; }
+.dr-rules-table .col-pos  { width: 35%; }
+
+/* 弹窗尺寸变体 */
+.modal-content--small {
+  max-width: 400px;
+  padding: 28px;
+}
+
+.modal-content--input {
+  max-width: 480px;
+  padding: 28px;
+}
+
+/* 弹窗中的说明文字 */
+.modal-text {
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+
+/* 大字号 textarea（纪律输入等） */
+.dr-textarea--lg {
+  font-size: 15px;
+}
+
 .dr-main {
   padding: 20px;
   max-width: 1400px;
@@ -559,6 +658,18 @@
   color: var(--text-tertiary);
   transition: all 0.2s;
   user-select: none;
+  /* 重置 button 默认样式 */
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  line-height: 1;
+}
+
+.dr-mood-star:focus-visible {
+  outline: 2px solid var(--color-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .dr-mood-star.active {
@@ -619,6 +730,71 @@
   height: 16px;
   accent-color: var(--color-blue);
 }
+
+/* 走势判断策略规则参考表 */
+.dr-strategy-ref {
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.dr-strategy-ref summary {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.2s;
+}
+
+.dr-strategy-ref summary:hover {
+  color: var(--color-blue);
+}
+
+.dr-strategy-body {
+  padding: 0 16px 14px;
+  overflow-x: auto;
+}
+
+.dr-strategy-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dr-strategy-table thead th {
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  text-align: center;
+  font-weight: 650;
+  border-bottom: 1px solid var(--border-divider);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
+
+.dr-strategy-table tbody td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-divider);
+  color: var(--text-primary);
+  line-height: 1.45;
+  text-align: center;
+}
+
+.dr-strategy-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.dr-strat-strong td { background: rgba(6, 214, 160, 0.04); }
+.dr-strat-strong td:last-child { color: var(--color-green); font-weight: 700; }
+.dr-strat-bull td:last-child { color: var(--color-red); font-weight: 600; }
+.dr-strat-rebound td:last-child { color: var(--color-blue); font-weight: 600; }
+.dr-strat-neutral td:last-child { color: var(--text-primary); }
+.dr-strat-warn td:last-child { color: #b8860b; font-weight: 600; }
+.dr-strat-weak td { background: rgba(239, 71, 111, 0.03); }
+.dr-strat-weak td:last-child { color: var(--color-red); font-weight: 700; }
 
 /* 空提示 */
 .dr-empty-hint {
@@ -857,13 +1033,11 @@
   text-align: left;
 }
 
-.dr-rules-table tbody td:nth-child(2),
-.dr-rules-table tbody td:nth-child(3) {
+.dr-rules-table tbody td:nth-child(2) {
   text-align: center;
 }
 
-.dr-rules-table thead th:nth-child(2),
-.dr-rules-table thead th:nth-child(3) {
+.dr-rules-table thead th:nth-child(2) {
   text-align: center;
 }
 

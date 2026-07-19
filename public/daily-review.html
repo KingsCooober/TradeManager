@@ -3,13 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="每日复盘 - 交易管理工具，记录每日交易纪律、大盘走势、仓位策略、心态评分与每日总结">
 <title>每日复盘 - Trade Manager</title>
 <link rel="stylesheet" href="css/main.css?v=6">
-<link rel="stylesheet" href="css/daily-review.css?v=20260718013">
+<link rel="stylesheet" href="css/daily-review.css?v=20260719004">
 </head>
 <body>
 
 <header class="app-header" id="appHeader"></header>
+
+<noscript>
+  <div style="padding:16px;margin:16px;background:#fef3c7;color:#92400e;border:1px solid #f59e0b;border-radius:8px;text-align:center;">
+    本页面需要 JavaScript 才能正常工作，请启用浏览器中的 JavaScript 后刷新。
+  </div>
+</noscript>
 
 <main class="dr-main">
   <div class="dr-container">
@@ -19,30 +26,31 @@
       <div class="dr-toolbar-left">
         <h2>📋 每日复盘</h2>
         <div class="dr-date-nav">
-          <button onclick="navigateDRDate(-1)" title="前一天">◀</button>
+          <button type="button" onclick="navigateDRDate(-1)" title="前一天" aria-label="前一天">◀</button>
+          <label for="drDate" class="sr-only">复盘日期</label>
           <input type="date" id="drDate" onchange="onDRDateChange()">
-          <button onclick="navigateDRDate(1)" title="后一天">▶</button>
+          <button type="button" onclick="navigateDRDate(1)" title="后一天" aria-label="后一天">▶</button>
         </div>
       </div>
       <div class="dr-toolbar-right">
-        <button class="btn btn-sm btn-ghost" onclick="exportDRData()">📤 导出</button>
-        <button class="btn btn-sm btn-ghost" onclick="document.getElementById('importDRFile').click()">📥 导入</button>
-        <input type="file" id="importDRFile" accept=".json" style="display:none" onchange="importDRData(event)">
-        <button class="btn btn-sm btn-ghost-danger" onclick="deleteDRReview()">🗑 删除</button>
-        <button class="btn btn-sm btn-primary" onclick="saveDRReview()">💾 保存复盘</button>
+        <button type="button" class="btn btn-sm btn-ghost" onclick="exportDRData()" aria-label="导出复盘数据">📤 导出</button>
+        <button type="button" class="btn btn-sm btn-ghost" onclick="document.getElementById('importDRFile').click()" aria-label="导入复盘数据">📥 导入</button>
+        <input type="file" id="importDRFile" accept=".json,application/json" style="display:none" onchange="importDRData(event)">
+        <button type="button" class="btn btn-sm btn-ghost-danger" onclick="deleteDRReview()" aria-label="删除当前复盘">🗑 删除</button>
+        <button type="button" class="btn btn-sm btn-primary" onclick="saveDRReview()" aria-label="保存当前复盘">💾 保存复盘</button>
       </div>
     </div>
 
     <!-- 交易纪律（全局） -->
-    <div>
+    <section class="dr-section">
       <div class="dr-section-header">
         <h3>⚖️ 交易纪律</h3>
       </div>
       <div class="dr-section-body">
         <div class="dr-discipline-rules" id="drDisciplineRules"></div>
-        <button class="dr-add-btn dr-discipline-add-btn" onclick="addDRDisciplineRule()">+ 添加纪律</button>
+        <button type="button" class="dr-add-btn dr-discipline-add-btn" onclick="addDRDisciplineRule()">+ 添加纪律</button>
       </div>
-    </div>
+    </section>
 
     <!-- 概览卡片 -->
     <div class="dr-summary-cards">
@@ -69,10 +77,10 @@
     </div>
 
     <!-- 模块1: 大盘研判与仓位策略（合并） -->
-    <div>
+    <section class="dr-section">
       <div class="dr-section-header">
         <h3>📊 大盘研判与仓位策略</h3>
-        <span style="margin-left: auto; font-size: 12px; color: var(--text-secondary);">均线 + MACD → 综合走势 → 自动仓位</span>
+        <span class="dr-section-hint">均线 + MACD → 综合走势 → 自动仓位</span>
       </div>
       <div class="dr-section-body">
 
@@ -83,6 +91,42 @@
           <!-- 多指数卡片：每个指数独立选「均线状态」+「MACD 状态」 -->
           <div class="dr-indices-grid" id="drIndicesList"></div>
 
+          <!-- 走势判断策略规则（可展开参考） -->
+          <details class="dr-strategy-ref dr-strategy-ref--spaced">
+            <summary>📋 走势判断策略规则（点击展开）</summary>
+            <div class="dr-strategy-body">
+              <table class="dr-strategy-table">
+                <thead>
+                  <tr><th>均线状态</th><th>MACD 状态</th><th>→ 走势判断</th></tr>
+                </thead>
+                <tbody>
+                  <tr class="dr-strat-strong"><td>多头排列</td><td>水上金叉 / 水上多头</td><td><strong>强势上涨</strong></td></tr>
+                  <tr class="dr-strat-bull"><td>5-10金叉</td><td>水上金叉 / 水上多头</td><td>多头趋势</td></tr>
+                  <tr class="dr-strat-bull"><td>多头排列</td><td>水上死叉 / 水上空头</td><td>多头趋势</td></tr>
+                  <tr class="dr-strat-bull"><td>多头排列</td><td>水下金叉 / 水下多头</td><td>多头趋势</td></tr>
+                  <tr class="dr-strat-rebound"><td>5-10金叉</td><td>水下金叉 / 水下多头 / 水下底背离</td><td>反弹观察</td></tr>
+                  <tr class="dr-strat-rebound"><td>空头排列</td><td>水下金叉 / 水下多头 / 水下底背离</td><td>反弹观察</td></tr>
+                  <tr class="dr-strat-rebound"><td>多头排列</td><td>水下底背离</td><td>反弹观察</td></tr>
+                  <tr class="dr-strat-rebound"><td>5-10粘合</td><td>水下金叉 / 水下多头 / 水下底背离</td><td>反弹观察</td></tr>
+                  <tr class="dr-strat-neutral"><td>5-10金叉</td><td>水上死叉 / 水上空头 / 水上顶背离</td><td>震荡整理</td></tr>
+                  <tr class="dr-strat-neutral"><td>5-10死叉</td><td>水上金叉 / 水上多头 / 水上死叉 / 水上空头 / 水上顶背离</td><td>震荡整理</td></tr>
+                  <tr class="dr-strat-neutral"><td>5-10粘合</td><td>水上金叉 / 水上多头 / 水上死叉 / 水上空头</td><td>震荡整理</td></tr>
+                  <tr class="dr-strat-warn"><td>多头排列</td><td>水上顶背离</td><td>趋势走弱</td></tr>
+                  <tr class="dr-strat-warn"><td>5-10粘合</td><td>水上顶背离</td><td>趋势走弱</td></tr>
+                  <tr class="dr-strat-warn"><td>空头排列</td><td>水上金叉 / 水上多头 / 水上死叉 / 水上空头 / 水上顶背离</td><td>趋势走弱</td></tr>
+                  <tr class="dr-strat-weak"><td>5-10死叉</td><td>水下金叉 / 水下多头 / 水下底背离</td><td>弱势下跌</td></tr>
+                  <tr class="dr-strat-weak"><td>5-10死叉</td><td>水下死叉 / 水下空头</td><td>弱势下跌</td></tr>
+                  <tr class="dr-strat-weak"><td>多头排列</td><td>水下死叉 / 水下空头</td><td>弱势下跌（多头失败）</td></tr>
+                  <tr class="dr-strat-weak"><td>空头排列</td><td>水下死叉 / 水下空头</td><td>弱势下跌</td></tr>
+                  <tr class="dr-strat-weak"><td>5-10粘合</td><td>水下死叉 / 水下空头</td><td>弱势下跌</td></tr>
+                </tbody>
+              </table>
+              <div class="dr-strategy-tip">
+                💡 <strong>最保守原则</strong>：4 个指数各自判断走势 → 整体取走势最弱的指数（弱势下跌 &lt; 趋势走弱 &lt; 反弹观察 &lt; 震荡整理 &lt; 多头趋势 &lt; 强势上涨）
+              </div>
+            </div>
+          </details>
+
           <!-- 整体综合走势（基于所有指数走势汇总） -->
           <div class="dr-trend-result" id="drTrendResult">
             <div class="dr-trend-result-label">综合走势判断（最保守原则）</div>
@@ -91,14 +135,14 @@
           </div>
 
           <!-- 综合判断理由（用户填写，可选） -->
-          <div class="dr-field" style="margin-top: 14px;">
+          <div class="dr-field dr-field--spaced">
             <label for="drMarketOverallReason">综合判断理由（可选 / 基本面 / 政策面）</label>
             <textarea class="dr-textarea" id="drMarketOverallReason" rows="2" placeholder="可选：补充基本面/政策面的判断理由..."></textarea>
           </div>
         </div>
 
         <!-- 子模块 B: 仓位策略（基于规则表自动计算） -->
-        <div class="dr-subsection" style="margin-top: 24px;">
+        <div class="dr-subsection dr-subsection--spaced">
           <div class="dr-subsection-title">🎯 仓位策略（自动计算）</div>
 
           <!-- 自动计算结果 -->
@@ -109,117 +153,106 @@
           </div>
 
           <!-- 匹配的规则（动态展示） -->
-          <div class="dr-matched-rule" id="drMatchedRule" style="display: none;">
+          <div class="dr-matched-rule" id="drMatchedRule" hidden>
             <div class="dr-matched-rule-label">命中规则</div>
             <div class="dr-matched-rule-body">
               <div class="dr-matched-rule-desc" id="drMatchedRuleDesc"></div>
               <div class="dr-matched-rule-meta">
                 <span class="dr-matched-rule-tag" id="drMatchedRulePos"></span>
-                <span class="dr-matched-rule-tag" id="drMatchedRuleMargin"></span>
               </div>
             </div>
           </div>
 
-          <!-- 分批建仓 / 减仓策略 -->
-          <div class="dr-field" style="margin-top: 14px;">
-            <label for="drScalingStrategy">分批建仓 / 减仓策略</label>
-            <textarea class="dr-textarea" id="drScalingStrategy" rows="2" placeholder="如: 强势满仓持有；中等 5 成底仓 + 3 成滚动；弱势 1 成试探 + 跌破关键位全清"></textarea>
-          </div>
-
-          <!-- 仓位策略规则表（只读 + 命中高亮） -->
-          <div class="dr-rules-block">
-            <div class="dr-rules-title">📋 仓位策略规则表 <span style="font-size: 12px; color: var(--text-secondary); font-weight: 400;">（基于日线均线 / MACD 状态自动匹配）</span></div>
+          <!-- 仓位策略规则表（只读 + 命中高亮，默认折叠） -->
+          <details class="dr-strategy-ref">
+            <summary>📋 仓位策略规则表 <span class="dr-summary-hint">（基于日线均线 / MACD 状态自动匹配 · 点击展开）</span></summary>
+            <div class="dr-strategy-body">
             <table class="dr-rules-table" id="drRulesTable">
               <thead>
                 <tr>
-                  <th style="width: 55%;">技术形态</th>
-                  <th style="width: 25%;">建议仓位</th>
-                  <th style="width: 20%;">融资</th>
+                  <th class="col-form">技术形态</th>
+                  <th class="col-pos">建议仓位</th>
                 </tr>
               </thead>
               <tbody>
                 <tr data-rule-id="rule1">
-                  <td>日线 5-10 <strong>多头排列</strong> + <strong>MACD 水上</strong></td>
+                  <td>日线 5-10 <strong>多头排列</strong> + <strong>MACD 水上强势</strong></td>
                   <td><span class="dr-pos-tag dr-pos-tag-max">10-16 成</span></td>
-                  <td>可满融</td>
-                </tr>
-                <tr data-rule-id="rule2">
-                  <td>日线 5-10 <strong>死叉</strong> 或 <strong>MACD 死叉/背离</strong></td>
-                  <td><span class="dr-pos-tag dr-pos-tag-mid">5-8 成</span></td>
-                  <td>不得融资</td>
-                </tr>
-                <tr data-rule-id="rule3">
-                  <td>日线 5-10 <strong>空头排列</strong>，<strong>MACD 顶背离</strong></td>
-                  <td><span class="dr-pos-tag dr-pos-tag-low">3-5 成</span></td>
-                  <td>不融资</td>
-                </tr>
-                <tr data-rule-id="rule4">
-                  <td>日线 5-10 <strong>空头排列</strong>，<strong>MACD 水下</strong></td>
-                  <td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td>
-                  <td>不融资</td>
                 </tr>
                 <tr data-rule-id="rule5">
                   <td>日线 5-10 <strong>金叉</strong> 且 <strong>MACD 水下金叉后</strong></td>
                   <td><span class="dr-pos-tag dr-pos-tag-mid">8-10 成</span></td>
-                  <td>可融资</td>
+                </tr>
+                <tr data-rule-id="rule2">
+                  <td>日线 5-10 <strong>死叉</strong> 或 <strong>MACD 顶背离</strong></td>
+                  <td><span class="dr-pos-tag dr-pos-tag-mid">5-8 成</span></td>
+                </tr>
+                <tr data-rule-id="rule3">
+                  <td>日线 5-10 <strong>空头排列</strong> + <strong>MACD 水上偏弱</strong></td>
+                  <td><span class="dr-pos-tag dr-pos-tag-low">3-5 成</span></td>
+                </tr>
+                <tr data-rule-id="rule4">
+                  <td>日线 5-10 <strong>空头排列</strong> + <strong>MACD 水下偏弱</strong></td>
+                  <td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td>
                 </tr>
               </tbody>
             </table>
-          </div>
+            </div>
+          </details>
 
-          <!-- 备注 / 关键观察 -->
-          <div class="dr-field" style="margin-top: 14px;">
-            <label for="drRegimeNote">备注 / 关键观察</label>
+          <!-- 综合仓位调整计划 -->
+          <div class="dr-field dr-field--spaced">
+            <label for="drRegimeNote">综合仓位调整计划（可选）</label>
             <textarea class="dr-textarea" id="drRegimeNote" rows="2" placeholder="今天的特殊判断、明日需要重点跟踪的信号..."></textarea>
           </div>
         </div>
 
       </div>
-    </div>
+    </section>
 
     <!-- 模块2: 主线与板块 -->
-    <div>
+    <section class="dr-section">
       <div class="dr-section-header">
         <h3>🔥 主线与板块</h3>
       </div>
       <div class="dr-section-body">
         <div class="dr-themes-container" id="drThemesList"></div>
-        <button class="dr-add-btn" onclick="addDRTheme()">+ 添加主线</button>
+        <button type="button" class="dr-add-btn" onclick="addDRTheme()">+ 添加主线</button>
       </div>
-    </div>
+    </section>
 
     <!-- 模块3: 今日交易复盘 -->
-    <div>
+    <section class="dr-section">
       <div class="dr-section-header">
         <h3>📋 今日交易复盘</h3>
       </div>
       <div class="dr-section-body">
         <div class="dr-trades-list" id="drTradesList"></div>
       </div>
-    </div>
+    </section>
 
     <!-- 模块4: 心态与纪律 -->
-    <div>
+    <section class="dr-section">
       <div class="dr-section-header">
         <h3>🧠 心态与纪律</h3>
       </div>
       <div class="dr-section-body">
-        <div style="margin-bottom: 16px;">
-          <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary); display: block; margin-bottom: 6px;">心态评分</label>
-          <div class="dr-mood-score" id="drMoodScore">
-            <span class="dr-mood-star" onclick="setDRMoodScore(1)">★</span>
-            <span class="dr-mood-star" onclick="setDRMoodScore(2)">★</span>
-            <span class="dr-mood-star" onclick="setDRMoodScore(3)">★</span>
-            <span class="dr-mood-star" onclick="setDRMoodScore(4)">★</span>
-            <span class="dr-mood-star" onclick="setDRMoodScore(5)">★</span>
+        <div class="dr-form-block">
+          <label class="dr-label-mini">心态评分</label>
+          <div class="dr-mood-score" id="drMoodScore" role="group" aria-label="心态评分（1-5 星）">
+            <button type="button" class="dr-mood-star" onclick="setDRMoodScore(1)" aria-label="1 星">★</button>
+            <button type="button" class="dr-mood-star" onclick="setDRMoodScore(2)" aria-label="2 星">★</button>
+            <button type="button" class="dr-mood-star" onclick="setDRMoodScore(3)" aria-label="3 星">★</button>
+            <button type="button" class="dr-mood-star" onclick="setDRMoodScore(4)" aria-label="4 星">★</button>
+            <button type="button" class="dr-mood-star" onclick="setDRMoodScore(5)" aria-label="5 星">★</button>
           </div>
         </div>
-        <div style="margin-bottom: 16px;">
-          <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary); display: block; margin-bottom: 6px;">情绪标签</label>
+        <div class="dr-form-block">
+          <label class="dr-label-mini">情绪标签</label>
           <div class="dr-mood-tags" id="drMoodTags"></div>
         </div>
-        <div style="margin-bottom: 16px;">
-          <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary); display: block; margin-bottom: 6px;">纪律检查</label>
+        <div class="dr-form-block">
+          <label class="dr-label-mini">纪律检查</label>
           <div class="dr-check-grid">
             <label class="dr-check-item"><input type="checkbox" id="drExecutedStop" checked> 执行了止损</label>
             <label class="dr-check-item"><input type="checkbox" id="drExecutedTP"> 执行了止盈</label>
@@ -239,15 +272,15 @@
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- 模块5: 每日总结 -->
-    <div>
+    <section class="dr-section">
       <div class="dr-section-header">
         <h3>📝 每日总结</h3>
       </div>
       <div class="dr-section-body">
-        <div class="dr-form-grid" style="grid-template-columns: 1fr;">
+        <div class="dr-form-grid dr-form-grid--single">
           <div class="dr-field">
             <label for="drGoodPoints">今日做得好的</label>
             <textarea class="dr-textarea" id="drGoodPoints" rows="2" placeholder="今天有哪些值得继续保持的地方？"></textarea>
@@ -270,105 +303,90 @@
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- 模块6: 历史复盘 -->
-    <div>
+    <section class="dr-section">
       <div class="dr-section-header">
         <h3>📚 历史复盘</h3>
       </div>
       <div class="dr-section-body">
         <div class="dr-history-section" id="drHistoryList"></div>
       </div>
-    </div>
+    </section>
 
   </div>
 </main>
 
-<div id="drSaveToast" class="dr-save-toast">✅ 复盘已保存</div>
+<div id="drSaveToast" class="dr-save-toast" role="status" aria-live="polite">✅ 复盘已保存</div>
 
 <!-- 纪律弹窗 -->
-<div id="drDisciplineModal" class="modal-overlay" onclick="if(event.target===this)closeDRDisciplineModal()">
-  <div class="modal-content" style="max-width: 480px; padding: 28px;">
+<div id="drDisciplineModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="drDisciplineModalTitle" onclick="if(event.target===this)closeDRDisciplineModal()">
+  <div class="modal-content modal-content--input">
     <div class="modal-header">
       <h2 id="drDisciplineModalTitle">添加交易纪律</h2>
-      <button class="modal-close" onclick="closeDRDisciplineModal()">✕</button>
+      <button type="button" class="modal-close" onclick="closeDRDisciplineModal()" aria-label="关闭弹窗">✕</button>
     </div>
     <div class="modal-field">
-      <textarea id="drDisciplineInput" class="dr-textarea" rows="3" placeholder="请输入交易纪律..." style="font-size: 15px;"></textarea>
+      <textarea id="drDisciplineInput" class="dr-textarea dr-textarea--lg" rows="3" placeholder="请输入交易纪律..."></textarea>
     </div>
     <div class="modal-buttons">
-      <button class="btn btn-gray" onclick="closeDRDisciplineModal()">取消</button>
-      <button class="btn btn-primary" onclick="confirmDRDiscipline()">确定</button>
+      <button type="button" class="btn btn-gray" onclick="closeDRDisciplineModal()">取消</button>
+      <button type="button" class="btn btn-primary" onclick="confirmDRDiscipline()">确定</button>
     </div>
   </div>
 </div>
 
 <!-- 纪律删除确认弹窗 -->
-<div id="drDisciplineDelModal" class="modal-overlay" onclick="if(event.target===this)closeDRDisciplineDelModal()">
-  <div class="modal-content" style="max-width: 400px; padding: 28px;">
+<div id="drDisciplineDelModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="drDisciplineDelModalTitle" onclick="if(event.target===this)closeDRDisciplineDelModal()">
+  <div class="modal-content modal-content--small">
     <div class="modal-header">
-      <h2>确认删除</h2>
-      <button class="modal-close" onclick="closeDRDisciplineDelModal()">✕</button>
+      <h2 id="drDisciplineDelModalTitle">确认删除</h2>
+      <button type="button" class="modal-close" onclick="closeDRDisciplineDelModal()" aria-label="关闭弹窗">✕</button>
     </div>
-    <p style="color: var(--text-secondary); margin-bottom: 20px;">确定要删除这条交易纪律吗？</p>
+    <p class="modal-text">确定要删除这条交易纪律吗？</p>
     <div class="modal-buttons">
-      <button class="btn btn-gray" onclick="closeDRDisciplineDelModal()">取消</button>
-      <button class="btn btn-danger" onclick="confirmDRDisciplineDel()">删除</button>
+      <button type="button" class="btn btn-gray" onclick="closeDRDisciplineDelModal()">取消</button>
+      <button type="button" class="btn btn-danger" onclick="confirmDRDisciplineDel()">删除</button>
     </div>
   </div>
 </div>
 
 <!-- 通用提示弹窗 -->
-<div id="drAlertModal" class="modal-overlay" onclick="if(event.target===this)closeDRAlertModal()">
-  <div class="modal-content" style="max-width: 400px; padding: 28px;">
+<div id="drAlertModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="drAlertModalTitle" onclick="if(event.target===this)closeDRAlertModal()">
+  <div class="modal-content modal-content--small">
     <div class="modal-header">
       <h2 id="drAlertModalTitle">提示</h2>
-      <button class="modal-close" onclick="closeDRAlertModal()">✕</button>
+      <button type="button" class="modal-close" onclick="closeDRAlertModal()" aria-label="关闭弹窗">✕</button>
     </div>
-    <p id="drAlertModalMsg" style="color: var(--text-secondary); margin-bottom: 20px;"></p>
+    <p id="drAlertModalMsg" class="modal-text"></p>
     <div class="modal-buttons">
-      <button class="btn btn-primary" onclick="closeDRAlertModal()">确定</button>
+      <button type="button" class="btn btn-primary" onclick="closeDRAlertModal()">确定</button>
     </div>
   </div>
 </div>
 
 <!-- 通用确认弹窗 -->
-<div id="drConfirmModal" class="modal-overlay" onclick="if(event.target===this)closeDRConfirmModal()">
-  <div class="modal-content" style="max-width: 400px; padding: 28px;">
+<div id="drConfirmModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="drConfirmModalTitle" onclick="if(event.target===this)closeDRConfirmModal()">
+  <div class="modal-content modal-content--small">
     <div class="modal-header">
       <h2 id="drConfirmModalTitle">确认</h2>
-      <button class="modal-close" onclick="closeDRConfirmModal()">✕</button>
+      <button type="button" class="modal-close" onclick="closeDRConfirmModal()" aria-label="关闭弹窗">✕</button>
     </div>
-    <p id="drConfirmModalMsg" style="color: var(--text-secondary); margin-bottom: 20px;"></p>
+    <p id="drConfirmModalMsg" class="modal-text"></p>
     <div class="modal-buttons">
-      <button class="btn btn-gray" onclick="closeDRConfirmModal()">取消</button>
-      <button class="btn btn-primary" id="drConfirmModalOkBtn" onclick="if(drConfirmCallback)drConfirmCallback()">确定</button>
+      <button type="button" class="btn btn-gray" onclick="closeDRConfirmModal()">取消</button>
+      <button type="button" class="btn btn-primary" id="drConfirmModalOkBtn" onclick="if(drConfirmCallback)drConfirmCallback()">确定</button>
     </div>
   </div>
 </div>
 
-<script src="js/utils.js?v=4"></script>
-<script src="js/header.js?v=1"></script>
+<script src="js/utils.js?v=5"></script>
+<script src="js/header.js?v=2"></script>
 <script src="js/database.js?v=4"></script>
 <script src="js/sync.js?v=5"></script>
-<script src="js/daily-review.js?v=20260718019"></script>
+<script src="js/daily-review.js?v=20260719009"></script>
 <script>
-function toggleTheme() {
-  var html = document.documentElement;
-  var current = html.getAttribute('data-theme');
-  var next = current === 'dark' ? 'light' : 'dark';
-  html.setAttribute('data-theme', next);
-  localStorage.setItem('app_theme', next);
-}
-(function() {
-  var saved = localStorage.getItem('app_theme');
-  if (saved) {
-    document.documentElement.setAttribute('data-theme', saved);
-  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.documentElement.setAttribute('data-theme', 'dark');
-  }
-})();
 renderAppHeader('daily');
 </script>
 </body>

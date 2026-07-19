@@ -26,6 +26,7 @@ var drIsLoggedIn = false;
 var drAllTrades = [];      // 从数据库加载的所有交易记录
 var drDisciplineRules = []; // 全局交易纪律
 var drDataDirty = false;   // 标记是否有未保存的修改
+var drAutoSaveTimer = null; // 延迟自动保存定时器
 
 function initDailyReview() {
   drCurrentDate = getToday();
@@ -99,7 +100,7 @@ function loadFromServerDR() {
             indices: summary.indices || DR_INDICES.map(function(def) {
               return { key: def.key, name: def.name, maState: '', macdState: '', trendResult: '', trendHint: '' };
             }),
-            marketRegime: summary.marketRegime || { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' },
+            marketRegime: summary.marketRegime || { position: '', matchedRuleId: '', matchedRuleDesc: '', note: '' },
             createdAt: r.created_at,
             updatedAt: r.updated_at
           };
@@ -267,10 +268,8 @@ function loadReviewForDate(date) {
       var oldMr = drData.marketRegime;
       drData.marketRegime = {
         position: oldMr.position || '',
-        margin: '',
         matchedRuleId: '',
         matchedRuleDesc: '',
-        scalingStrategy: oldMr.scalingStrategy || '',
         note: oldMr.note || ''
       };
     }
@@ -292,7 +291,7 @@ function loadReviewForDate(date) {
       }),
       themes: [{ name: '', strength: '', stage: '' }],
       tradeReviews: [],
-      marketRegime: { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' },
+      marketRegime: { position: '', matchedRuleId: '', matchedRuleDesc: '', note: '' },
       discipline: { moodScore: 3, moodTags: [], executedStop: true, executedTakeProfit: false, chaseKilling: false, frequentTrading: false, overnightFull: false, plannedPosition: '', actualPosition: '' },
       summary: { goodPoints: '', badPoints: '', biggestLesson: '', tomorrowNotes: '', watchList: '' }
     };
@@ -348,20 +347,23 @@ var DR_TREND_STYLES = {
 var DR_MA_OPTIONS = [
   { value: '5-10金叉',  label: '5-10 金叉' },
   { value: '5-10死叉',  label: '5-10 死叉' },
+  { value: '5-10粘合',  label: '5-10 粘合' },
   { value: '多头排列',  label: '5-10 多头排列' },
   { value: '空头排列',  label: '5-10 空头排列' }
 ];
 
-// MACD 状态下拉选项
+// MACD 状态下拉选项（完整 10 态）
 var DR_MACD_OPTIONS = [
-  { value: '水上',         label: 'MACD 水上' },
-  { value: '水上金叉',     label: 'MACD 水上金叉' },
-  { value: '水上死叉',     label: 'MACD 水上死叉' },
-  { value: '水上但背离',   label: 'MACD 水上但顶背离' },
-  { value: '水下',         label: 'MACD 水下' },
-  { value: '水下金叉',     label: 'MACD 水下金叉' },
-  { value: '水下死叉',     label: 'MACD 水下死叉' },
-  { value: '顶背离后水下', label: 'MACD 顶背离后水下' }
+  { value: '水上金叉',   label: 'MACD 水上金叉' },
+  { value: '水上死叉',   label: 'MACD 水上死叉' },
+  { value: '水上多头',   label: 'MACD 水上多头' },
+  { value: '水上空头',   label: 'MACD 水上空头' },
+  { value: '水上顶背离', label: 'MACD 水上顶背离' },
+  { value: '水下金叉',   label: 'MACD 水下金叉' },
+  { value: '水下死叉',   label: 'MACD 水下死叉' },
+  { value: '水下多头',   label: 'MACD 水下多头' },
+  { value: '水下空头',   label: 'MACD 水下空头' },
+  { value: '水下底背离', label: 'MACD 水下底背离' }
 ];
 
 // 渲染多指数卡片
@@ -455,6 +457,15 @@ function onDRIndexChange(idx) {
   // 同步整体走势 + 整体仓位
   recalcDROverall();
   drDataDirty = true;
+
+  // 延迟 1 秒自动保存（防抖：选多个指数时不会频繁保存）
+  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
+  drAutoSaveTimer = setTimeout(function() {
+    saveCurrentFormToData();
+    saveDRData();
+    drDataDirty = false;
+    drAutoSaveTimer = null;
+  }, 1000);
 }
 
 // 更新单个指数的走势显示
@@ -510,74 +521,93 @@ function analyzeTrend(maState, macdState) {
   var trend = '';
   var reason = '';
 
-  // 1. 5-10 金叉（刚发生）+ MACD 配合 → 反弹 / 趋势确立
+  // 1. 5-10 金叉（刚发生）+ MACD 配合
   if (maState === '5-10金叉') {
-    if (macdState === '水下金叉') {
-      trend = '反弹观察';
-      reason = '5-10 金叉 + MACD 水下金叉 → 反弹信号';
-    } else if (macdState === '水上金叉') {
+    if (macdState === '水上金叉' || macdState === '水上多头') {
       trend = '多头趋势';
-      reason = '5-10 金叉 + MACD 水上金叉 → 趋势确立';
-    } else if (macdState === '水上' || macdState === '水上死叉' || macdState === '水上但背离') {
+      reason = '5-10 金叉 + MACD 水上强势 → 趋势确立';
+    } else if (macdState === '水下金叉' || macdState === '水下多头' || macdState === '水下底背离') {
+      trend = '反弹观察';
+      reason = '5-10 金叉 + MACD 水下转强 → 反弹信号';
+    } else if (macdState === '水上死叉' || macdState === '水上空头' || macdState === '水上顶背离') {
       trend = '震荡整理';
-      reason = '5-10 金叉 + MACD 水上运行/死叉/背离 → 信号待确认';
-    } else if (macdState === '水下' || macdState === '水下死叉' || macdState === '顶背离后水下') {
-      trend = '震荡整理';
-      reason = '5-10 金叉 + MACD 水下 → 反弹待确认';
+      reason = '5-10 金叉 + MACD 水上偏弱 → 信号待确认';
     } else {
       trend = '震荡整理';
-      reason = '5-10 金叉，等待 MACD 配合';
+      reason = '5-10 金叉 + MACD ' + macdState + ' → 方向待选择';
     }
   }
-  // 2. 5-10 死叉 + MACD → 震荡 / 弱势
+  // 2. 5-10 死叉 + MACD
   else if (maState === '5-10死叉') {
-    if (macdState === '水上' || macdState === '水上死叉' || macdState === '水上但背离') {
+    if (macdState === '水上金叉' || macdState === '水上多头') {
       trend = '震荡整理';
-      reason = '5-10 死叉 + MACD 水上死叉/背离 → 短线震荡';
-    } else if (macdState === '水下' || macdState === '水下死叉' || macdState === '顶背离后水下') {
+      reason = '5-10 死叉 + MACD 水上强势 → 短线震荡';
+    } else if (macdState === '水下金叉' || macdState === '水下多头' || macdState === '水下底背离') {
+      trend = '弱势下跌';
+      reason = '5-10 死叉 + MACD 水下转强 → 弱势修复中';
+    } else if (macdState === '水上死叉' || macdState === '水上空头' || macdState === '水上顶背离') {
+      trend = '震荡整理';
+      reason = '5-10 死叉 + MACD 水上偏弱 → 短线震荡';
+    } else {
       trend = '弱势下跌';
       reason = '5-10 死叉 + MACD 水下 → 趋势转弱';
-    } else {
-      trend = '震荡整理';
-      reason = '5-10 死叉，等待 MACD 进一步信号';
     }
   }
-  // 3. 多头排列（5 在 10 上方持续）+ MACD 水上 → 多头趋势
+  // 3. 5-10 粘合 + MACD
+  else if (maState === '5-10粘合') {
+    if (macdState === '水上金叉' || macdState === '水上多头') {
+      trend = '震荡整理';
+      reason = '5-10 粘合 + MACD 水上强势 → 方向待选择';
+    } else if (macdState === '水上顶背离') {
+      trend = '趋势走弱';
+      reason = '5-10 粘合 + MACD 顶背离 → 警惕回调';
+    } else if (macdState === '水下金叉' || macdState === '水下多头' || macdState === '水下底背离') {
+      trend = '反弹观察';
+      reason = '5-10 粘合 + MACD 水下转强 → 底部可能';
+    } else if (macdState === '水上死叉' || macdState === '水上空头') {
+      trend = '震荡整理';
+      reason = '5-10 粘合 + MACD 水上偏弱 → 方向待选择';
+    } else {
+      trend = '弱势下跌';
+      reason = '5-10 粘合 + MACD 水下 → 弱势震荡';
+    }
+  }
+  // 4. 多头排列（5 在 10 上方持续）+ MACD
   else if (maState === '多头排列') {
-    if (macdState === '水上金叉') {
+    if (macdState === '水上金叉' || macdState === '水上多头') {
       trend = '强势上涨';
-      reason = '5-10 多头排列 + MACD 水上金叉 → 强势';
-    } else if (macdState === '水上' || macdState === '水上死叉') {
+      reason = '5-10 多头排列 + MACD 水上强势 → 强势';
+    } else if (macdState === '水上死叉' || macdState === '水上空头') {
       trend = '多头趋势';
-      reason = '5-10 多头排列 + MACD 水上运行' + (macdState === '水上死叉' ? '（注意短线回调）' : '');
-    } else if (macdState === '水上但背离') {
+      reason = '5-10 多头排列 + MACD 水上偏弱（注意短线回调）';
+    } else if (macdState === '水上顶背离') {
       trend = '趋势走弱';
       reason = '5-10 多头排列 + MACD 顶背离，警惕回调';
-    } else if (macdState === '顶背离后水下' || macdState === '水下' || macdState === '水下死叉') {
-      trend = '弱势下跌';
-      reason = '5-10 多头排列但 MACD 水下 → 多头失败，转弱';
-    } else {
+    } else if (macdState === '水下金叉' || macdState === '水下多头') {
       trend = '多头趋势';
-      reason = '5-10 多头排列 + MACD 水下金叉 → 修复中';
+      reason = '5-10 多头排列 + MACD 水下转强 → 修复中';
+    } else if (macdState === '水下底背离') {
+      trend = '反弹观察';
+      reason = '5-10 多头排列 + MACD 水下底背离 → 调整尾声';
+    } else {
+      trend = '弱势下跌';
+      reason = '5-10 多头排列 + MACD 水下偏弱 → 多头失败';
     }
   }
-  // 4. 空头排列（5 在 10 下方持续）+ MACD → 弱势
+  // 5. 空头排列（5 在 10 下方持续）+ MACD
   else if (maState === '空头排列') {
-    if (macdState === '顶背离后水下' || macdState === '水下' || macdState === '水下死叉') {
-      trend = '弱势下跌';
-      reason = '5-10 空头排列 + MACD 水下 → 持续下跌';
-    } else if (macdState === '水上但背离') {
+    if (macdState === '水上金叉' || macdState === '水上多头') {
       trend = '趋势走弱';
-      reason = '5-10 空头排列 + MACD 顶背离 → 加速下跌风险';
-    } else if (macdState === '水下金叉') {
+      reason = '5-10 空头排列 + MACD 水上强势 → 弱势修复中';
+    } else if (macdState === '水上死叉' || macdState === '水上空头' || macdState === '水上顶背离') {
+      trend = '趋势走弱';
+      reason = '5-10 空头排列 + MACD 水上偏弱 → 加速下跌风险';
+    } else if (macdState === '水下金叉' || macdState === '水下多头' || macdState === '水下底背离') {
       trend = '反弹观察';
-      reason = '5-10 空头排列 + MACD 水下金叉 → 反弹信号';
-    } else if (macdState === '水上' || macdState === '水上金叉' || macdState === '水上死叉') {
-      trend = '趋势走弱';
-      reason = '5-10 空头排列 + MACD 水上 → 弱势修复中';
+      reason = '5-10 空头排列 + MACD 水下转强 → 反弹信号';
     } else {
       trend = '弱势下跌';
-      reason = '5-10 空头排列，弱势格局';
+      reason = '5-10 空头排列 + MACD 水下偏弱 → 持续下跌';
     }
   }
   else {
@@ -605,23 +635,23 @@ function updateDRTrendResultUI(trend, hint) {
   }
 }
 
-// ===== 仓位策略规则表（5 条规则，基于 5-10 均线 + MACD） =====
+// ===== 仓位策略规则表（5 条规则，按仓位从大到小，基于 5-10 均线 + MACD） =====
 var DR_POSITION_RULES = [
-  { id: 'rule1', desc: '日线 5-10 多头排列 + MACD 水上',
-    maStates: ['多头排列'], macdStates: ['水上', '水上金叉', '水上死叉'],
-    position: '10-16 成', margin: '可满融', posClass: 'pos-max', rank: 5 },
-  { id: 'rule2', desc: '日线 5-10 死叉 或 MACD 死叉',
-    maStates: ['5-10死叉', '多头排列'], macdStates: ['水上但背离'],
-    position: '5-8 成', margin: '不得融资', posClass: 'pos-mid', rank: 3 },
-  { id: 'rule3', desc: '日线 5-10 空头排列 + MACD 顶背离',
-    maStates: ['空头排列'], macdStates: ['水上但背离'],
-    position: '3-5 成', margin: '不融资', posClass: 'pos-low', rank: 2 },
-  { id: 'rule4', desc: '日线 5-10 空头排列 + MACD 水下',
-    maStates: ['空头排列'], macdStates: ['水下', '水下死叉', '顶背离后水下'],
-    position: '1-2 成', margin: '不融资', posClass: 'pos-min', rank: 1 },
+  { id: 'rule1', desc: '日线 5-10 多头排列 + MACD 水上强势',
+    maStates: ['多头排列'], macdStates: ['水上金叉', '水上多头'],
+    position: '10-16 成', posClass: 'pos-max', rank: 5 },
   { id: 'rule5', desc: '日线 5-10 金叉 且 MACD 水下金叉后',
     maStates: ['5-10金叉'], macdStates: ['水下金叉'],
-    position: '8-10 成', margin: '可融资', posClass: 'pos-mid', rank: 4 }
+    position: '8-10 成', posClass: 'pos-mid', rank: 4 },
+  { id: 'rule2', desc: '日线 5-10 死叉 或 MACD 顶背离',
+    maStates: ['5-10死叉', '5-10粘合', '多头排列'], macdStates: ['水上顶背离'],
+    position: '5-8 成', posClass: 'pos-mid', rank: 3 },
+  { id: 'rule3', desc: '日线 5-10 空头排列 + MACD 水上偏弱',
+    maStates: ['空头排列'], macdStates: ['水上死叉', '水上空头', '水上顶背离'],
+    position: '3-5 成', posClass: 'pos-low', rank: 2 },
+  { id: 'rule4', desc: '日线 5-10 空头排列 + MACD 水下偏弱',
+    maStates: ['空头排列'], macdStates: ['水下死叉', '水下空头'],
+    position: '1-2 成', posClass: 'pos-min', rank: 1 }
 ];
 
 // 单指数：读取规则表 → 命中规则
@@ -638,7 +668,7 @@ function calcPositionByRules(maState, macdState) {
 
 // 整体仓位：取所有指数命中规则中 rank 最小（最保守）的
 function autoCalcDRPosition() {
-  if (!drData.marketRegime) drData.marketRegime = { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' };
+  if (!drData.marketRegime) drData.marketRegime = { position: '', matchedRuleId: '', matchedRuleDesc: '', note: '' };
 
   // 收集每个指数命中的规则
   var matchedRules = [];
@@ -659,7 +689,6 @@ function autoCalcDRPosition() {
     drData.marketRegime.matchedRuleId = '';
     drData.marketRegime.matchedRuleDesc = '';
     drData.marketRegime.position = '';
-    drData.marketRegime.margin = '';
     updateDRSuggestedPosUI('—', '', '请为每个指数选择「均线状态」和「MACD 状态」');
     hideDRMatchedRule();
     return;
@@ -674,7 +703,6 @@ function autoCalcDRPosition() {
   drData.marketRegime.matchedRuleId = weakest.rule.id;
   drData.marketRegime.matchedRuleDesc = weakest.rule.desc + '（来自：' + weakest.indexName + '）';
   drData.marketRegime.position = weakest.rule.position;
-  drData.marketRegime.margin = weakest.rule.margin;
 
   var hintParts = matchedRules.map(function(m) { return m.indexName + ':' + m.rule.position; });
   updateDRSuggestedPosUI(weakest.rule.position, weakest.rule.posClass,
@@ -697,17 +725,12 @@ function updateDRMatchedRuleUI(rule, indexName) {
   var block = document.getElementById('drMatchedRule');
   var descEl = document.getElementById('drMatchedRuleDesc');
   var posEl = document.getElementById('drMatchedRulePos');
-  var marginEl = document.getElementById('drMatchedRuleMargin');
   if (!block) return;
   block.style.display = 'flex';
   if (descEl) descEl.textContent = rule.desc + (indexName ? '（来自：' + indexName + '）' : '');
   if (posEl) {
     posEl.textContent = '仓位 ' + rule.position;
     posEl.className = 'dr-matched-rule-tag';
-  }
-  if (marginEl) {
-    marginEl.textContent = rule.margin;
-    marginEl.className = 'dr-matched-rule-tag';
   }
 }
 
@@ -724,10 +747,9 @@ function highlightDRMatchedRuleRow(ruleId) {
 
 // ===== 填充表单：仓位策略区 =====
 function renderDRMarketRegime() {
-  if (!drData.marketRegime) drData.marketRegime = { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' };
+  if (!drData.marketRegime) drData.marketRegime = { position: '', matchedRuleId: '', matchedRuleDesc: '', note: '' };
   var mr = drData.marketRegime;
 
-  setTextVal('drScalingStrategy', mr.scalingStrategy || '');
   setTextVal('drRegimeNote', mr.note || '');
 
   // 如果已记录命中规则 → 重新展示
@@ -750,8 +772,7 @@ function renderDRMarketRegime() {
 }
 
 function saveDRMarketRegimeToData() {
-  if (!drData.marketRegime) drData.marketRegime = { position: '', margin: '', matchedRuleId: '', matchedRuleDesc: '', scalingStrategy: '', note: '' };
-  drData.marketRegime.scalingStrategy = getTextVal('drScalingStrategy');
+  if (!drData.marketRegime) drData.marketRegime = { position: '', matchedRuleId: '', matchedRuleDesc: '', note: '' };
   drData.marketRegime.note = getTextVal('drRegimeNote');
 }
 
@@ -1161,30 +1182,90 @@ function exportDRData() {
   URL.revokeObjectURL(url);
 }
 
+// 导入文件大小上限：5 MB（足够容纳数千条复盘记录）
+var DR_IMPORT_MAX_SIZE = 5 * 1024 * 1024;
+
 function importDRData(event) {
   var file = event.target.files[0];
   if (!file) return;
+
+  // 校验文件类型：仅允许 .json 或 application/json
+  var isJsonName = /\.json$/i.test(file.name);
+  var isJsonType = file.type === 'application/json' || file.type === '';
+  if (!isJsonName && !isJsonType) {
+    drAlert('导入失败', '仅支持 JSON 格式的文件');
+    event.target.value = '';
+    return;
+  }
+
+  // 校验文件大小
+  if (file.size > DR_IMPORT_MAX_SIZE) {
+    drAlert('导入失败', '文件过大（超过 5MB），请检查是否选错文件');
+    event.target.value = '';
+    return;
+  }
+
+  if (file.size === 0) {
+    drAlert('导入失败', '文件为空');
+    event.target.value = '';
+    return;
+  }
+
   var reader = new FileReader();
+  reader.onerror = function() {
+    drAlert('导入失败', '读取文件时发生错误');
+    event.target.value = '';
+  };
   reader.onload = function(e) {
+    var imported;
     try {
-      var imported = JSON.parse(e.target.result);
-      if (Array.isArray(imported)) {
-        imported.forEach(function(item) {
-          var idx = drAllReviews.findIndex(function(r) { return r.date === item.date; });
-          if (idx >= 0) drAllReviews[idx] = item;
-          else drAllReviews.push(item);
-        });
-        saveLocalReviews();
-        renderReviewHistory();
-        loadReviewForDate(drCurrentDate);
-        showDRStatus('导入成功', 'success');
-      }
-    } catch(e) {
-      drAlert('导入失败', '文件格式错误');
+      imported = JSON.parse(e.target.result);
+    } catch(err) {
+      drAlert('导入失败', '文件内容不是合法的 JSON：' + err.message);
+      event.target.value = '';
+      return;
     }
+
+    // 必须是数组
+    if (!Array.isArray(imported)) {
+      drAlert('导入失败', '文件内容应为复盘记录数组');
+      event.target.value = '';
+      return;
+    }
+
+    // 逐条校验：必须有 date 字段且为字符串
+    var validItems = [];
+    var skipped = 0;
+    imported.forEach(function(item) {
+      if (item && typeof item.date === 'string' && item.date.length > 0) {
+        validItems.push(item);
+      } else {
+        skipped++;
+      }
+    });
+
+    if (validItems.length === 0) {
+      drAlert('导入失败', '文件中没有有效的复盘记录（每条记录必须包含 date 字段）');
+      event.target.value = '';
+      return;
+    }
+
+    validItems.forEach(function(item) {
+      var idx = drAllReviews.findIndex(function(r) { return r.date === item.date; });
+      if (idx >= 0) drAllReviews[idx] = item;
+      else drAllReviews.push(item);
+    });
+    dedupDRReviews();
+    saveLocalReviews();
+    renderReviewHistory();
+    loadReviewForDate(drCurrentDate);
+
+    var msg = '成功导入 ' + validItems.length + ' 条复盘记录';
+    if (skipped > 0) msg += '（跳过无效记录 ' + skipped + ' 条）';
+    showDRStatus(msg, 'success');
+    event.target.value = '';
   };
   reader.readAsText(file);
-  event.target.value = '';
 }
 
 // ===== 删除复盘 =====
@@ -1238,7 +1319,96 @@ function safeJSON(str) {
   try { return JSON.parse(str); } catch(e) { return null; }
 }
 
-function closeDRModal() {}
+// 关闭当前打开的弹窗（ESC 触发或外部调用）
+// 会自动归还焦点到打开弹窗前的元素
+function closeDRModal() {
+  var openModal = document.querySelector('.modal-overlay.show');
+  if (!openModal) return;
+
+  // 调用该弹窗对应的关闭函数（如果存在）
+  var closeFns = {
+    'drDisciplineModal': closeDRDisciplineModal,
+    'drDisciplineDelModal': closeDRDisciplineDelModal,
+    'drAlertModal': closeDRAlertModal,
+    'drConfirmModal': closeDRConfirmModal
+  };
+  var fn = closeFns[openModal.id];
+  if (fn) {
+    fn();
+  } else {
+    openModal.classList.remove('show');
+  }
+
+  // 归还焦点
+  if (drLastFocused && typeof drLastFocused.focus === 'function') {
+    drLastFocused.focus();
+    drLastFocused = null;
+  }
+}
+
+// 焦点陷阱：在弹窗打开时记录触发元素、关闭时归还焦点
+var drLastFocused = null;
+var drFocusTrapHandler = null;
+
+function setupDRFocusTrap(modalEl) {
+  // 记录当前焦点元素，以便关闭弹窗后归还
+  drLastFocused = document.activeElement;
+
+  // 将焦点移入弹窗（优先关闭按钮，其次弹窗本身）
+  setTimeout(function() {
+    var focusable = modalEl.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (focusable) focusable.focus();
+    else modalEl.focus();
+  }, 50);
+
+  // 移除旧处理器
+  if (drFocusTrapHandler) {
+    document.removeEventListener('keydown', drFocusTrapHandler);
+  }
+
+  // Tab 键循环：在弹窗内焦点之间循环
+  drFocusTrapHandler = function(e) {
+    if (e.key !== 'Tab' || !modalEl.classList.contains('show')) return;
+    var focusables = modalEl.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    if (focusables.length === 0) return;
+    var first = focusables[0];
+    var last = focusables[focusables.length - 1];
+    if (e.shiftKey) {
+      // Shift+Tab：从第一个跳到最后一个
+      if (document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      // Tab：从最后一个跳到第一个
+      if (document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  };
+  document.addEventListener('keydown', drFocusTrapHandler);
+}
+
+// 监听所有弹窗的 show 类变化，自动启用/关闭焦点陷阱
+(function() {
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      if (m.attributeName !== 'class') return;
+      var target = m.target;
+      if (target.classList.contains('show')) {
+        setupDRFocusTrap(target);
+      }
+    });
+  });
+  // 等 DOM 加载完成后再观察
+  window.addEventListener('DOMContentLoaded', function() {
+    ['drDisciplineModal', 'drDisciplineDelModal', 'drAlertModal', 'drConfirmModal'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) observer.observe(el, { attributes: true });
+    });
+  });
+})();
 
 // ===== 通用弹窗 =====
 var drConfirmCallback = null;
