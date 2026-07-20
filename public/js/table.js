@@ -189,11 +189,17 @@ function updateTrade(id, field, value) {
   }
 
   updateAll();
-  
+
   // 同步保存到localStorage（确保不丢失）
   try { localStorage.setItem('trades_v4', JSON.stringify(trades)); } catch(e) {}
-  
-  // 自动保存到数据库（带防抖）
+
+  // 立即把这条 trade 写回 IndexedDB（不等防抖）
+  // 防止用户快速刷新页面时，防抖 save() 未触发导致 IDB 旧数据覆盖新数据
+  if (typeof saveTradeToDB === 'function' && typeof db !== 'undefined' && db) {
+    try { saveTradeToDB(t); } catch(e) { console.warn('IDB 即时写入失败:', e); }
+  }
+
+  // 自动保存到数据库（带防抖，用于触发服务器同步等）
   if (typeof triggerAutoSave === 'function') {
     triggerAutoSave();
   }

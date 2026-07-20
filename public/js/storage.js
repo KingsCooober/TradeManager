@@ -65,9 +65,42 @@ function loadAllFromDB() {
     getAllWithdrawalsFromDB(),
     loadSettingsFromDB()
   ]).then(function(results) {
-    trades = results[0] || [];
-    deposits = results[1] || [];
-    withdrawals = results[2] || [];
+    var idbTrades = results[0] || [];
+
+    // 关键修复：以 localStorage 为准（因为 updateTrade 总是同步写 localStorage）
+    // 防止 IDB 异步写入未完成时刷新导致 IDB 旧数据覆盖 localStorage 新数据
+    // 例如：用户快速修改"卖点类型"后立即刷新页面，防抖 save() 未触发，IDB 仍是旧值
+    try {
+      var lsTrades = JSON.parse(localStorage.getItem('trades_v4') || '[]');
+      if (Array.isArray(lsTrades) && lsTrades.length > 0) {
+        // 用 localStorage 的数据作为基础，再用 IDB 中存在但 localStorage 中没有的记录补全
+        var idbById = {};
+        idbTrades.forEach(function(t) { if (t && t.id) idbById[String(t.id)] = t; });
+        var merged = lsTrades.map(function(lsT) {
+          if (!lsT || !lsT.id) return lsT;
+          return lsT;  // localStorage 总是最新
+        });
+        // 补充 IDB 中有但 localStorage 中没有的 trade
+        Object.keys(idbById).forEach(function(id) {
+          if (!lsTrades.some(function(t) { return t && String(t.id) === id; })) {
+            merged.push(idbById[id]);
+          }
+        });
+        idbTrades = merged;
+      }
+    } catch(e) { console.warn('合并 localStorage 备份失败:', e); }
+
+    trades = idbTrades;
+
+    // funds 同样以 localStorage 为准
+    try {
+      var lsFunds = JSON.parse(localStorage.getItem('funds_v1') || '{}');
+      deposits = Array.isArray(lsFunds.deposits) ? lsFunds.deposits : (results[1] || []);
+      withdrawals = Array.isArray(lsFunds.withdrawals) ? lsFunds.withdrawals : (results[2] || []);
+    } catch(e) {
+      deposits = results[1] || [];
+      withdrawals = results[2] || [];
+    }
   });
 }
 
