@@ -847,7 +847,20 @@ function saveTradeFromModal() {
 
   // 如果出场价被清空，意味着交易回退到未平仓状态
   // 此时盈亏金额、pnlR、出场日期、出场类型应一并清空，状态改回 open
-  if (tradeData.exit === '') {
+  // 但仅当原 trade 已有出场价（用户主动从有 → 无）时才联动清空
+  // 如果原本就是 open（无出场价），保留用户填写的 exitType（事后补全场景）
+  var oldExit = '';
+  if (id) {
+    var oldTrade = null;
+    for (var i = 0; i < trades.length; i++) {
+      if (String(trades[i].id) === String(id)) { oldTrade = trades[i]; break; }
+    }
+    oldExit = oldTrade && oldTrade.exit !== '' ? oldTrade.exit : '';
+  } else {
+    oldExit = 'new';  // 新增模式，标记一下
+  }
+  if (tradeData.exit === '' && oldExit !== '' && oldExit !== 'new') {
+    // 用户主动清空已有出场价 → 联动清空相关字段
     tradeData.pnl = '';
     tradeData.pnlR = '';
     tradeData.exitDate = '';
