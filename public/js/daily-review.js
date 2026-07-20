@@ -613,6 +613,9 @@ function recalcDROverall() {
 
   // 2. 整体仓位 = 各指数命中规则中取最保守的（仓位区间最小的）
   autoCalcDRPosition();
+
+  // 3. 同步刷新历史复盘列表（让当前编辑的复盘卡片实时反映走势+仓位变化）
+  renderReviewHistory();
 }
 
 // 单个指数的走势判定（5-10 均线 + MACD 组合 → 6 种走势之一）
@@ -1211,30 +1214,57 @@ function renderReviewHistory() {
   var container = document.getElementById('drHistoryList');
   if (!container) return;
 
-  if (drAllReviews.length === 0) {
+  // 合并当前正在编辑的复盘（drData）进列表
+  // 这样未保存的修改也能在历史卡片中实时看到
+  // 用 JSON 深拷贝避免 drData 与历史记录共享引用
+  var merged = drAllReviews.map(function(r) { return JSON.parse(JSON.stringify(r)); });
+  if (drData && drData.date) {
+    var drSnapshot = JSON.parse(JSON.stringify(drData));
+    var idx = merged.findIndex(function(r) { return r.date === drSnapshot.date; });
+    if (idx >= 0) {
+      merged[idx] = drSnapshot;  // 用最新的 drData 覆盖（包含未保存修改）
+    } else {
+      merged.push(drSnapshot);
+    }
+  }
+
+  if (merged.length === 0) {
     container.innerHTML = '<div class="dr-empty-hint">暂无历史复盘</div>';
     return;
   }
 
-  var sorted = drAllReviews.slice().sort(function(a, b) { return b.date > a.date ? 1 : b.date < a.date ? -1 : 0; });
+  var sorted = merged.slice().sort(function(a, b) { return b.date > a.date ? 1 : b.date < a.date ? -1 : 0; });
   var html = '';
   sorted.forEach(function(r) {
-    var indices = r.market || [];
     var isActive = r.date === drCurrentDate;
-    var shData = indices.find(function(m) { return m.key === 'sh'; }) || indices[0] || {};
+    // 大盘走势：取 indices 中第一个有 trendResult 的指数结果
+    var indices = Array.isArray(r.indices) ? r.indices : [];
+    var trendText = '-';
+    var trendCls = '';
+    for (var i = 0; i < indices.length; i++) {
+      if (indices[i].trendResult) {
+        trendText = indices[i].trendResult;
+        trendCls = DR_TREND_STYLES[indices[i].trendResult] ? DR_TREND_STYLES[indices[i].trendResult].cls : '';
+        break;
+      }
+    }
+    // 兼容旧数据：旧 r.market 结构里第一个指数的 trend
+    if (trendText === '-' && Array.isArray(r.market) && r.market[0] && r.market[0].trend) {
+      trendText = r.market[0].trend;
+    }
+    // 建议仓位：取 marketRegime.position
     var mr = r.marketRegime || {};
+    var position = mr.position || '-';
+
     html += '<div class="dr-history-item' + (isActive ? ' active' : '') + '" onclick="jumpToReview(\'' + esc(r.date) + '\')">';
     html += '<div class="dr-history-date">' + esc(r.date) + '</div>';
     html += '<div class="dr-history-info">';
-    html += '<span class="dr-history-badge">' + esc(shData.position || '-') + '</span>';
-    html += '<span class="dr-history-trend">' + esc(shData.trend || '-') + '</span>';
-    html += '<span class="dr-history-sentiment">' + esc(shData.sentiment || '-') + '</span>';
-    if (mr.regime) {
-      html += '<span class="dr-history-sentiment" style="background: rgba(67,97,238,0.1); color: var(--color-blue);">' + esc(mr.regime) + '</span>';
+    if (trendCls) {
+      html += '<span class="dr-history-trend ' + trendCls + '">' + esc(trendText) + '</span>';
+    } else {
+      html += '<span class="dr-history-trend">' + esc(trendText) + '</span>';
     }
-    if (mr.position) {
-      html += '<span class="dr-history-sentiment">' + esc(mr.position) + '</span>';
-    }
+    html += '<span class="dr-history-badge">' + esc(position) + '</span>';
     html += '</div>';
     html += '</div>';
   });
