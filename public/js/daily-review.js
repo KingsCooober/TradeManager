@@ -719,12 +719,15 @@ function analyzeTrend(maState, macdState, ma5Position) {
     if (macdState === '水上金叉' || macdState === '水上多头') {
       trend = '震荡整理';
       reason = '5-10 死叉 + MACD 水上强势 → 短线震荡';
-    } else if (macdState === '水下金叉' || macdState === '水下多头' || macdState === '水下底背离') {
+    } else if (macdState === '水下金叉' || macdState === '水下多头') {
       trend = '弱势下跌';
       reason = '5-10 死叉 + MACD 水下转强 → 弱势修复中';
     } else if (macdState === '水上死叉' || macdState === '水上空头' || macdState === '水上顶背离') {
       trend = '趋势走弱';
       reason = '5-10 高位死叉 + MACD 水上转弱（顶背离/水上死叉）→ 典型顶部信号';
+    } else if (macdState === '水下底背离') {
+      trend = '反弹观察';
+      reason = '5-10 死叉 + MACD 水下底背离 → 弱势中酝酿反弹';
     } else {
       trend = '弱势下跌';
       reason = '5-10 死叉 + MACD 水下 → 趋势转弱';
