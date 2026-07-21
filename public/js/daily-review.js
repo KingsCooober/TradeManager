@@ -828,57 +828,26 @@ function updateDRTrendResultUI(trend, hint) {
   }
 }
 
-// ===== 仓位策略规则表（5 条规则，按仓位从大到小，基于 5-10 均线 + MACD） =====
-var DR_POSITION_RULES = [
-  { id: 'rule1', desc: '日线 5-10 多头排列 + MACD 水上强势',
-    maStates: ['多头排列'], macdStates: ['水上金叉', '水上多头'],
-    position: '10-16 成', posClass: 'pos-max', rank: 5 },
-  { id: 'rule5', desc: '日线 5-10 金叉 且 MACD 水下金叉后',
-    maStates: ['5-10金叉'], macdStates: ['水下金叉'],
-    position: '8-10 成', posClass: 'pos-mid', rank: 4 },
-  { id: 'rule2', desc: '日线 5-10 死叉 或 MACD 顶背离',
-    maStates: ['5-10死叉', '5-10粘合', '多头排列'], macdStates: ['水上顶背离'],
-    position: '5-8 成', posClass: 'pos-mid', rank: 3 },
-  { id: 'rule3', desc: '日线 5-10 空头排列 + MACD 水上偏弱',
-    maStates: ['空头排列'], macdStates: ['水上死叉', '水上空头', '水上顶背离'],
-    position: '3-5 成', posClass: 'pos-low', rank: 2 },
-  { id: 'rule4', desc: '日线 5-10 空头排列 + MACD 水下偏弱',
-    maStates: ['空头排列'], macdStates: ['水下死叉', '水下空头'],
-    position: '1-2 成', posClass: 'pos-min', rank: 1 }
-];
+// ===== 整体走势 → 仓位映射（6 档走势对应 6 档仓位）=====
+// 仓位与整体走势一一对应，砍掉了原 5 条独立规则表（与 analyzeTrend 重复）
+var TREND_TO_POSITION = {
+  '强势上涨': { range: '10-16 成', cls: 'pos-max' },
+  '多头趋势': { range: '8-10 成',  cls: 'pos-mid' },
+  '反弹观察': { range: '5-8 成',  cls: 'pos-mid' },
+  '震荡整理': { range: '3-5 成',  cls: 'pos-low' },
+  '趋势走弱': { range: '1-2 成',  cls: 'pos-min' },
+  '弱势下跌': { range: '0 成（空仓）', cls: 'pos-min' }
+};
 
-// 单指数：读取规则表 → 命中规则
-function calcPositionByRules(maState, macdState) {
-  if (!maState || !macdState) return null;
-  for (var i = 0; i < DR_POSITION_RULES.length; i++) {
-    var rule = DR_POSITION_RULES[i];
-    if (rule.maStates.indexOf(maState) >= 0 && rule.macdStates.indexOf(macdState) >= 0) {
-      return rule;
-    }
-  }
-  return null;
-}
-
-// 整体仓位：取所有指数命中规则中 rank 最小（最保守）的
+// 整体仓位 = 复用整体走势（取最弱指数）→ 直接映射仓位
 function autoCalcDRPosition() {
   if (!drData.marketRegime) drData.marketRegime = { position: '', matchedRuleId: '', matchedRuleDesc: '', note: '' };
 
-  // 收集每个指数命中的规则
-  var matchedRules = [];
-  var indices = Array.isArray(drData.indices) ? drData.indices : [];
-  indices.forEach(function(idx) {
-    if (idx.maState && idx.macdState) {
-      var r = calcPositionByRules(idx.maState, idx.macdState);
-      if (r) matchedRules.push({ rule: r, indexName: idx.name });
-    }
-  });
+  var overall = recalcDROverallTrend();
+  var trend = overall.trend;
 
-  // 清除所有规则行的高亮
-  document.querySelectorAll('.dr-rules-table tbody tr').forEach(function(tr) {
-    tr.classList.remove('matched');
-  });
-
-  if (matchedRules.length === 0) {
+  // 没有有效走势
+  if (!trend || !TREND_TO_POSITION[trend]) {
     drData.marketRegime.matchedRuleId = '';
     drData.marketRegime.matchedRuleDesc = '';
     drData.marketRegime.position = '';
@@ -887,21 +856,12 @@ function autoCalcDRPosition() {
     return;
   }
 
-  // 取 rank 最小（最保守）的规则
-  var weakest = matchedRules[0];
-  matchedRules.forEach(function(m) {
-    if (m.rule.rank < weakest.rule.rank) weakest = m;
-  });
-
-  drData.marketRegime.matchedRuleId = weakest.rule.id;
-  drData.marketRegime.matchedRuleDesc = weakest.rule.desc + '（来自：' + weakest.indexName + '）';
-  drData.marketRegime.position = weakest.rule.position;
-
-  var hintParts = matchedRules.map(function(m) { return m.indexName + ':' + m.rule.position; });
-  updateDRSuggestedPosUI(weakest.rule.position, weakest.rule.posClass,
-    '各指数命中：' + hintParts.join(' / ') + ' → 取最保守：' + weakest.indexName);
-  updateDRMatchedRuleUI(weakest.rule, weakest.indexName);
-  highlightDRMatchedRuleRow(weakest.rule.id);
+  var pos = TREND_TO_POSITION[trend];
+  drData.marketRegime.matchedRuleId = 'trend_' + trend;
+  drData.marketRegime.matchedRuleDesc = '整体走势：' + trend + ' → 建议仓位 ' + pos.range;
+  drData.marketRegime.position = pos.range;
+  updateDRSuggestedPosUI(pos.range, pos.cls, '基于整体走势「' + trend + '」自动匹配');
+  hideDRMatchedRule();
 }
 
 function updateDRSuggestedPosUI(position, posClass, hint) {

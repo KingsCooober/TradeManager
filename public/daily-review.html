@@ -158,64 +158,16 @@
           </div>
         </div>
 
-        <!-- 子模块 B: 仓位策略（基于规则表自动计算） -->
+        <!-- 子模块 B: 仓位策略（基于整体走势自动计算） -->
         <div class="dr-subsection dr-subsection--spaced">
-          <div class="dr-subsection-title">🎯 仓位策略（自动计算）</div>
+          <div class="dr-subsection-title">🎯 仓位策略（基于整体走势自动计算）</div>
 
           <!-- 自动计算结果 -->
           <div class="dr-suggested-pos" id="drSuggestedPos">
-            <div class="dr-suggested-pos-label">整体建议仓位（取最保守指数）</div>
+            <div class="dr-suggested-pos-label">建议仓位</div>
             <div class="dr-suggested-pos-value" id="drSuggestedPosValue">—</div>
-            <div class="dr-suggested-pos-hint" id="drSuggestedPosHint">基于每个指数的均线 + MACD 状态，取最保守命中规则</div>
+            <div class="dr-suggested-pos-hint" id="drSuggestedPosHint">根据整体走势自动匹配（6 档走势 → 6 档仓位）</div>
           </div>
-
-          <!-- 匹配的规则（动态展示） -->
-          <div class="dr-matched-rule" id="drMatchedRule" hidden>
-            <div class="dr-matched-rule-label">命中规则</div>
-            <div class="dr-matched-rule-body">
-              <div class="dr-matched-rule-desc" id="drMatchedRuleDesc"></div>
-              <div class="dr-matched-rule-meta">
-                <span class="dr-matched-rule-tag" id="drMatchedRulePos"></span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 仓位策略规则表（只读 + 命中高亮，默认折叠） -->
-          <details class="dr-strategy-ref">
-            <summary>📋 仓位策略规则表 <span class="dr-summary-hint">（基于日线均线 / MACD 状态自动匹配 · 点击展开）</span></summary>
-            <div class="dr-strategy-body">
-            <table class="dr-rules-table" id="drRulesTable">
-              <thead>
-                <tr>
-                  <th class="col-form">技术形态</th>
-                  <th class="col-pos">建议仓位</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr data-rule-id="rule1">
-                  <td>日线 5-10 <strong>多头排列</strong> + <strong>MACD 水上强势</strong></td>
-                  <td><span class="dr-pos-tag dr-pos-tag-max">10-16 成</span></td>
-                </tr>
-                <tr data-rule-id="rule5">
-                  <td>日线 5-10 <strong>金叉</strong> 且 <strong>MACD 水下金叉后</strong></td>
-                  <td><span class="dr-pos-tag dr-pos-tag-mid">8-10 成</span></td>
-                </tr>
-                <tr data-rule-id="rule2">
-                  <td>日线 5-10 <strong>死叉</strong> 或 <strong>MACD 顶背离</strong></td>
-                  <td><span class="dr-pos-tag dr-pos-tag-mid">5-8 成</span></td>
-                </tr>
-                <tr data-rule-id="rule3">
-                  <td>日线 5-10 <strong>空头排列</strong> + <strong>MACD 水上偏弱</strong></td>
-                  <td><span class="dr-pos-tag dr-pos-tag-low">3-5 成</span></td>
-                </tr>
-                <tr data-rule-id="rule4">
-                  <td>日线 5-10 <strong>空头排列</strong> + <strong>MACD 水下偏弱</strong></td>
-                  <td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td>
-                </tr>
-              </tbody>
-            </table>
-            </div>
-          </details>
 
           <!-- 综合仓位调整计划 -->
           <div class="dr-field dr-field--spaced">
@@ -402,7 +354,7 @@
 <script src="js/header.js?v=3"></script>
 <script src="js/database.js?v=4"></script>
 <script src="js/sync.js?v=6"></script>
-<script src="js/daily-review.js?v=20260720010"></script>
+<script src="js/daily-review.js?v=20260720011"></script>
 <script>
 renderAppHeader('daily');
 </script>
