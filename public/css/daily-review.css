@@ -388,6 +388,39 @@
   line-height: 1.4;
 }
 
+/* 手动走势选择：单行布局（左 select，右结果） */
+.dr-index-trend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.dr-index-trend-row .dr-index-manual-trend {
+  flex: 0 0 160px;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.dr-index-trend-row .dr-index-trend-result {
+  flex: 1 1 auto;
+  text-align: left;
+  justify-content: flex-start;
+  padding-left: 12px;
+}
+
+.dr-manual-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-blue);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
 @media (max-width: 900px) {
   .dr-indices-grid {
     grid-template-columns: 1fr;

@@ -488,6 +488,16 @@ var DR_TREND_STYLES = {
   '反弹观察': { cls: 'trend-rebound',  color: 'var(--color-blue)' }
 };
 
+// 走势手动选择选项（6 档，按强到弱），用于覆盖自动计算结果
+var DR_TREND_OPTIONS = [
+  { value: '强势上涨', label: '强势上涨' },
+  { value: '多头趋势', label: '多头趋势' },
+  { value: '反弹观察', label: '反弹观察' },
+  { value: '震荡整理', label: '震荡整理' },
+  { value: '趋势走弱', label: '趋势走弱' },
+  { value: '弱势下跌', label: '弱势下跌' }
+];
+
 // 均线状态下拉选项（只看 5-10 两条均线）
 var DR_MA_OPTIONS = [
   { value: '5-10金叉',  label: '5-10 金叉' },
@@ -566,7 +576,17 @@ function renderDRIndicesMAStatus() {
     // 局部走势结果（dr-field-wide 独占一行，强制换行）
     html += '<div class="dr-field dr-field-wide dr-index-trend" data-index="' + i + '">';
     html += '<label>走势判断</label>';
-    html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '—') + '</div>';
+    // 手动选择走势（覆盖自动计算结果）
+    var manualTrend = idx.manualTrend || '';
+    html += '<div class="dr-index-trend-row">';
+    html += '<select class="dr-select dr-index-manual-trend" data-index="' + i + '" title="手动选择走势会覆盖下方自动计算结果">';
+    html += '<option value="">📊 自动计算</option>';
+    DR_TREND_OPTIONS.forEach(function(opt) {
+      html += '<option value="' + esc(opt.value) + '"' + (manualTrend === opt.value ? ' selected' : '') + '>' + esc(opt.label) + '</option>';
+    });
+    html += '</select>';
+    html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '—') + (manualTrend ? ' <span class="dr-manual-tag">[手动]</span>' : '') + '</div>';
+    html += '</div>';
     if (idx.trendHint) {
       html += '<div class="dr-index-trend-hint">' + esc(idx.trendHint) + '</div>';
     }
@@ -581,6 +601,12 @@ function renderDRIndicesMAStatus() {
   container.querySelectorAll('.dr-index-ma, .dr-index-macd, .dr-index-ma5pos').forEach(function(el) {
     el.addEventListener('change', function() {
       onDRIndexChange(parseInt(el.dataset.index));
+    });
+  });
+  // 手动走势 select 独立绑定
+  container.querySelectorAll('.dr-index-manual-trend').forEach(function(el) {
+    el.addEventListener('change', function() {
+      onDRManualTrendChange(parseInt(el.dataset.index));
     });
   });
 }
@@ -600,14 +626,16 @@ function onDRIndexChange(idx) {
   if (!drData.indices[idx].ma5Analysis) drData.indices[idx].ma5Analysis = { currentPrice: null, ma5: null, position: '' };
   drData.indices[idx].ma5Analysis.position = ma5Pos;
 
-  // 重新算这个指数的走势
-  if (maSelect.value && macdSelect.value) {
-    var r = analyzeTrend(maSelect.value, macdSelect.value, ma5Pos);
-    drData.indices[idx].trendResult = r.trend;
-    drData.indices[idx].trendHint = r.reason;
-  } else {
-    drData.indices[idx].trendResult = '';
-    drData.indices[idx].trendHint = '';
+  // 仅在未手动选走势时才自动重算（手动选走势会覆盖）
+  if (!drData.indices[idx].manualTrend) {
+    if (maSelect.value && macdSelect.value) {
+      var r = analyzeTrend(maSelect.value, macdSelect.value, ma5Pos);
+      drData.indices[idx].trendResult = r.trend;
+      drData.indices[idx].trendHint = r.reason;
+    } else {
+      drData.indices[idx].trendResult = '';
+      drData.indices[idx].trendHint = '';
+    }
   }
 
   // 更新该指数的局部走势 UI（不重渲染整列，避免 select 闪烁）
@@ -627,6 +655,46 @@ function onDRIndexChange(idx) {
   }, 1000);
 }
 
+// 手动选择走势（覆盖自动计算结果）
+function onDRManualTrendChange(idx) {
+  if (!Array.isArray(drData.indices) || !drData.indices[idx]) return;
+  var sel = document.querySelector('.dr-index-manual-trend[data-index="' + idx + '"]');
+  if (!sel) return;
+  var v = sel.value; // '' 表示回退到自动计算
+  drData.indices[idx].manualTrend = v;
+
+  if (v) {
+    // 手动覆盖：直接用选中的走势
+    drData.indices[idx].trendResult = v;
+    drData.indices[idx].trendHint = '手动选择走势（已覆盖自动计算结果）';
+  } else {
+    // 回退到自动计算：基于当前 ma/macd/ma5 重算
+    var ma = drData.indices[idx].maState || '';
+    var macd = drData.indices[idx].macdState || '';
+    var ma5p = (drData.indices[idx].ma5Analysis && drData.indices[idx].ma5Analysis.position) || '';
+    if (ma && macd) {
+      var r = analyzeTrend(ma, macd, ma5p);
+      drData.indices[idx].trendResult = r.trend;
+      drData.indices[idx].trendHint = r.reason;
+    } else {
+      drData.indices[idx].trendResult = '';
+      drData.indices[idx].trendHint = '';
+    }
+  }
+
+  updateDRIndexTrendUI(idx);
+  recalcDROverall();
+  drDataDirty = true;
+
+  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
+  drAutoSaveTimer = setTimeout(function() {
+    saveCurrentFormToData();
+    saveDRData();
+    drDataDirty = false;
+    drAutoSaveTimer = null;
+  }, 1000);
+}
+
 // 更新单个指数的走势显示
 function updateDRIndexTrendUI(idx) {
   var trendBox = document.querySelector('.dr-index-trend[data-index="' + idx + '"] .dr-index-trend-result');
@@ -635,7 +703,7 @@ function updateDRIndexTrendUI(idx) {
   var item = drData.indices[idx];
   trendBox.className = 'dr-index-trend-result';
   if (item.trendResult && DR_TREND_STYLES[item.trendResult]) {
-    trendBox.textContent = item.trendResult;
+    trendBox.innerHTML = esc(item.trendResult) + (item.manualTrend ? ' <span class="dr-manual-tag">[手动]</span>' : '');
     trendBox.classList.add(DR_TREND_STYLES[item.trendResult].cls);
   } else {
     trendBox.textContent = '—';
