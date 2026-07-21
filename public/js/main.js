@@ -666,6 +666,8 @@ function handleLogin() {
       // 清空本地数据后再从服务器下载新用户数据（不上传）
       clearLocalDataAndRefresh();
       handleDownloadOnly();
+      // 通知其他页面/模块：用户已登录
+      try { window.dispatchEvent(new CustomEvent('user-login', { detail: syncModule.getCurrentUser() })); } catch(e) {}
     })
     .catch(err => {
       alert('登录失败: ' + err.message);
@@ -692,10 +694,14 @@ function clearLocalDataAndRefresh() {
     localStorage.removeItem('deposits');
     localStorage.removeItem('withdrawals');
     localStorage.removeItem('trades_v4');
+    localStorage.removeItem('funds_v1');
     localStorage.removeItem('initCapital');
     localStorage.removeItem('riskPct');
     localStorage.removeItem('maxRisk');
     localStorage.removeItem('feeRate');
+    // 清空复盘数据（避免切换账号后看到上一个用户的本地缓存）
+    localStorage.removeItem('daily_reviews');
+    localStorage.removeItem('diary2');
   } catch(e) {}
 
   // 清空 IndexedDB（异步，完成后刷新UI）
@@ -749,13 +755,15 @@ function handleLogout() {
   // 关闭管理员面板（如果打开）
   var adminPanel = document.getElementById('adminPanel');
   if (adminPanel) adminPanel.style.display = 'none';
-  
+
   // 退出时先清空本地数据，回到未登录的空白状态
   clearLocalDataAndRefresh();
   syncModule.logout();
   syncModule.updateSyncUI();
   updateHeaderSyncUI();
   syncModule.showSyncStatus('已退出登录', 'info');
+  // 通知其他页面/模块：用户已登出
+  try { window.dispatchEvent(new CustomEvent('user-logout')); } catch(e) {}
 }
 
 // ===== 修改密码功能 =====

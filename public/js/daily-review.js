@@ -37,8 +37,27 @@ function initDailyReview() {
   checkDRLoginStatus();
   setupDREventListeners();
   loadAllTrades();
+  // 订阅全局登录/登出事件
+  setupDRLoginEvents();
   // 注册全局搜索（每日复盘页：搜索历史复盘）
   setupDRGlobalSearch();
+}
+
+// 订阅全局登录/登出事件，修复"未登录状态打开页面后登录"导致复盘不同步的 bug
+function setupDRLoginEvents() {
+  window.addEventListener('user-login', function() {
+    console.log('[DR] 收到 user-login 事件，重新检查登录状态');
+    checkDRLoginStatus();
+  });
+  window.addEventListener('user-logout', function() {
+    console.log('[DR] 收到 user-logout 事件，重置登录状态');
+    drIsLoggedIn = false;
+    drCurrentUserId = null;
+    var loggedIn = document.getElementById('headerSyncLoggedIn');
+    var loggedOut = document.getElementById('headerSyncLoggedOut');
+    if (loggedIn) loggedIn.style.display = 'none';
+    if (loggedOut) loggedOut.style.display = 'flex';
+  });
 }
 
 function setupDRGlobalSearch() {
@@ -150,7 +169,7 @@ function loadFromServerDR() {
       } catch(e) {}
     }
     if (data.reviews && data.reviews.length > 0) {
-        drAllReviews = data.reviews.map(function(r) {
+        var serverReviews = data.reviews.map(function(r) {
           var summary = safeJSON(r.summary_json) || {};
           return {
             id: r.id,
@@ -168,10 +187,35 @@ function loadFromServerDR() {
             updatedAt: r.updated_at
           };
         });
+      // 关键修复：合并而非覆盖
+      // 服务器数据 + 本地存在但服务器没有的复盘（按 date 判断）
+      // 这样换电脑登录时，本地未同步的复盘会被增量上传到服务器
+      var byDate = {};
+      serverReviews.forEach(function(r) { if (r.date) byDate[r.date] = r; });
+      var localOnly = [];
+      drAllReviews.forEach(function(r) {
+        if (!r.date) return;
+        if (byDate[r.date]) return;  // 服务器有，跳过
+        localOnly.push(r);
+      });
+      drAllReviews = serverReviews.concat(localOnly);
       dedupDRReviews();   // 服务器可能有同日期多条记录（历史 bug），去重保留最新
       saveLocalReviews();
       renderReviewHistory();
       loadReviewForDate(drCurrentDate);
+      // 把本地独有的复盘增量上传到服务器
+      if (localOnly.length > 0) {
+        console.log('[DR] 检测到本地有 ' + localOnly.length + ' 条未同步的复盘，正在增量上传...');
+        localOnly.forEach(function(r) {
+          var backup = drData;
+          drData = JSON.parse(JSON.stringify(r));
+          syncToServerDR();
+          drData = backup;
+        });
+        if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) {
+          syncModule.showSyncStatus('已增量上传 ' + localOnly.length + ' 条复盘', 'success');
+        }
+      }
     }
   })
   .catch(function(e) {

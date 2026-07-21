@@ -14,8 +14,25 @@ function initDiary2() {
   syncFromTrades();
   applyFilters();
   checkLoginStatus();
+  // 订阅全局登录/登出事件
+  setupDiary2LoginEvents();
   // 注册全局搜索（diary2 页：搜索复盘记录）
   setupDiary2GlobalSearch();
+}
+
+// 订阅全局登录/登出事件，修复"未登录状态打开页面后登录"导致复盘不同步的 bug
+function setupDiary2LoginEvents() {
+  window.addEventListener('user-login', function() {
+    console.log('[Diary2] 收到 user-login 事件，重新检查登录状态');
+    checkLoginStatus();
+  });
+  window.addEventListener('user-logout', function() {
+    console.log('[Diary2] 收到 user-logout 事件，重置登录状态');
+    diary2IsLoggedIn = false;
+    diary2CurrentUserId = null;
+    document.getElementById('headerSyncLoggedIn').style.display = 'none';
+    document.getElementById('headerSyncLoggedOut').style.display = 'flex';
+  });
 }
 
 function setupDiary2GlobalSearch() {
@@ -242,7 +259,7 @@ function showNotLoggedIn() {
 
 function loadFromServer() {
   if (!diary2CurrentUserId) return;
-  
+
   fetch(`/api/diary/${diary2CurrentUserId}`, {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' }
@@ -250,7 +267,7 @@ function loadFromServer() {
   .then(res => res.json())
   .then(data => {
     if (data.diary && data.diary.length > 0) {
-      diary2Data = data.diary.map(item => ({
+      var serverDiary = data.diary.map(item => ({
         id: item.id,
         tradeDate: item.trade_date || item.tradeDate,
         symbol: item.symbol,
@@ -263,9 +280,35 @@ function loadFromServer() {
         createdAt: item.created_at || item.createdAt,
         updatedAt: item.updated_at || item.updatedAt
       }));
+      // 关键修复：合并而非覆盖
+      // 服务器数据 + 本地存在但服务器没有的复盘（按 tradeDate+symbol+id 复合键判断）
+      // 换电脑登录时，本地未同步的复盘会被增量上传
+      var byKey = {};
+      var makeKey = function(d) { return (d.id || '') + '|' + (d.tradeDate || '') + '|' + (d.symbol || ''); };
+      serverDiary.forEach(function(d) { byKey[makeKey(d)] = d; });
+      var localOnly = [];
+      diary2Data.forEach(function(d) {
+        if (byKey[makeKey(d)]) return;  // 服务器有
+        if (d._autoSynced && !d.tradeLogic && !d.mood && !d.lesson && !d.improvement) return;  // 自动同步但未填写，跳过
+        localOnly.push(d);
+      });
+      diary2Data = serverDiary.concat(localOnly);
       saveDiaryData();
       applyFilters();
-      showSyncStatus('同步成功', 'success');
+      // 增量上传本地独有的复盘
+      if (localOnly.length > 0) {
+        console.log('[Diary2] 检测到本地有 ' + localOnly.length + ' 条未同步的复盘，正在增量上传...');
+        localOnly.forEach(function(d) {
+          // 调用 syncToServer 上传该条（注意：syncToServer 上传的是 diary2Data 全部，先用 backup 替换）
+          var backup = diary2Data;
+          diary2Data = [d];
+          try { syncToServer(); } catch(e) {}
+          diary2Data = backup;
+        });
+        showSyncStatus('已增量上传 ' + localOnly.length + ' 条复盘', 'success');
+      } else {
+        showSyncStatus('同步成功', 'success');
+      }
     }
   })
   .catch(err => {
