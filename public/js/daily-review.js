@@ -34,6 +34,7 @@ function initDailyReview() {
   if (dateInput) dateInput.value = drCurrentDate;
   loadLocalReviews();
   loadDRDisciplineRules();
+  renderDRDisciplineRules();  // 渲染本地交易纪律
   checkDRLoginStatus();
   setupDREventListeners();
   loadAllTrades();
@@ -59,7 +60,6 @@ function setupDRLoginEvents() {
     if (loggedOut) loggedOut.style.display = 'flex';
   });
 }
-
 function setupDRGlobalSearch() {
   window.performGlobalSearch = function(q) {
     if (!Array.isArray(drAllReviews)) return [];
@@ -137,6 +137,7 @@ function checkDRLoginStatus() {
       }
     }
     loadFromServerDR();
+    loadDisciplineRulesFromServer();
   } else {
     var loggedIn = document.getElementById('headerSyncLoggedIn');
     var loggedOut = document.getElementById('headerSyncLoggedOut');
@@ -1132,6 +1133,62 @@ function loadDRDisciplineRules() {
 
 function saveDRDisciplineRules() {
   try { localStorage.setItem('daily_discipline_rules', JSON.stringify(drDisciplineRules)); } catch(e) {}
+  // 同步到服务器（如果已登录）
+  if (drIsLoggedIn && drCurrentUserId) {
+    syncDisciplineRulesToServer();
+  }
+}
+
+// 同步交易纪律到服务器
+function syncDisciplineRulesToServer() {
+  if (!drCurrentUserId) return;
+  fetch('/api/discipline-rules/' + drCurrentUserId, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rules: drDisciplineRules })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function() {
+    if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) {
+      syncModule.showSyncStatus('交易纪律已同步', 'success');
+    }
+  })
+  .catch(function(e) {
+    console.error('同步交易纪律失败:', e);
+  });
+}
+
+// 从服务器加载交易纪律
+function loadDisciplineRulesFromServer() {
+  if (!drCurrentUserId) return;
+  fetch('/api/discipline-rules/' + drCurrentUserId, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' }
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data && Array.isArray(data.rules)) {
+      // 合并策略：服务器数据 + 本地独有（去重）
+      // 如果两边的纪律完全一样，直接用服务器
+      // 如果本地有服务器没的，本地增量上传
+      var serverSet = new Set(data.rules);
+      var localOnly = drDisciplineRules.filter(function(r) { return !serverSet.has(r); });
+      if (localOnly.length > 0) {
+        // 本地有独有的，并集上传
+        var merged = data.rules.concat(localOnly);
+        drDisciplineRules = merged;
+        // 反向同步本地到服务器
+        syncDisciplineRulesToServer();
+      } else {
+        drDisciplineRules = data.rules;
+      }
+      saveDRDisciplineRules();
+      renderDRDisciplineRules();
+    }
+  })
+  .catch(function(e) {
+    console.error('加载交易纪律失败:', e);
+  });
 }
 
 function renderDRDisciplineRules() {

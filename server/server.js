@@ -196,7 +196,12 @@ db.serialize(() => {
     fee_rate REAL DEFAULT 0.03,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
-  )`);
+  )`, function() {
+    // 兼容旧库：增加 discipline_rules_json 列
+    db.run(`ALTER TABLE settings ADD COLUMN discipline_rules_json TEXT`, function(err) {
+      // 列已存在时会报错，忽略
+    });
+  });
 
   // 复盘总结表
   db.run(`CREATE TABLE IF NOT EXISTS diary2 (
@@ -500,14 +505,56 @@ app.post('/api/withdrawals/:userId', (req, res) => {
 app.post('/api/settings/:userId', (req, res) => {
   const { userId } = req.params;
   const { initCapital, riskPct, maxRisk, feeRate } = req.body;
-  
+
   db.run(
-    `INSERT OR REPLACE INTO settings (user_id, init_capital, risk_pct, max_risk, fee_rate, updated_at) 
+    `INSERT OR REPLACE INTO settings (user_id, init_capital, risk_pct, max_risk, fee_rate, updated_at)
      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [userId, initCapital, riskPct, maxRisk, feeRate],
     function(err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ message: '设置已保存' });
+    }
+  );
+});
+
+// ===== 交易纪律（全局） =====
+// 获取用户的交易纪律
+app.get('/api/discipline-rules/:userId', (req, res) => {
+  const { userId } = req.params;
+  db.get(
+    'SELECT discipline_rules_json FROM settings WHERE user_id = ?',
+    [userId],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      let rules = [];
+      if (row && row.discipline_rules_json) {
+        try { rules = JSON.parse(row.discipline_rules_json) || []; }
+        catch(e) { rules = []; }
+      }
+      res.json({ rules: rules });
+    }
+  );
+});
+
+// 保存用户的交易纪律
+app.post('/api/discipline-rules/:userId', (req, res) => {
+  const { userId } = req.params;
+  const { rules } = req.body;
+  if (!Array.isArray(rules)) {
+    return res.status(400).json({ error: 'rules 必须是数组' });
+  }
+  const rulesJson = JSON.stringify(rules);
+  // 如果 settings 行已存在则更新，否则插入
+  db.run(
+    `INSERT INTO settings (user_id, discipline_rules_json, updated_at)
+     VALUES (?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(user_id) DO UPDATE SET
+       discipline_rules_json = excluded.discipline_rules_json,
+       updated_at = CURRENT_TIMESTAMP`,
+    [userId, rulesJson],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ message: '交易纪律已保存' });
     }
   );
 });
@@ -527,7 +574,9 @@ app.delete('/api/clear/:userId', (req, res) => {
     db.run('DELETE FROM diary2 WHERE user_id = ?', [userId]);
     // 清空每日复盘
     db.run('DELETE FROM daily_reviews WHERE user_id = ?', [userId]);
-    
+    // 清空交易纪律（仅清空 discipline_rules_json 字段，保留 settings 行的其他设置）
+    db.run('UPDATE settings SET discipline_rules_json = NULL WHERE user_id = ?', [userId]);
+
     console.log(`[清空] 用户 ${userId} 的数据已清空`);
     res.json({ message: '所有数据已清空' });
   });

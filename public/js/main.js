@@ -702,6 +702,7 @@ function clearLocalDataAndRefresh() {
     // 清空复盘数据（避免切换账号后看到上一个用户的本地缓存）
     localStorage.removeItem('daily_reviews');
     localStorage.removeItem('diary2');
+    localStorage.removeItem('daily_discipline_rules');
   } catch(e) {}
 
   // 清空 IndexedDB（异步，完成后刷新UI）
