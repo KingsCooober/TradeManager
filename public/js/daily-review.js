@@ -573,23 +573,20 @@ function renderDRIndicesMAStatus() {
     html += '<option value="below"' + (ma5Pos === 'below' ? ' selected' : '') + '>在 5 日线下方</option>';
     html += '</select></div>';
 
-    // 局部走势结果（dr-field-wide 独占一行，强制换行）
+    // 局部走势结果（dr-field-wide 独占一行，强制换行）— 改成手动选择下拉框
     html += '<div class="dr-field dr-field-wide dr-index-trend" data-index="' + i + '">';
     html += '<label>走势判断</label>';
-    // 手动选择走势（覆盖自动计算结果）
+    // 手动选择走势（6 档可选）；3 select 联动时会自动设置值
     var manualTrend = idx.manualTrend || '';
     html += '<div class="dr-index-trend-row">';
-    html += '<select class="dr-select dr-index-manual-trend" data-index="' + i + '" title="手动选择走势会覆盖下方自动计算结果">';
-    html += '<option value="">📊 自动计算</option>';
+    html += '<select class="dr-select dr-index-manual-trend" data-index="' + i + '" title="手动选择走势">';
     DR_TREND_OPTIONS.forEach(function(opt) {
       html += '<option value="' + esc(opt.value) + '"' + (manualTrend === opt.value ? ' selected' : '') + '>' + esc(opt.label) + '</option>';
     });
     html += '</select>';
-    html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '—') + (manualTrend ? ' <span class="dr-manual-tag">[手动]</span>' : '') + '</div>';
+    // 高亮醒目字体显示当前走势（保留配色）
+    html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '请选择走势') + '</div>';
     html += '</div>';
-    if (idx.trendHint) {
-      html += '<div class="dr-index-trend-hint">' + esc(idx.trendHint) + '</div>';
-    }
     html += '</div>';
 
     html += '</div></div>';
@@ -626,17 +623,21 @@ function onDRIndexChange(idx) {
   if (!drData.indices[idx].ma5Analysis) drData.indices[idx].ma5Analysis = { currentPrice: null, ma5: null, position: '' };
   drData.indices[idx].ma5Analysis.position = ma5Pos;
 
-  // 仅在未手动选走势时才自动重算（手动选走势会覆盖）
-  if (!drData.indices[idx].manualTrend) {
-    if (maSelect.value && macdSelect.value) {
-      var r = analyzeTrend(maSelect.value, macdSelect.value, ma5Pos);
-      drData.indices[idx].trendResult = r.trend;
-      drData.indices[idx].trendHint = r.reason;
-    } else {
-      drData.indices[idx].trendResult = '';
-      drData.indices[idx].trendHint = '';
-    }
+  // 根据 3 select 重新计算走势 → 联动到手动 select（用户可再手动改）
+  if (maSelect.value && macdSelect.value) {
+    var r = analyzeTrend(maSelect.value, macdSelect.value, ma5Pos);
+    drData.indices[idx].trendResult = r.trend;
+    drData.indices[idx].trendHint = r.reason;
+    drData.indices[idx].manualTrend = r.trend;  // 同步给手动 select
+  } else {
+    drData.indices[idx].trendResult = '';
+    drData.indices[idx].trendHint = '';
+    drData.indices[idx].manualTrend = '';
   }
+
+  // 同步手动 select 的值（联动显示）
+  var manualSel = document.querySelector('.dr-index-manual-trend[data-index="' + idx + '"]');
+  if (manualSel) manualSel.value = drData.indices[idx].manualTrend;
 
   // 更新该指数的局部走势 UI（不重渲染整列，避免 select 闪烁）
   updateDRIndexTrendUI(idx);
@@ -655,33 +656,12 @@ function onDRIndexChange(idx) {
   }, 1000);
 }
 
-// 手动选择走势（覆盖自动计算结果）
+// 手动选择走势（6 档可选，3 select 联动时会自动设置值）
 function onDRManualTrendChange(idx) {
   if (!Array.isArray(drData.indices) || !drData.indices[idx]) return;
   var sel = document.querySelector('.dr-index-manual-trend[data-index="' + idx + '"]');
   if (!sel) return;
-  var v = sel.value; // '' 表示回退到自动计算
-  drData.indices[idx].manualTrend = v;
-
-  if (v) {
-    // 手动覆盖：直接用选中的走势
-    drData.indices[idx].trendResult = v;
-    drData.indices[idx].trendHint = '手动选择走势（已覆盖自动计算结果）';
-  } else {
-    // 回退到自动计算：基于当前 ma/macd/ma5 重算
-    var ma = drData.indices[idx].maState || '';
-    var macd = drData.indices[idx].macdState || '';
-    var ma5p = (drData.indices[idx].ma5Analysis && drData.indices[idx].ma5Analysis.position) || '';
-    if (ma && macd) {
-      var r = analyzeTrend(ma, macd, ma5p);
-      drData.indices[idx].trendResult = r.trend;
-      drData.indices[idx].trendHint = r.reason;
-    } else {
-      drData.indices[idx].trendResult = '';
-      drData.indices[idx].trendHint = '';
-    }
-  }
-
+  drData.indices[idx].trendResult = sel.value;
   updateDRIndexTrendUI(idx);
   recalcDROverall();
   drDataDirty = true;
@@ -703,10 +683,10 @@ function updateDRIndexTrendUI(idx) {
   var item = drData.indices[idx];
   trendBox.className = 'dr-index-trend-result';
   if (item.trendResult && DR_TREND_STYLES[item.trendResult]) {
-    trendBox.innerHTML = esc(item.trendResult) + (item.manualTrend ? ' <span class="dr-manual-tag">[手动]</span>' : '');
+    trendBox.textContent = item.trendResult;
     trendBox.classList.add(DR_TREND_STYLES[item.trendResult].cls);
   } else {
-    trendBox.textContent = '—';
+    trendBox.textContent = '请选择走势';
   }
   if (hintBox) {
     hintBox.textContent = item.trendHint || '';
