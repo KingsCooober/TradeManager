@@ -563,18 +563,14 @@ function renderDRIndicesMAStatus() {
     }
     html += '</div>';
 
-    // 5 日均线位置（极简：当前价 + 5日均线 → 上/下）
-    var ma5 = idx.ma5Analysis || { currentPrice: null, ma5: null, position: '' };
-    html += '<div class="dr-field dr-field-wide dr-ma5-block" data-index="' + i + '">';
-    html += '<label>📊 价格与 5 日均线</label>';
-    html += '<div class="dr-ma5-inputs">';
-    html += '<input type="number" step="any" class="dr-input dr-ma5-cp" data-index="' + i + '" placeholder="当前价" value="' + (ma5.currentPrice == null ? '' : ma5.currentPrice) + '">';
-    html += '<input type="number" step="any" class="dr-input dr-ma5-ma" data-index="' + i + '" placeholder="5 日均线" value="' + (ma5.ma5 == null ? '' : ma5.ma5) + '">';
-    html += '</div>';
-    var posText = ma5.position === 'above' ? '⬆ 价格在 5 日线上方' : (ma5.position === 'below' ? '⬇ 价格在 5 日线下方' : '— 请输入价格与 5 日均线');
-    var posCls = ma5.position === 'above' ? ' dr-ma5-up' : (ma5.position === 'below' ? ' dr-ma5-dn' : '');
-    html += '<div class="dr-ma5-pos' + posCls + '" data-index="' + i + '">' + posText + '</div>';
-    html += '</div>';
+    // 5 日均线位置（在 MACD 旁边：3 选项）
+    var ma5Pos = (idx.ma5Analysis && idx.ma5Analysis.position) || '';
+    html += '<div class="dr-field"><label>价格 vs 5日线</label>';
+    html += '<select class="dr-select dr-index-ma5pos" data-index="' + i + '">';
+    html += '<option value="">请选择</option>';
+    html += '<option value="above"' + (ma5Pos === 'above' ? ' selected' : '') + '>在 5 日线上方</option>';
+    html += '<option value="below"' + (ma5Pos === 'below' ? ' selected' : '') + '>在 5 日线下方</option>';
+    html += '</select></div>';
 
     html += '</div></div>';
   });
@@ -582,59 +578,11 @@ function renderDRIndicesMAStatus() {
   container.innerHTML = html;
 
   // 绑定事件
-  container.querySelectorAll('.dr-index-ma, .dr-index-macd').forEach(function(el) {
+  container.querySelectorAll('.dr-index-ma, .dr-index-macd, .dr-index-ma5pos').forEach(function(el) {
     el.addEventListener('change', function() {
       onDRIndexChange(parseInt(el.dataset.index));
     });
   });
-  // 5 日均线位置输入 → 重算走势
-  container.querySelectorAll('.dr-ma5-cp, .dr-ma5-ma').forEach(function(el) {
-    el.addEventListener('input', function() {
-      onDRMA5Input(parseInt(el.dataset.index));
-    });
-  });
-}
-
-// 5 日均线位置输入 → 重算走势
-function onDRMA5Input(idx) {
-  if (!Array.isArray(drData.indices) || !drData.indices[idx]) return;
-  var cpEl = document.querySelector('.dr-ma5-cp[data-index="' + idx + '"]');
-  var maEl = document.querySelector('.dr-ma5-ma[data-index="' + idx + '"]');
-  var posEl = document.querySelector('.dr-ma5-pos[data-index="' + idx + '"]');
-  if (!cpEl || !maEl) return;
-  var cp = parseFloat(cpEl.value);
-  var ma = parseFloat(maEl.value);
-  var pos = '';
-  if (!isNaN(cp) && !isNaN(ma) && ma !== 0) {
-    pos = cp > ma ? 'above' : (cp < ma ? 'below' : 'on');
-  }
-  drData.indices[idx].ma5Analysis = { currentPrice: isNaN(cp) ? null : cp, ma5: isNaN(ma) ? null : ma, position: pos };
-  if (posEl) {
-    var txt = pos === 'above' ? '⬆ 价格在 5 日线上方' : (pos === 'below' ? '⬇ 价格在 5 日线下方' : '— 请输入价格与 5 日均线');
-    var cls = pos === 'above' ? ' dr-ma5-up' : (pos === 'below' ? ' dr-ma5-dn' : '');
-    posEl.className = 'dr-ma5-pos' + cls;
-    posEl.textContent = txt;
-  }
-  // 重新算这个指数的走势（带 5 日线位置加权）
-  var maSelect = document.querySelector('.dr-index-ma[data-index="' + idx + '"]');
-  var macdSelect = document.querySelector('.dr-index-macd[data-index="' + idx + '"]');
-  if (maSelect && macdSelect && maSelect.value && macdSelect.value) {
-    var r = analyzeTrend(maSelect.value, macdSelect.value, pos);
-    drData.indices[idx].trendResult = r.trend;
-    drData.indices[idx].trendHint = r.reason;
-    updateDRIndexTrendUI(idx);
-  }
-  // 触发整体走势 + 整体仓位重算
-  recalcDROverall();
-  drDataDirty = true;
-  // 延迟 1 秒自动保存
-  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
-  drAutoSaveTimer = setTimeout(function() {
-    saveCurrentFormToData();
-    saveDRData();
-    drDataDirty = false;
-    drAutoSaveTimer = null;
-  }, 1000);
 }
 
 // 单个指数 select 变化 → 重新算该指数的走势 + 整体走势 + 整体仓位
@@ -642,11 +590,15 @@ function onDRIndexChange(idx) {
   if (!Array.isArray(drData.indices) || !drData.indices[idx]) return;
   var maSelect = document.querySelector('.dr-index-ma[data-index="' + idx + '"]');
   var macdSelect = document.querySelector('.dr-index-macd[data-index="' + idx + '"]');
+  var ma5Select = document.querySelector('.dr-index-ma5pos[data-index="' + idx + '"]');
   if (!maSelect || !macdSelect) return;
 
   drData.indices[idx].maState = maSelect.value;
   drData.indices[idx].macdState = macdSelect.value;
-  var ma5Pos = (drData.indices[idx].ma5Analysis && drData.indices[idx].ma5Analysis.position) || '';
+  var ma5Pos = ma5Select ? ma5Select.value : '';
+  // 写入 ma5Analysis.position（保持现有数据结构兼容）
+  if (!drData.indices[idx].ma5Analysis) drData.indices[idx].ma5Analysis = { currentPrice: null, ma5: null, position: '' };
+  drData.indices[idx].ma5Analysis.position = ma5Pos;
 
   // 重新算这个指数的走势
   if (maSelect.value && macdSelect.value) {

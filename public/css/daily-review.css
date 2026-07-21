@@ -383,46 +383,6 @@
   line-height: 1.4;
 }
 
-/* 5 日均线位置（极简版） */
-.dr-ma5-block {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed rgba(128, 128, 128, 0.2);
-}
-.dr-ma5-block label {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-  display: block;
-}
-.dr-ma5-inputs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.dr-ma5-inputs .dr-input {
-  flex: 1;
-  padding: 6px 10px;
-  border: 1px solid rgba(128, 128, 128, 0.3);
-  border-radius: 4px;
-  font-size: 13px;
-  background: var(--input-bg, #fff);
-  color: var(--text-primary);
-}
-.dr-ma5-pos {
-  font-size: 13px;
-  font-weight: 600;
-  padding: 4px 0;
-  color: var(--text-secondary);
-}
-.dr-ma5-pos.dr-ma5-up {
-  color: var(--color-red, #e63946);
-}
-.dr-ma5-pos.dr-ma5-dn {
-  color: #2a9d8f;
-}
-
 @media (max-width: 900px) {
   .dr-indices-grid {
     grid-template-columns: 1fr;
