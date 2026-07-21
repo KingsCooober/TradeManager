@@ -6,7 +6,7 @@
 <meta name="description" content="每日复盘 - 交易管理工具，记录每日交易纪律、大盘走势、仓位策略、心态评分与每日总结">
 <title>每日复盘 - Trade Manager</title>
 <link rel="stylesheet" href="css/main.css?v=15">
-<link rel="stylesheet" href="css/daily-review.css?v=20260720013">
+<link rel="stylesheet" href="css/daily-review.css?v=20260720014">
 </head>
 <body>
 
@@ -112,6 +112,8 @@
           <details class="dr-strategy-ref dr-strategy-ref--spaced">
             <summary>📋 走势判断策略规则（点击展开）</summary>
             <div class="dr-strategy-body">
+              <!-- 基础走势：均线 + MACD（实际可能组合，剔除逻辑冲突的） -->
+              <div class="dr-strategy-subsection-title">① 基础走势（5-10 均线 + MACD）</div>
               <table class="dr-strategy-table">
                 <thead>
                   <tr><th>均线状态</th><th>MACD 状态</th><th>→ 走势判断</th><th>→ 仓位</th></tr>
@@ -126,11 +128,11 @@
                   <tr class="dr-strat-rebound"><td>多头排列</td><td>水下底背离</td><td>反弹观察</td><td><span class="dr-pos-tag dr-pos-tag-mid">5-8 成</span></td></tr>
                   <tr class="dr-strat-rebound"><td>5-10粘合</td><td>水下金叉 / 水下多头 / 水下底背离</td><td>反弹观察</td><td><span class="dr-pos-tag dr-pos-tag-mid">5-8 成</span></td></tr>
                   <tr class="dr-strat-neutral"><td>5-10金叉</td><td>水上死叉 / 水上空头 / 水上顶背离</td><td>震荡整理</td><td><span class="dr-pos-tag dr-pos-tag-low">3-5 成</span></td></tr>
-                  <tr class="dr-strat-neutral"><td>5-10死叉</td><td>水上金叉 / 水上多头 / 水上死叉 / 水上空头 / 水上顶背离</td><td>震荡整理</td><td><span class="dr-pos-tag dr-pos-tag-low">3-5 成</span></td></tr>
+                  <tr class="dr-strat-neutral"><td>5-10死叉</td><td>水上金叉 / 水上多头</td><td>震荡整理</td><td><span class="dr-pos-tag dr-pos-tag-low">3-5 成</span></td></tr>
                   <tr class="dr-strat-neutral"><td>5-10粘合</td><td>水上金叉 / 水上多头 / 水上死叉 / 水上空头</td><td>震荡整理</td><td><span class="dr-pos-tag dr-pos-tag-low">3-5 成</span></td></tr>
                   <tr class="dr-strat-warn"><td>多头排列</td><td>水上顶背离</td><td>趋势走弱</td><td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td></tr>
                   <tr class="dr-strat-warn"><td>5-10粘合</td><td>水上顶背离</td><td>趋势走弱</td><td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td></tr>
-                  <tr class="dr-strat-warn"><td>空头排列</td><td>水上金叉 / 水上多头 / 水上死叉 / 水上空头 / 水上顶背离</td><td>趋势走弱</td><td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td></tr>
+                  <tr class="dr-strat-warn"><td>空头排列</td><td>水上金叉 / 水上多头</td><td>趋势走弱</td><td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td></tr>
                   <tr class="dr-strat-weak"><td>5-10死叉</td><td>水下金叉 / 水下多头 / 水下底背离</td><td>弱势下跌</td><td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td></tr>
                   <tr class="dr-strat-weak"><td>5-10死叉</td><td>水下死叉 / 水下空头</td><td>弱势下跌</td><td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td></tr>
                   <tr class="dr-strat-weak"><td>多头排列</td><td>水下死叉 / 水下空头</td><td>弱势下跌（多头失败）</td><td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td></tr>
@@ -138,8 +140,35 @@
                   <tr class="dr-strat-weak"><td>5-10粘合</td><td>水下死叉 / 水下空头</td><td>弱势下跌</td><td><span class="dr-pos-tag dr-pos-tag-min">1-2 成</span></td></tr>
                 </tbody>
               </table>
+
+              <!-- 5 日线位置加权：基础走势 → 加权 → 最终走势 -->
+              <div class="dr-strategy-subsection-title">② 价格 vs 5 日线（加权规则）</div>
+              <table class="dr-strategy-table">
+                <thead>
+                  <tr><th>价格 vs 5 日线</th><th>加权规则</th><th>示例</th></tr>
+                </thead>
+                <tbody>
+                  <tr class="dr-strat-bull">
+                    <td>在 5 日线上方</td>
+                    <td>基础走势 <strong>升 1 档</strong>（最多「强势上涨」）</td>
+                    <td>震荡整理 + 上方 → <strong>多头趋势</strong></td>
+                  </tr>
+                  <tr class="dr-strat-warn">
+                    <td>在 5 日线下方</td>
+                    <td>基础走势 <strong>降 1 档</strong>（最多「弱势下跌」）</td>
+                    <td>多头趋势 + 下方 → <strong>趋势走弱</strong></td>
+                  </tr>
+                  <tr class="dr-strat-neutral">
+                    <td>未选</td>
+                    <td>不影响基础走势</td>
+                    <td>震荡整理 + 未选 → <strong>震荡整理</strong></td>
+                  </tr>
+                </tbody>
+              </table>
+
               <div class="dr-strategy-tip">
-                💡 <strong>最保守原则</strong>：4 个指数各自判断走势 → 整体取走势最弱的指数 → 自动匹配对应仓位（弱势下跌→1-2 成、趋势走弱→1-2 成、反弹观察→5-8 成、震荡整理→3-5 成、多头趋势→8-10 成、强势上涨→10-16 成）
+                💡 <strong>两层判断</strong>：① 均线 + MACD → 基础走势 → 仓位；② 价格 vs 5 日线 → 升/降 1 档 → 最终走势 → 仓位。<br>
+                💡 <strong>最保守原则</strong>：4 个指数各自最终走势 → 整体取最弱 → 综合走势 → 仓位。
               </div>
             </div>
           </details>

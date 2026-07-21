@@ -834,6 +834,15 @@
   overflow-x: auto;
 }
 
+.dr-strategy-subsection-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-blue, #4361ee);
+  margin: 14px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--border-color, #e0e0e0);
+}
+
 .dr-strategy-table {
   width: 100%;
   border-collapse: collapse;
