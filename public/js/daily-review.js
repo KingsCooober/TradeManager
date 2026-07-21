@@ -1165,35 +1165,78 @@ function syncDisciplineRulesToServer() {
 }
 
 // 从服务器加载交易纪律
+// 修复：admin 等用户的纪律可能只存于 localStorage（d746d41 之前添加的），从未上传到 server。
+// 现在登录时执行"以本地为基准的强同步"：本地独有 + 服务端数据 → 合并上传 → UI。
 function loadDisciplineRulesFromServer() {
   if (!drCurrentUserId) return;
+
+  // 快照本地纪律（用于合并前的状态）
+  var localRules = drDisciplineRules.slice();
+
   fetch('/api/discipline-rules/' + drCurrentUserId, {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' }
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
-    if (data && Array.isArray(data.rules)) {
-      // 合并策略：服务器数据 + 本地独有（去重）
-      // 如果两边的纪律完全一样，直接用服务器
-      // 如果本地有服务器没的，本地增量上传
-      var serverSet = new Set(data.rules);
-      var localOnly = drDisciplineRules.filter(function(r) { return !serverSet.has(r); });
-      if (localOnly.length > 0) {
-        // 本地有独有的，并集上传
-        var merged = data.rules.concat(localOnly);
-        drDisciplineRules = merged;
-        // 反向同步本地到服务器
-        syncDisciplineRulesToServer();
-      } else {
-        drDisciplineRules = data.rules;
-      }
-      saveDRDisciplineRules();
-      renderDRDisciplineRules();
+    if (!data || !Array.isArray(data.rules)) return;
+
+    var serverRules = data.rules;
+    var serverSet = new Set(serverRules);
+
+    // 1) 计算本地独有的纪律（不在 server 中）
+    var localOnly = localRules.filter(function(r) { return serverSet.has(r) === false; });
+
+    // 2) 合并策略：
+    //    - 如果本地有独有 → 并集上传
+    //    - 如果本地为空但 server 有 → 覆盖本地
+    //    - 都没有 → 保持
+    if (localOnly.length > 0) {
+      // 关键：避免重复。如果 server 里已有同名项（来自其他浏览器），不去重是 ok 的（保持顺序）
+      var merged = serverRules.concat(localOnly);
+      drDisciplineRules = merged;
+      // 立即同步上传（async）
+      forceSyncDisciplineRulesToServer(merged);
+    } else if (localRules.length === 0 && serverRules.length > 0) {
+      // 本地空，server 有 → 拉取覆盖本地
+      drDisciplineRules = serverRules;
+    } else {
+      // 都没有或两边都有但完全一致 → 保持
+      drDisciplineRules = serverRules.length > 0 ? serverRules : localRules;
+    }
+
+    saveDRDisciplineRules();
+    renderDRDisciplineRules();
+
+    if (typeof console !== 'undefined') {
+      console.log('[discipline] 同步完成 | server:', serverRules.length, '| local:', localRules.length, '| merged:', drDisciplineRules.length);
     }
   })
   .catch(function(e) {
-    console.error('加载交易纪律失败:', e);
+    console.error('[discipline] 加载交易纪律失败:', e);
+  });
+}
+
+// 强制同步（不依赖 drIsLoggedIn，确保登录后能上传）
+function forceSyncDisciplineRulesToServer(rules) {
+  if (!drCurrentUserId) return;
+  var payload = Array.isArray(rules) ? rules : drDisciplineRules;
+  fetch('/api/discipline-rules/' + drCurrentUserId, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rules: payload })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(resp) {
+    if (typeof console !== 'undefined') {
+      console.log('[discipline] 已强制同步到 server:', payload.length, '条', resp);
+    }
+    if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) {
+      syncModule.showSyncStatus('交易纪律已同步', 'success');
+    }
+  })
+  .catch(function(e) {
+    console.error('[discipline] 强制同步失败:', e);
   });
 }
 
