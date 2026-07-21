@@ -205,15 +205,95 @@ function updateTrade(id, field, value) {
   }
 }
 
+// ===== 状态筛选功能 =====
+var currentStatusFilter = 'all'; // 'all' | 'open' | 'win' | 'loss' | 'be'
+var STATUS_FILTER_KEY = 'trade_status_filter';
+
+function setStatusFilter(status) {
+  var allowed = ['all', 'open', 'win', 'loss', 'be'];
+  if (allowed.indexOf(status) < 0) status = 'all';
+  currentStatusFilter = status;
+
+  // 更新按钮高亮
+  document.querySelectorAll('.filter-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.status === status);
+  });
+
+  // 持久化用户偏好
+  try { localStorage.setItem(STATUS_FILTER_KEY, status); } catch(e) {}
+
+  // 重新渲染表格
+  renderTableWithSelects();
+}
+
+// 取筛选后的子集
+function getFilteredTrades() {
+  if (currentStatusFilter === 'all') return trades;
+  var list = [];
+  for (var i = 0; i < trades.length; i++) {
+    if (trades[i].status === currentStatusFilter) list.push(trades[i]);
+  }
+  return list;
+}
+
+// 先筛选后排序，返回显示用列表（不修改原始 trades）
+function getDisplayedTrades() {
+  var list = getFilteredTrades().slice();
+  list.sort(function(a, b) {
+    var aVal, bVal;
+    switch (currentSortField) {
+      case 'date': aVal = a.date || ''; bVal = b.date || ''; break;
+      case 'symbol': aVal = (a.symbol || '').toLowerCase(); bVal = (b.symbol || '').toLowerCase(); break;
+      case 'buyType': aVal = (a.buyType || '').toLowerCase(); bVal = (b.buyType || '').toLowerCase(); break;
+      default: aVal = a.date || ''; bVal = b.date || '';
+    }
+    if (aVal < bVal) return currentSortOrder === 'asc' ? -1 : 1;
+    if (aVal > bVal) return currentSortOrder === 'asc' ? 1 : -1;
+    return 0;
+  });
+  return list;
+}
+
+// 更新各状态按钮上的计数徽章
+function updateFilterCounts() {
+  var counts = { all: trades.length, open: 0, win: 0, loss: 0, be: 0 };
+  for (var i = 0; i < trades.length; i++) {
+    var s = trades[i].status || 'open';
+    if (counts[s] !== undefined) counts[s]++;
+  }
+  function setText(id, v) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = v;
+  }
+  setText('filterCountAll', counts.all);
+  setText('filterCountOpen', counts.open);
+  setText('filterCountWin', counts.win);
+  setText('filterCountLoss', counts.loss);
+  setText('filterCountBe', counts.be);
+}
+
+function initStatusFilter() {
+  var saved = null;
+  try { saved = localStorage.getItem(STATUS_FILTER_KEY); } catch(e) {}
+  setStatusFilter(saved || 'all');
+}
+
 function renderTable() {
   var tbody = document.getElementById('tradeBody');
   if (trades.length === 0) {
     tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text-tertiary);padding:30px;text-align:center">暂无交易记录</td></tr>';
+    updateFilterCounts();
+    return;
+  }
+  var displayTrades = getDisplayedTrades();
+  if (displayTrades.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="23" style="color:var(--text-tertiary);padding:30px;text-align:center">当前筛选下无交易记录</td></tr>';
+    updateFilterCounts();
     return;
   }
   var html = '';
-  for (var i = 0; i < trades.length; i++) {
-    var t = trades[i];
+  for (var i = 0; i < displayTrades.length; i++) {
+    var t = displayTrades[i];
     var pC = t.pnl === '' ? '' : (parseFloat(t.pnl) >= 0 ? 'color:var(--color-red)' : 'color:var(--color-green)');
     var pRC = t.pnlR === '' ? '' : (parseFloat(t.pnlR) >= 0 ? 'color:var(--color-red)' : 'color:var(--color-green)');
     var badge = t.status === 'open' ? '<span class="badge badge-open">持仓中</span>' :
@@ -290,6 +370,7 @@ function renderTable() {
       '</td></tr>';
   }
   tbody.innerHTML = html;
+  updateFilterCounts();
 }
 
 // 日期选择器变化时更新天数选项
@@ -541,36 +622,10 @@ function toggleSortOrder() {
   renderTableWithSelects();
 }
 
+// 排序逻辑已下沉到 getDisplayedTrades() 内（先筛选后排序，不修改原 trades）
+// 此函数保留为占位/兼容入口，调用 renderTableWithSelects 时会自动按当前 sort 状态排序
 function applySort() {
-  trades.sort(function(a, b) {
-    var aVal, bVal;
-    
-    switch (currentSortField) {
-      case 'date':
-        aVal = a.date || '';
-        bVal = b.date || '';
-        break;
-      case 'symbol':
-        aVal = (a.symbol || '').toLowerCase();
-        bVal = (b.symbol || '').toLowerCase();
-        break;
-      case 'buyType':
-        aVal = (a.buyType || '').toLowerCase();
-        bVal = (b.buyType || '').toLowerCase();
-        break;
-      default:
-        aVal = a.date || '';
-        bVal = b.date || '';
-    }
-    
-    if (aVal < bVal) {
-      return currentSortOrder === 'asc' ? -1 : 1;
-    }
-    if (aVal > bVal) {
-      return currentSortOrder === 'asc' ? 1 : -1;
-    }
-    return 0;
-  });
+  // no-op: 排序在 renderTable → getDisplayedTrades 中完成
 }
 
 // 初始化排序按钮状态
@@ -583,6 +638,7 @@ function initSortButtons() {
 // 页面加载时初始化排序
 document.addEventListener('DOMContentLoaded', function() {
   initSortButtons();
+  initStatusFilter();
 });
 
 // ===== 表格列显示切换 =====

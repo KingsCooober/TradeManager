@@ -309,15 +309,27 @@
           <input type="file" id="importFile" accept=".json" style="display:none" onchange="importFromFile(event)">
           <button class="btn btn-sm btn-ghost" onclick="openSettingsModal()" title="数据管理 / 清空记录 / 危险操作">⚙️ 设置</button>
         </div>
-        <div class="sort-controls">
-          <span class="sort-label">排序:</span>
-          <div class="sort-group">
-            <button class="sort-btn" onclick="sortTrades('date')" id="sortDate">📅 日期</button>
-            <button class="sort-btn" onclick="sortTrades('symbol')" id="sortSymbol">📈 品种</button>
-            <button class="sort-btn" onclick="sortTrades('buyType')" id="sortBuyType">🎯 买点类型</button>
+        <div class="filter-sort-row">
+          <div class="filter-controls">
+            <span class="filter-label">筛选状态:</span>
+            <div class="filter-group">
+              <button class="filter-btn active" data-status="all" onclick="setStatusFilter('all')" title="显示全部交易">全部 <span class="filter-count" id="filterCountAll">0</span></button>
+              <button class="filter-btn filter-btn-open" data-status="open" onclick="setStatusFilter('open')" title="只看持仓中">持仓中 <span class="filter-count" id="filterCountOpen">0</span></button>
+              <button class="filter-btn filter-btn-win" data-status="win" onclick="setStatusFilter('win')" title="只看盈利">盈利 <span class="filter-count" id="filterCountWin">0</span></button>
+              <button class="filter-btn filter-btn-loss" data-status="loss" onclick="setStatusFilter('loss')" title="只看亏损">亏损 <span class="filter-count" id="filterCountLoss">0</span></button>
+              <button class="filter-btn filter-btn-be" data-status="be" onclick="setStatusFilter('be')" title="只看保本">保本 <span class="filter-count" id="filterCountBe">0</span></button>
+            </div>
           </div>
-          <div class="sort-order">
-            <button class="sort-btn order-btn" onclick="toggleSortOrder()" id="sortOrder">↑ 升序</button>
+          <div class="sort-controls">
+            <span class="sort-label">排序:</span>
+            <div class="sort-group">
+              <button class="sort-btn" onclick="sortTrades('date')" id="sortDate">📅 日期</button>
+              <button class="sort-btn" onclick="sortTrades('symbol')" id="sortSymbol">📈 品种</button>
+              <button class="sort-btn" onclick="sortTrades('buyType')" id="sortBuyType">🎯 买点类型</button>
+            </div>
+            <div class="sort-order">
+              <button class="sort-btn order-btn" onclick="toggleSortOrder()" id="sortOrder">↑ 升序</button>
+            </div>
           </div>
         </div>
       </div>
@@ -779,7 +791,7 @@
 <script src="js/sync.js?v=6"></script>
 <script src="js/storage.js?v=7"></script>
 <script src="js/calculator.js?v=5"></script>
-<script src="js/table.js?v=14"></script>
+<script src="js/table.js?v=15"></script>
 <script src="js/charts.js?v=4"></script>
 <script src="js/main.js?v=14"></script>
 <script>
