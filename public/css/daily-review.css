@@ -343,7 +343,7 @@
 
 .dr-index-fields {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -391,7 +391,15 @@
 
 @media (max-width: 600px) {
   .dr-index-fields {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .dr-index-fields .dr-field label {
+    font-size: 11px;
+  }
+  .dr-index-fields .dr-field select {
+    font-size: 12px;
+    padding: 4px 6px;
   }
 }
 
