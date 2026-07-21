@@ -723,8 +723,8 @@ function analyzeTrend(maState, macdState, ma5Position) {
       trend = '弱势下跌';
       reason = '5-10 死叉 + MACD 水下转强 → 弱势修复中';
     } else if (macdState === '水上死叉' || macdState === '水上空头' || macdState === '水上顶背离') {
-      trend = '震荡整理';
-      reason = '5-10 死叉 + MACD 水上偏弱 → 短线震荡';
+      trend = '趋势走弱';
+      reason = '5-10 高位死叉 + MACD 水上转弱（顶背离/水上死叉）→ 典型顶部信号';
     } else {
       trend = '弱势下跌';
       reason = '5-10 死叉 + MACD 水下 → 趋势转弱';
