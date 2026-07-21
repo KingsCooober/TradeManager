@@ -1237,6 +1237,8 @@ function loadDisciplineRulesFromServer() {
   });
 }
 
+var drDisciplineDragFromIdx = -1; // 拖动源索引
+
 function renderDRDisciplineRules() {
   var container = document.getElementById('drDisciplineRules');
   if (!container) return;
@@ -1248,7 +1250,13 @@ function renderDRDisciplineRules() {
 
   var html = '';
   drDisciplineRules.forEach(function(rule, i) {
-    html += '<div class="dr-discipline-rule" data-index="' + i + '">';
+    html += '<div class="dr-discipline-rule" data-index="' + i + '" draggable="true"'
+         + ' ondragstart="onDRDisciplineDragStart(event,' + i + ')"'
+         + ' ondragover="onDRDisciplineDragOver(event,' + i + ')"'
+         + ' ondragend="onDRDisciplineDragEnd(event)"'
+         + ' ondragleave="onDRDisciplineDragLeave(event,' + i + ')"'
+         + ' ondrop="onDRDisciplineDrop(event,' + i + ')">';
+    html += '<span class="dr-discipline-rule-drag" title="拖动调整顺序">⋮⋮</span>';
     html += '<div class="dr-discipline-rule-content" onclick="editDRDisciplineRule(' + i + ')">';
     html += '<span class="dr-discipline-rule-num">' + (i + 1) + '</span>';
     html += '<span class="dr-discipline-rule-text">' + esc(rule) + '</span>';
@@ -1258,6 +1266,69 @@ function renderDRDisciplineRules() {
   });
 
   container.innerHTML = html;
+}
+
+// 拖动开始
+function onDRDisciplineDragStart(e, idx) {
+  drDisciplineDragFromIdx = idx;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(idx));
+  // 给被拖动元素加样式
+  var el = e.currentTarget;
+  setTimeout(function() { if (el) el.classList.add('dr-dragging'); }, 0);
+}
+
+// 拖动经过：阻止默认行为（必须）+ 视觉提示
+function onDRDisciplineDragOver(e, idx) {
+  if (drDisciplineDragFromIdx < 0) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  // 清除其他高亮
+  document.querySelectorAll('.dr-discipline-rule.dr-drop-before, .dr-discipline-rule.dr-drop-after')
+    .forEach(function(n) { n.classList.remove('dr-drop-before', 'dr-drop-after'); });
+  // 根据鼠标在元素的上/下半部分决定插入位置
+  var el = e.currentTarget;
+  var rect = el.getBoundingClientRect();
+  var isAbove = (e.clientY - rect.top) < rect.height / 2;
+  el.classList.add(isAbove ? 'dr-drop-before' : 'dr-drop-after');
+}
+
+// 拖动离开
+function onDRDisciplineDragLeave(e, idx) {
+  // dragleave 可能在子元素上触发，仅在真正离开元素时清除
+  var el = e.currentTarget;
+  if (el && !el.contains(e.relatedTarget)) {
+    el.classList.remove('dr-drop-before', 'dr-drop-after');
+  }
+}
+
+// 拖动结束
+function onDRDisciplineDragEnd(e) {
+  drDisciplineDragFromIdx = -1;
+  document.querySelectorAll('.dr-discipline-rule').forEach(function(n) {
+    n.classList.remove('dr-dragging', 'dr-drop-before', 'dr-drop-after');
+  });
+}
+
+// 放置：重新计算顺序
+function onDRDisciplineDrop(e, toIdx) {
+  e.preventDefault();
+  var fromIdx = drDisciplineDragFromIdx;
+  if (fromIdx < 0 || fromIdx === toIdx) return;
+  var el = e.currentTarget;
+  var rect = el.getBoundingClientRect();
+  var isAbove = (e.clientY - rect.top) < rect.height / 2;
+  // 计算实际目标 index
+  var target = isAbove ? toIdx : toIdx + 1;
+  if (fromIdx < target) target--;
+  if (fromIdx === target) return;
+  // 数组重排
+  var item = drDisciplineRules.splice(fromIdx, 1)[0];
+  drDisciplineRules.splice(target, 0, item);
+  // 重新渲染 + 同步
+  renderDRDisciplineRules();
+  saveDRDisciplineRules();
+  syncDisciplineRulesToServer();
 }
 
 function addDRDisciplineRule() {
