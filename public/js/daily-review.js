@@ -836,7 +836,7 @@ var TREND_TO_POSITION = {
   '反弹观察': { range: '5-8 成',  cls: 'pos-mid' },
   '震荡整理': { range: '3-5 成',  cls: 'pos-low' },
   '趋势走弱': { range: '1-2 成',  cls: 'pos-min' },
-  '弱势下跌': { range: '0 成（空仓）', cls: 'pos-min' }
+  '弱势下跌': { range: '1-2 成',  cls: 'pos-min' }
 };
 
 // 整体仓位 = 复用整体走势（取最弱指数）→ 直接映射仓位
