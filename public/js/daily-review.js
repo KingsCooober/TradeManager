@@ -554,16 +554,7 @@ function renderDRIndicesMAStatus() {
     });
     html += '</select></div>';
 
-    // 局部走势结果
-    html += '<div class="dr-field dr-field-wide dr-index-trend" data-index="' + i + '">';
-    html += '<label>走势判断</label>';
-    html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '—') + '</div>';
-    if (idx.trendHint) {
-      html += '<div class="dr-index-trend-hint">' + esc(idx.trendHint) + '</div>';
-    }
-    html += '</div>';
-
-    // 5 日均线位置（在 MACD 旁边：3 选项）
+    // 5 日均线位置（在 MACD 旁边：3 选项）— 放在走势判断之前，保持 3 select 同一行
     var ma5Pos = (idx.ma5Analysis && idx.ma5Analysis.position) || '';
     html += '<div class="dr-field"><label>价格 vs 5日线</label>';
     html += '<select class="dr-select dr-index-ma5pos" data-index="' + i + '">';
@@ -571,6 +562,15 @@ function renderDRIndicesMAStatus() {
     html += '<option value="above"' + (ma5Pos === 'above' ? ' selected' : '') + '>在 5 日线上方</option>';
     html += '<option value="below"' + (ma5Pos === 'below' ? ' selected' : '') + '>在 5 日线下方</option>';
     html += '</select></div>';
+
+    // 局部走势结果（dr-field-wide 独占一行，强制换行）
+    html += '<div class="dr-field dr-field-wide dr-index-trend" data-index="' + i + '">';
+    html += '<label>走势判断</label>';
+    html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '—') + '</div>';
+    if (idx.trendHint) {
+      html += '<div class="dr-index-trend-hint">' + esc(idx.trendHint) + '</div>';
+    }
+    html += '</div>';
 
     html += '</div></div>';
   });

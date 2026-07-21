@@ -342,13 +342,18 @@
 }
 
 .dr-index-fields {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
+.dr-index-fields > .dr-field {
+  flex: 1 1 0;
+  min-width: 120px;
+}
+
 .dr-index-fields .dr-field-wide {
-  grid-column: 1 / -1;
+  flex: 0 0 100%;
 }
 
 /* 单指数走势判断结果 */
@@ -390,14 +395,13 @@
 }
 
 @media (max-width: 600px) {
-  .dr-index-fields {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
+  .dr-index-fields > .dr-field {
+    min-width: 80px;
   }
-  .dr-index-fields .dr-field label {
+  .dr-index-fields > .dr-field label {
     font-size: 11px;
   }
-  .dr-index-fields .dr-field select {
+  .dr-index-fields > .dr-field select {
     font-size: 12px;
     padding: 4px 6px;
   }
