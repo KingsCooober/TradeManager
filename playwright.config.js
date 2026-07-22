@@ -28,8 +28,6 @@ module.exports = defineConfig({
     ['html', { outputFolder: 'playwright-report', open: 'never', title: 'Trade Manager E2E' }],
     ['json', { outputFile: 'playwright-report/results.json' }],
     ['junit', { outputFile: 'playwright-report/junit.xml' }],
-    // 简洁的控制台报告
-    ['line'],
   ],
 
   // 全局共享配置
