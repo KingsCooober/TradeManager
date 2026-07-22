@@ -2020,7 +2020,7 @@ h2 {
 /* 响应式调整 */
 @media (max-width: 768px) {
   .custom-select-options {
-    max-height: 160px;
+    max-height: 260px;
   }
 }
 .calc-field input:focus, .calc-field select:focus {
