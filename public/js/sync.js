@@ -547,6 +547,62 @@ async function clearServerData() {
   }
 }
 
+// 只清空服务器上的交易记录（不影响入金出金、复盘、纪律等）
+// 用于「清空交易」按钮的精准清空，避免误删其他数据
+async function clearServerTradesData() {
+  const user = getCurrentUser();
+  if (!user) {
+    console.log('未登录，跳过清空服务器交易');
+    return false;
+  }
+
+  try {
+    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/clear-trades/${user.id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(function() { return {}; });
+      throw new Error(err.error || ('HTTP ' + res.status));
+    }
+    console.log('服务器交易记录已清空');
+    showSyncStatus('已清空服务器交易记录', 'success');
+    return true;
+  } catch (err) {
+    console.error('清空服务器交易记录失败:', err);
+    showSyncStatus('清空服务器交易失败: ' + err.message, 'error');
+    return false;
+  }
+}
+
+// 只清空服务器上的资金记录（入金 + 出金）
+// 用于「清空资金」按钮的精准清空
+async function clearServerFundsData() {
+  const user = getCurrentUser();
+  if (!user) {
+    console.log('未登录，跳过清空服务器资金');
+    return false;
+  }
+
+  try {
+    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/clear-funds/${user.id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(function() { return {}; });
+      throw new Error(err.error || ('HTTP ' + res.status));
+    }
+    console.log('服务器资金记录已清空');
+    showSyncStatus('已清空服务器资金记录', 'success');
+    return true;
+  } catch (err) {
+    console.error('清空服务器资金记录失败:', err);
+    showSyncStatus('清空服务器资金失败: ' + err.message, 'error');
+    return false;
+  }
+}
+
 async function addDepositToServer(amount, date) {
   const user = getCurrentUser();
   if (!user) return;

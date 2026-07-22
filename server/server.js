@@ -488,6 +488,37 @@ app.delete('/api/clear/:userId', (req, res) => {
   });
 });
 
+// 精准清空：只清空交易记录（不影响入金出金、复盘、纪律）
+app.delete('/api/clear-trades/:userId', (req, res) => {
+  const { userId } = req.params;
+
+  db.run('DELETE FROM trades WHERE user_id = ?', [userId], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    console.log(`[清空交易] 用户 ${userId} 的交易记录已清空，影响 ${this.changes} 条`);
+    res.json({ message: '交易记录已清空', affected: this.changes });
+  });
+});
+
+// 精准清空：只清空资金记录（入金 + 出金）
+app.delete('/api/clear-funds/:userId', (req, res) => {
+  const { userId } = req.params;
+
+  db.serialize(() => {
+    let depositCount = 0;
+    let withdrawalCount = 0;
+    db.run('DELETE FROM deposits WHERE user_id = ?', [userId], function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      depositCount = this.changes;
+      db.run('DELETE FROM withdrawals WHERE user_id = ?', [userId], function(err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        withdrawalCount = this.changes;
+        console.log(`[清空资金] 用户 ${userId} 的资金记录已清空：入金 ${depositCount} 条，出金 ${withdrawalCount} 条`);
+        res.json({ message: '资金记录已清空', deposits: depositCount, withdrawals: withdrawalCount });
+      });
+    });
+  });
+});
+
 // ===== 复盘总结2 API =====
 
 // 获取用户复盘总结2数据

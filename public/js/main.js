@@ -536,12 +536,15 @@ function clearAllTradesData() {
   }
   // 清空 LocalStorage 备份
   localStorage.setItem('trades_v4', '[]');
-  // 如果已登录，通知服务器清空
-  if (window.syncModule && typeof window.syncModule.clearServerData === 'function') {
-    window.syncModule.clearServerData().then(function() {
-      console.log('服务器数据已清空');
+  // 通知其他模块（如复盘总结）有交易被清空，删除关联的自动同步条目
+  try { window.dispatchEvent(new CustomEvent('trades-cleared')); } catch(e) {}
+  // 如果已登录，精准通知服务器只清空交易记录（不影响入金出金、复盘、纪律）
+  // 修复：之前用 clearServerData 会误删所有数据；现在用 clearServerTradesData 精准清空
+  if (window.syncModule && typeof window.syncModule.clearServerTradesData === 'function') {
+    window.syncModule.clearServerTradesData().then(function() {
+      console.log('服务器交易记录已清空');
     }).catch(function(err) {
-      console.error('清空服务器失败:', err);
+      console.error('清空服务器交易失败:', err);
     });
   }
 }
@@ -555,6 +558,8 @@ function clearAllFundsData() {
     console.log('内存中的资金记录已清空');
   }
   localStorage.removeItem('funds_v1');
+  // 如果已登录，精准通知服务器只清空资金记录
+  // 修复：clearServerFundsData 之前未定义，导致服务器端资金记录一直保留
   if (window.syncModule && typeof window.syncModule.clearServerFundsData === 'function') {
     window.syncModule.clearServerFundsData().catch(function(err) {
       console.error('清空服务器资金数据失败:', err);
@@ -743,9 +748,17 @@ function handleRegister() {
       updateHeaderSyncUI();
       syncModule.showSyncStatus('注册成功，已自动登录', 'success');
       closeLoginModal();
-      // 新注册用户清空本地后从服务器下载（不上传）
-      clearLocalDataAndRefresh();
-      handleDownloadOnly();
+      // 关键：注册成功后先同步本地数据到服务器（如果有），再下载新用户的服务器数据
+      // 这样用户在注册前已有的本地复盘/笔记等不会丢失
+      var uploadPromise = (typeof syncModule.syncToServer === 'function')
+        ? Promise.resolve(syncModule.syncToServer()).catch(function(err) {
+            console.warn('注册后同步本地数据失败（继续）:', err);
+          })
+        : Promise.resolve();
+      uploadPromise.then(function() {
+        clearLocalDataAndRefresh();
+        handleDownloadOnly();
+      });
     })
     .catch(err => {
       alert('注册失败: ' + err.message);

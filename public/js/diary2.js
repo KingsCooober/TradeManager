@@ -10,6 +10,9 @@ let diary2IsLoggedIn = false;
 function initDiary2() {
   loadDiaryData();
   setupEventListeners();
+  // 关键：页面加载时清理指向已删除交易的自动同步条目
+  // 场景：在 index.html 清空交易后，复盘总结里的自动同步条目会变成孤儿
+  cleanupDeletedTrades();
   // 自动从交易记录同步（与 index 数据联动）
   syncFromTrades();
   applyFilters();
@@ -41,6 +44,19 @@ function setupDiary2LoginEvents() {
     diary2CurrentUserId = null;
     document.getElementById('headerSyncLoggedIn').style.display = 'none';
     document.getElementById('headerSyncLoggedOut').style.display = 'flex';
+  });
+  // 监听交易清空事件：如果在 index.html 触发了"清空交易"，
+  // 这里及时清理复盘总结里指向已删除交易的自动同步条目
+  window.addEventListener('trades-cleared', function() {
+    console.log('[Diary2] 收到 trades-cleared 事件，清理孤立条目');
+    var before = diary2Data.length;
+    cleanupDeletedTrades();
+    if (diary2Data.length !== before) {
+      applyFilters();
+      if (diary2IsLoggedIn && diary2CurrentUserId) {
+        syncToServer();
+      }
+    }
   });
 }
 
