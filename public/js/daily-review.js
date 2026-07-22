@@ -617,6 +617,11 @@ function renderDRIndicesMAStatus() {
       onDRManualTrendChange(parseInt(el.dataset.index));
     });
   });
+
+  // 把所有原生 select 升级为 custom-select（视觉与"买点类型"统一）
+  if (typeof upgradeSelectToCustom === 'function') {
+    container.querySelectorAll('select.dr-select').forEach(upgradeSelectToCustom);
+  }
 }
 
 // 单个指数 select 变化 → 重新算该指数的走势 + 整体走势 + 整体仓位
@@ -646,9 +651,12 @@ function onDRIndexChange(idx) {
     drData.indices[idx].manualTrend = '';
   }
 
-  // 同步手动 select 的值（联动显示）
+  // 同步手动 select 的值（联动显示）；手动触发 change 让 custom-select 视觉同步
   var manualSel = document.querySelector('.dr-index-manual-trend[data-index="' + idx + '"]');
-  if (manualSel) manualSel.value = drData.indices[idx].manualTrend;
+  if (manualSel) {
+    manualSel.value = drData.indices[idx].manualTrend;
+    manualSel.dispatchEvent(new Event('change'));
+  }
 
   // 更新该指数的局部走势 UI（不重渲染整列，避免 select 闪烁）
   updateDRIndexTrendUI(idx);
@@ -1119,6 +1127,11 @@ function renderDRTrades(dayTrades) {
       saveTradeFieldToData(el.dataset.tradeId, el.dataset.field, el.value);
     });
   });
+
+  // 把所有原生 select 升级为 custom-select（视觉与"买点类型"统一）
+  if (typeof upgradeSelectToCustom === 'function') {
+    container.querySelectorAll('select.dr-select').forEach(upgradeSelectToCustom);
+  }
 }
 
 function saveTradeFieldToData(tradeId, field, value) {
@@ -1167,6 +1180,11 @@ function renderDRThemes() {
       renderDRThemes();
     });
   });
+
+  // 把所有原生 select 升级为 custom-select（视觉与"买点类型"统一）
+  if (typeof upgradeSelectToCustom === 'function') {
+    container.querySelectorAll('select.dr-select').forEach(upgradeSelectToCustom);
+  }
 }
 
 function saveDRThemesToData() {

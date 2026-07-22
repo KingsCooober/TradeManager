@@ -18,6 +18,15 @@ function initDiary2() {
   setupDiary2LoginEvents();
   // 注册全局搜索（diary2 页：搜索复盘记录）
   setupDiary2GlobalSearch();
+  // 把所有原生 select 升级为 custom-select（视觉与"买点类型"统一）
+  upgradeDiary2Selects();
+}
+
+// 把所有原生 <select> 升级为 custom-select
+// 升级本身有幂等保护（dataset.csUpgraded 标记），多次调用安全
+function upgradeDiary2Selects() {
+  if (typeof upgradeSelectToCustom !== 'function') return;
+  document.querySelectorAll('select').forEach(upgradeSelectToCustom);
 }
 
 // 订阅全局登录/登出事件，修复"未登录状态打开页面后登录"导致复盘不同步的 bug
@@ -589,6 +598,10 @@ function openAddDiaryModal() {
     document.getElementById('diaryForm').reset();
     document.getElementById('diaryDate').value = new Date().toISOString().split('T')[0];
     document.getElementById('diaryModal').classList.add('show');
+    // 升级弹窗内所有原生 select 为 custom-select（视觉与"买点类型"统一）
+    if (typeof upgradeSelectToCustom === 'function') {
+      document.querySelectorAll('#diaryModal select').forEach(upgradeSelectToCustom);
+    }
   } catch (error) {
     console.error('打开模态框失败:', error);
     alert('打开记录表单失败，请刷新页面重试');
@@ -609,8 +622,12 @@ function editDiary(id) {
   document.getElementById('diaryFollowSystem').value = item.followSystem || '否';
   document.getElementById('diaryLesson').value = item.lesson || '';
   document.getElementById('diaryImprovement').value = item.improvement || '';
-  
+
   document.getElementById('diaryModal').classList.add('show');
+  // 升级弹窗内所有原生 select 为 custom-select（视觉与"买点类型"统一）
+  if (typeof upgradeSelectToCustom === 'function') {
+    document.querySelectorAll('#diaryModal select').forEach(upgradeSelectToCustom);
+  }
 }
 
 function viewDiary(id) {

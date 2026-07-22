@@ -769,6 +769,9 @@ function openAddTradeModal() {
   var delBtn = document.getElementById('te_deleteBtn');
   if (delBtn) delBtn.style.display = 'none';
 
+  // 升级弹窗内所有原生 select 为 custom-select（视觉与"买点类型"统一）
+  upgradeTradeEditSelects();
+
   var modal = document.getElementById('tradeEditModal');
   if (modal) modal.style.display = 'flex';
 }
@@ -819,8 +822,20 @@ function openEditTradeModal(id) {
   // 绑定出场价联动逻辑：清空出场价时同步清空盈亏相关字段
   bindExitPriceLiveClear();
 
+  // 升级弹窗内所有原生 select 为 custom-select（视觉与"买点类型"统一）
+  upgradeTradeEditSelects();
+
   var modal = document.getElementById('tradeEditModal');
   if (modal) modal.style.display = 'flex';
+}
+
+// 把交易编辑弹窗内的所有原生 <select> 升级为 custom-select
+// 升级本身有幂等保护（dataset.csUpgraded 标记），多次调用安全
+function upgradeTradeEditSelects() {
+  if (typeof upgradeSelectToCustom !== 'function') return;
+  var modal = document.getElementById('tradeEditModal');
+  if (!modal) return;
+  modal.querySelectorAll('select').forEach(upgradeSelectToCustom);
 }
 
 // 当用户清空出场价时，实时清空盈亏金额、盈亏R、出场日期、出场类型

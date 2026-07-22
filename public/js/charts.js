@@ -200,6 +200,10 @@ function openEquityModal() {
   var modal = document.getElementById('equityModal');
   if (modal) {
     modal.classList.add('show');
+    // 升级弹窗内所有原生 select 为 custom-select（视觉与"买点类型"统一）
+    if (typeof upgradeSelectToCustom === 'function') {
+      modal.querySelectorAll('select').forEach(upgradeSelectToCustom);
+    }
     refreshEquityModal();
   }
 }

@@ -402,6 +402,17 @@
   padding: 5px 8px;
 }
 
+/* custom-select 升级后，wrapper 继承 select 的尺寸约束 */
+.dr-index-trend-row .custom-select-wrapper {
+  flex: 0 0 160px;
+  width: 160px;
+}
+
+.dr-index-trend-row .custom-select-wrapper .custom-select {
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
 .dr-index-trend-row .dr-index-trend-result {
   flex: 1 1 auto;
   text-align: left;
@@ -465,7 +476,6 @@
 }
 
 .dr-input,
-.dr-select,
 .dr-textarea {
   padding: 8px 12px;
   border: 1px solid var(--border-input);
@@ -479,7 +489,6 @@
 }
 
 .dr-input:focus,
-.dr-select:focus,
 .dr-textarea:focus {
   outline: none;
   border-color: var(--color-blue);
@@ -490,6 +499,11 @@
   resize: vertical;
   min-height: 60px;
   font-family: inherit;
+}
+
+/* ===== dr-field 内的 custom-select-wrapper 默认占满宽度 ===== */
+.dr-field .custom-select-wrapper {
+  width: 100%;
 }
 
 /* 主线板块 */
@@ -510,8 +524,19 @@
   min-width: 120px;
 }
 
-.dr-theme-row .dr-select {
+.dr-theme-row .custom-select-wrapper {
   flex: 0 0 100px;
+}
+
+/* 主线板块行内的 custom-select 显式覆盖父级可能继承的小字号，保持与"买点类型"一致 */
+.dr-theme-row .custom-select,
+.dr-themes-container > * .custom-select {
+  font-size: 12px;
+}
+
+.dr-theme-row .custom-select-wrapper .custom-select,
+.dr-themes-container .custom-select {
+  font-size: 12px;
 }
 
 .dr-btn-icon {
@@ -1273,6 +1298,6 @@
   .dr-field-row { grid-template-columns: 1fr; }
   .dr-theme-row { flex-wrap: wrap; }
   .dr-theme-row .dr-input { flex: 1 1 100%; }
-  .dr-theme-row .dr-select { flex: 1 1 calc(50% - 4px); }
+  .dr-theme-row .custom-select-wrapper { flex: 1 1 calc(50% - 4px); }
   .dr-trade-header { gap: 8px; }
 }
