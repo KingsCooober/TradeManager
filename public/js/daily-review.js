@@ -105,16 +105,25 @@ function setupDREventListeners() {
       if (typeof saveDRReview === 'function') saveDRReview();
     }
   });
-  document.addEventListener('change', function(e) {
-    if (e.target.closest('.dr-section-body')) {
-      drDataDirty = true;
-    }
-  });
-  document.addEventListener('input', function(e) {
-    if (e.target.closest('.dr-section-body')) {
-      drDataDirty = true;
-    }
-  });
+  // 统一监听 change / input：在 .dr-section-body 内的表单字段变更后，
+  // 标记 dirty 并通过 1 秒防抖触发自动保存（saveDRData 会本地 + 同步到服务器）。
+  // 这样 summary / discipline 字段（drGoodPoints、drPlannedPos、复选框等）无需各自
+  // 单独写保存逻辑也能在编辑后自动同步到后端。
+  function markDirtyAndScheduleSave(e) {
+    if (!e.target || !e.target.closest || !e.target.closest('.dr-section-body')) return;
+    // 跳过已经单独处理的字段（交易复盘字段有 saveTradeFieldToData）
+    if (e.target.classList && e.target.classList.contains('dr-trade-field')) return;
+    drDataDirty = true;
+    if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
+    drAutoSaveTimer = setTimeout(function() {
+      saveDRData();
+      drDataDirty = false;
+      drAutoSaveTimer = null;
+      showDRAutoSaveHint();
+    }, 1000);
+  }
+  document.addEventListener('change', markDirtyAndScheduleSave);
+  document.addEventListener('input', markDirtyAndScheduleSave);
 }
 
 // ===== 登录状态 =====
@@ -1144,6 +1153,15 @@ function saveTradeFieldToData(tradeId, field, value) {
     rec[field] = value;
     drData.tradeReviews.push(rec);
   }
+  // 标记脏数据 + 延迟 1 秒自动保存（与其他字段一致）
+  drDataDirty = true;
+  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
+  drAutoSaveTimer = setTimeout(function() {
+    saveDRData();
+    drDataDirty = false;
+    drAutoSaveTimer = null;
+    showDRAutoSaveHint();
+  }, 1000);
 }
 
 // ===== 主线板块 =====
@@ -1199,6 +1217,15 @@ function saveDRThemesToData() {
     themes.push(t);
   });
   drData.themes = themes;
+  // 主线板块修改后立即触发自动保存
+  drDataDirty = true;
+  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
+  drAutoSaveTimer = setTimeout(function() {
+    saveDRData();
+    drDataDirty = false;
+    drAutoSaveTimer = null;
+    showDRAutoSaveHint();
+  }, 1000);
 }
 
 function addDRTheme() {
@@ -1206,6 +1233,11 @@ function addDRTheme() {
   if (!drData.themes) drData.themes = [];
   drData.themes.push({ name: '', strength: '', stage: '' });
   renderDRThemes();
+  // 新增主题行后立即保存（不依赖字段 change 事件）
+  drDataDirty = true;
+  saveDRData();
+  drDataDirty = false;
+  showDRAutoSaveHint();
 }
 
 function removeDRTheme(idx) {
@@ -1213,6 +1245,11 @@ function removeDRTheme(idx) {
   drData.themes.splice(idx, 1);
   if (drData.themes.length === 0) drData.themes.push({ name: '', strength: '', stage: '' });
   renderDRThemes();
+  // 删除主题行后立即保存
+  drDataDirty = true;
+  saveDRData();
+  drDataDirty = false;
+  showDRAutoSaveHint();
 }
 
 // ===== 交易纪律（全局） =====
@@ -1483,6 +1520,15 @@ function setDRMoodScore(score) {
   stars.forEach(function(s, i) {
     s.classList.toggle('active', i < score);
   });
+  // 心态评分变更后触发自动保存（与其他字段一致）
+  drDataDirty = true;
+  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
+  drAutoSaveTimer = setTimeout(function() {
+    saveDRData();
+    drDataDirty = false;
+    drAutoSaveTimer = null;
+    showDRAutoSaveHint();
+  }, 1000);
 }
 
 function getDRMoodScore() {
@@ -1504,6 +1550,17 @@ function renderDRMoodTags(selected) {
 
 function toggleDRMoodTag(el, tag) {
   el.classList.toggle('active');
+  // 把当前激活的标签同步到 drData.discipline.moodTags 并触发自动保存
+  drData.discipline = drData.discipline || {};
+  drData.discipline.moodTags = getDRMoodTags();
+  drDataDirty = true;
+  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
+  drAutoSaveTimer = setTimeout(function() {
+    saveDRData();
+    drDataDirty = false;
+    drAutoSaveTimer = null;
+    showDRAutoSaveHint();
+  }, 1000);
 }
 
 function getDRMoodTags() {

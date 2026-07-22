@@ -236,6 +236,25 @@ function loadAccountParams() {
   }
 }
 
+// 延迟同步账户参数到服务器（500ms 防抖）
+// updateAll 会在每次交易/资金变化时调用，如果不防抖会产生大量重复同步请求
+var _accountSyncTimer = null;
+function scheduleAccountSync() {
+  if (typeof syncModule === 'undefined' || !syncModule.isLoggedIn || !syncModule.isLoggedIn()) return;
+  if (typeof syncModule.syncToServer !== 'function') return;
+  if (_accountSyncTimer) clearTimeout(_accountSyncTimer);
+  _accountSyncTimer = setTimeout(function() {
+    _accountSyncTimer = null;
+    try {
+      syncModule.syncToServer().catch(function(err) {
+        console.error('账户参数同步到服务器失败:', err);
+      });
+    } catch (e) {
+      console.error('触发账户参数同步失败:', e);
+    }
+  }, 500);
+}
+
 // 保存账户参数
 function saveAccountParams() {
   var params = {
@@ -244,7 +263,7 @@ function saveAccountParams() {
     maxRisk: parseFloat(document.getElementById('maxRisk').value) || 5,
     feeRate: parseFloat(document.getElementById('feeRate').value) || 0.1
   };
-  
+
   if (dbInitialized && db) {
     var promises = Object.keys(params).map(function(key) {
       return saveSettingToDB(key, params[key]);
@@ -253,9 +272,16 @@ function saveAccountParams() {
       console.error('保存设置失败:', err);
     });
   }
-  
+
   // 同时保存到localStorage作为备份
   localStorage.setItem('account_v1', JSON.stringify(params));
+
+  // 同步到服务器（如果已登录）
+  // 设置字段（initCapital/riskPct/maxRisk/feeRate）通过 onchange="updateAll()" → saveAccountParams()
+  // 此前只保存到本地，不上传到后端。这里在保存本地后立即触发批量同步，
+  // 使后端 SQLite 中的 settings 表与本地保持一致。
+  // 用 500ms 防抖避免 updateAll 频繁调用时产生重复请求
+  scheduleAccountSync();
 }
 
 // 加载资金记录
