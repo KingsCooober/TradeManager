@@ -1,11 +1,5 @@
 // ===== 开仓计算器 =====
-// 买点类型定义 - 在此数组中增删即可，页面会自动同步
-var BUY_TYPES = [
-  '一类买点：单周期15分钟回踩突破',
-  '二类买点：双周期60分钟回踩突破+日线5-10金叉',
-  '三类买点：三周期日线回踩突破+日线金叉+60分钟+15分钟共振',
-  '四类买点：波段底部放量锤头线|反包阳线|小阳线'
-];
+// 买点类型定义已移至 utils.js (BUY_TYPES)，本页直接引用
 
 function renderBuyTypeOptions() {
   var optionsEl = document.getElementById('buyTypeOptions');

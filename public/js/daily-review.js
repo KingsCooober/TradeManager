@@ -390,8 +390,19 @@ function loadAllTrades() {
 }
 
 function loadTradesForDate(date) {
-  var dayTrades = drAllTrades.filter(function(t) {
-    return t.date === date;
+  // 当日交易复盘范围：
+  //   1. 当日开仓（t.date === date）
+  //   2. 当日出场（t.exitDate === date）—— 即使开仓日是更早，也纳入今日复盘
+  // 用 id 去重，避免同笔交易（开仓=出场=今日）出现两次
+  var seen = {};
+  var dayTrades = [];
+  drAllTrades.forEach(function(t) {
+    if (t.date === date || t.exitDate === date) {
+      var key = String(t.id);
+      if (seen[key]) return;
+      seen[key] = true;
+      dayTrades.push(t);
+    }
   });
   renderDRTrades(dayTrades);
   updateDRSummaryCards(dayTrades);
@@ -1052,8 +1063,16 @@ function renderDRTrades(dayTrades) {
     var existing = (drData.tradeReviews || []).find(function(r) { return r.tradeId === t.id; });
     var pnlColor = t.pnl !== '' && !isNaN(parseFloat(t.pnl)) ? (parseFloat(t.pnl) >= 0 ? 'var(--color-red)' : 'var(--color-green)') : 'var(--text-secondary)';
 
+    // 区分「当日开仓」与「当日出场（跨日持仓平仓）」两种来源
+    var isOpenedToday = t.date === drCurrentDate;
+    var isExitedToday = !isOpenedToday && t.exitDate === drCurrentDate;
+    var sourceTag = isExitedToday
+      ? '<span class="dr-trade-source dr-source-exit" title="此笔在 ' + esc(t.date) + ' 开仓，今日平仓">📤 当日出场 · 开仓 ' + esc(t.date) + '</span>'
+      : '<span class="dr-trade-source dr-source-open" title="今日开仓">📥 当日开仓</span>';
+
     html += '<div class="dr-trade-card card" data-trade-id="' + esc(t.id) + '">';
     html += '<div class="dr-trade-header">';
+    html += sourceTag;
     html += '<span class="dr-trade-symbol">' + esc(t.symbol || '-') + '</span>';
     html += '<span class="dr-trade-dir ' + (t.dir === '多' ? 'dir-long' : 'dir-short') + '">' + esc(t.dir || '-') + '</span>';
     html += '<span class="dr-trade-entry">入场 ' + esc(t.entry || '-') + '</span>';
@@ -1068,10 +1087,11 @@ function renderDRTrades(dayTrades) {
     html += '<div class="dr-field"><label>买入逻辑</label><input type="text" class="dr-input dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="buyLogic" value="' + esc((existing && existing.buyLogic) || '') + '" placeholder="为什么买这只"></div>';
     html += '<div class="dr-field"><label>买入信号</label><input type="text" class="dr-input dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="buySignal" value="' + esc((existing && existing.buySignal) || '') + '" placeholder="具体触发信号"></div>';
     html += '<div class="dr-field"><label>买点类型</label><select class="dr-select dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="buyType">';
-    var buyTypes = ['', '突破买', '回踩买', '低吸', '打板', '半路', '其他'];
-    var curBuyType = existing ? existing.buyType : '';
-    buyTypes.forEach(function(bt) {
-      html += '<option value="' + esc(bt) + '"' + (curBuyType === bt ? ' selected' : '') + '>' + (bt || '请选择') + '</option>';
+    // 买点类型与开仓计算器同步（来自 utils.js BUY_TYPES）；优先预填 trade.buyType
+    var curBuyType = (existing && existing.buyType) || t.buyType || '';
+    html += '<option value=""' + (curBuyType === '' ? ' selected' : '') + '>请选择</option>';
+    (window.BUY_TYPES || []).forEach(function(bt) {
+      html += '<option value="' + esc(bt) + '"' + (curBuyType === bt ? ' selected' : '') + '>' + esc(bt) + '</option>';
     });
     html += '</select></div>';
     html += '<div class="dr-field"><label>符合系统</label><select class="dr-select dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="followedPlan">';

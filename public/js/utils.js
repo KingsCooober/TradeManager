@@ -1,5 +1,13 @@
 // ===== 工具函数 =====
 
+// 买点类型选项（开仓计算器 与 每日复盘交易复盘 共用，修改此数组即可同步两处）
+var BUY_TYPES = [
+  '一类买点：单周期15分钟回踩突破',
+  '二类买点：双周期60分钟回踩突破+日线5-10金叉',
+  '三类买点：三周期日线回踩突破+日线金叉+60分钟+15分钟共振',
+  '四类买点：波段底部放量锤头线|反包阳线|小阳线'
+];
+
 // 生成UUID v4
 function generateUUID() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
