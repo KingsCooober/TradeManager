@@ -163,9 +163,9 @@ function loadFromServerDR() {
   if (typeof syncModule !== 'undefined' && syncModule.setSyncIndicatorState) {
     syncModule.setSyncIndicatorState('syncing', '正在加载复盘数据...');
   }
-  fetch('/api/daily-review/' + drCurrentUserId, {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json' }
+  // P0-1: 必须用 authFetch，否则提交 80ee3c3 加入的 authMiddleware 会返回 401
+  authFetch('/api/daily-review/' + drCurrentUserId, {
+    method: 'GET'
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
@@ -241,9 +241,9 @@ function syncToServerDR() {
   if (typeof syncModule !== 'undefined' && syncModule.setSyncIndicatorState) {
     syncModule.setSyncIndicatorState('syncing', '正在保存复盘...');
   }
-  fetch('/api/daily-review/' + drCurrentUserId, {
+  // P0-1: 必须用 authFetch，否则提交 80ee3c3 加入的 authMiddleware 会返回 401
+  authFetch('/api/daily-review/' + drCurrentUserId, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ review: drData })
   })
   .then(function(r) { return r.json(); })
@@ -1277,9 +1277,10 @@ function saveDRDisciplineRules() {
 // 同步交易纪律到服务器
 function syncDisciplineRulesToServer() {
   if (!drCurrentUserId) return;
-  fetch('/api/discipline-rules/' + drCurrentUserId, {
+  // P0-1: 必须用 authFetch，否则提交 80ee3c3 加入的 authMiddleware 会返回 401
+  // 这是「同一账号跨设备看不到交易纪律」的根本原因
+  authFetch('/api/discipline-rules/' + drCurrentUserId, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ rules: drDisciplineRules })
   })
   .then(function(r) { return r.json(); })
@@ -1302,9 +1303,9 @@ function loadDisciplineRulesFromServer() {
   // 快照本地纪律（用于合并前的状态）
   var localRules = drDisciplineRules.slice();
 
-  fetch('/api/discipline-rules/' + drCurrentUserId, {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json' }
+  // P0-1: 必须用 authFetch，否则提交 80ee3c3 加入的 authMiddleware 会返回 401
+  authFetch('/api/discipline-rules/' + drCurrentUserId, {
+    method: 'GET'
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
@@ -1350,9 +1351,9 @@ function loadDisciplineRulesFromServer() {
 function forceSyncDisciplineRulesToServer(rules) {
   if (!drCurrentUserId) return;
   var payload = Array.isArray(rules) ? rules : drDisciplineRules;
-  fetch('/api/discipline-rules/' + drCurrentUserId, {
+  // P0-1: 必须用 authFetch，否则提交 80ee3c3 加入的 authMiddleware 会返回 401
+  authFetch('/api/discipline-rules/' + drCurrentUserId, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ rules: payload })
   })
   .then(function(r) { return r.json(); })

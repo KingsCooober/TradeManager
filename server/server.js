@@ -301,10 +301,18 @@ app.post('/api/sync/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req
   
   db.serialize(() => {
     // 更新设置
+    // 关键修复：用 ON CONFLICT 增量更新而不是 INSERT OR REPLACE，
+    // 否则每 5 秒的自动同步会清空同行的 discipline_rules_json
     if (settings) {
       db.run(
-        `INSERT OR REPLACE INTO settings (user_id, init_capital, risk_pct, max_risk, fee_rate, updated_at) 
-         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        `INSERT INTO settings (user_id, init_capital, risk_pct, max_risk, fee_rate, updated_at)
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(user_id) DO UPDATE SET
+           init_capital = excluded.init_capital,
+           risk_pct = excluded.risk_pct,
+           max_risk = excluded.max_risk,
+           fee_rate = excluded.fee_rate,
+           updated_at = CURRENT_TIMESTAMP`,
         [userId, settings.initCapital, settings.riskPct, settings.maxRisk, settings.feeRate]
       );
     }
@@ -441,9 +449,17 @@ app.post('/api/settings/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, 
   const { userId } = req.params;
   const { initCapital, riskPct, maxRisk, feeRate } = req.body;
 
+  // 关键修复：使用 ON CONFLICT 增量更新，保留同行的其他字段（如 discipline_rules_json）
+  // 之前用 INSERT OR REPLACE 会清空整行，导致每日复盘的交易纪律被误删
   db.run(
-    `INSERT OR REPLACE INTO settings (user_id, init_capital, risk_pct, max_risk, fee_rate, updated_at)
-     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    `INSERT INTO settings (user_id, init_capital, risk_pct, max_risk, fee_rate, updated_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(user_id) DO UPDATE SET
+       init_capital = excluded.init_capital,
+       risk_pct = excluded.risk_pct,
+       max_risk = excluded.max_risk,
+       fee_rate = excluded.fee_rate,
+       updated_at = CURRENT_TIMESTAMP`,
     [userId, initCapital, riskPct, maxRisk, feeRate],
     function(err) {
       if (err) return res.status(500).json({ error: err.message });
