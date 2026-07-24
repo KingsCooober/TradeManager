@@ -568,6 +568,15 @@ function renderDRIndicesMAStatus() {
 
   var html = '';
   drData.indices.forEach(function(idx, i) {
+    // 计算技术面评分（用于显示评分徽章；不写入 trendResult，保持 analyzeTrend 主体逻辑）
+    var ma5Pos  = (idx.ma5Analysis && idx.ma5Analysis.position)  || '';
+    var ma20Pos = (idx.ma20Analysis && idx.ma20Analysis.position) || '';
+    var scoreObj = scoreTechnical(idx.maState, idx.macdState, ma5Pos, ma20Pos);
+    var scoreBadgeCls = scoreObj.filled ? getScoreBadgeClass(scoreObj.total) : 'score-empty';
+    var scoreText = scoreObj.filled
+      ? '技术分 ' + scoreObj.total + '/40 · ' + scoreObj.trendFromScore
+      : '技术分 —/40（待填）';
+
     html += '<div class="dr-index-card" data-index="' + i + '">';
     html += '<div class="dr-index-name">' + esc(idx.name) + '</div>';
     html += '<div class="dr-index-fields">';
@@ -591,7 +600,6 @@ function renderDRIndicesMAStatus() {
     html += '</select></div>';
 
     // 5 日均线位置（在 MACD 旁边：3 选项）— 放在走势判断之前，保持 3 select 同一行
-    var ma5Pos = (idx.ma5Analysis && idx.ma5Analysis.position) || '';
     html += '<div class="dr-field"><label>价格 vs 5日线</label>';
     html += '<select class="dr-select dr-index-ma5pos" data-index="' + i + '">';
     html += '<option value="">请选择</option>';
@@ -612,6 +620,13 @@ function renderDRIndicesMAStatus() {
     html += '</select>';
     // 高亮醒目字体显示当前走势（保留配色）
     html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '请选择走势') + '</div>';
+    html += '</div>';
+    // 技术面 0-40 分评分徽章（4 维度加权：均线 + MACD + 5日线 + 20日线）
+    html += '<div class="dr-index-score-badge ' + scoreBadgeCls + '" data-index="' + i + '">';
+    html += '<span class="dr-index-score-text">' + esc(scoreText) + '</span>';
+    if (scoreObj.filled) {
+      html += '<span class="dr-index-score-detail">均线 ' + scoreObj.ma + ' + MACD ' + scoreObj.macd + ' + 5日线 ' + scoreObj.ma5 + ' + 20日线 ' + scoreObj.ma20 + '</span>';
+    }
     html += '</div>';
     html += '</div>';
 
@@ -709,10 +724,11 @@ function onDRManualTrendChange(idx) {
   }, 1000);
 }
 
-// 更新单个指数的走势显示
+// 更新单个指数的走势显示 + 技术面评分徽章
 function updateDRIndexTrendUI(idx) {
   var trendBox = document.querySelector('.dr-index-trend[data-index="' + idx + '"] .dr-index-trend-result');
   var hintBox = document.querySelector('.dr-index-trend[data-index="' + idx + '"] .dr-index-trend-hint');
+  var scoreBadge = document.querySelector('.dr-index-score-badge[data-index="' + idx + '"]');
   if (!trendBox) return;
   var item = drData.indices[idx];
   trendBox.className = 'dr-index-trend-result';
@@ -725,13 +741,35 @@ function updateDRIndexTrendUI(idx) {
   if (hintBox) {
     hintBox.textContent = item.trendHint || '';
   }
+  // 同步技术面评分徽章
+  if (scoreBadge) {
+    var ma5Pos  = (item.ma5Analysis  && item.ma5Analysis.position)  || '';
+    var ma20Pos = (item.ma20Analysis && item.ma20Analysis.position) || '';
+    var s = scoreTechnical(item.maState, item.macdState, ma5Pos, ma20Pos);
+    scoreBadge.className = 'dr-index-score-badge ' + (s.filled ? getScoreBadgeClass(s.total) : 'score-empty');
+    var textEl  = scoreBadge.querySelector('.dr-index-score-text');
+    var detailEl = scoreBadge.querySelector('.dr-index-score-detail');
+    if (textEl) {
+      textEl.textContent = s.filled
+        ? '技术分 ' + s.total + '/40 · ' + s.trendFromScore
+        : '技术分 —/40（待填）';
+    }
+    if (detailEl) {
+      if (s.filled) {
+        detailEl.textContent = '均线 ' + s.ma + ' + MACD ' + s.macd + ' + 5日线 ' + s.ma5 + ' + 20日线 ' + s.ma20;
+        detailEl.style.display = '';
+      } else {
+        detailEl.style.display = 'none';
+      }
+    }
+  }
 }
 
 // 综合走势（最保守原则：取所有指数中走势最弱的）
 function recalcDROverallTrend() {
-  if (!Array.isArray(drData.indices)) return { trend: '', hint: '' };
+  if (!Array.isArray(drData.indices)) return { trend: '', hint: '', totalScore: 0, scoreBreakdown: '' };
   var judged = drData.indices.filter(function(i) { return i.trendResult; });
-  if (judged.length === 0) return { trend: '', hint: '请为每个指数选择「均线状态」和「MACD 状态」' };
+  if (judged.length === 0) return { trend: '', hint: '请为每个指数选择「均线状态」和「MACD 状态」', totalScore: 0, scoreBreakdown: '' };
 
   var weakest = judged[0];
   judged.forEach(function(i) {
@@ -752,23 +790,124 @@ function recalcDROverallTrend() {
     hint += ' ｜ 5日线共识：' + ma5Filled.length + ' 个指数已填，' + consensus + '（上 ' + upCnt + ' / 下 ' + dnCnt + '）';
   }
 
+  // 技术面评分汇总：所有指数的技术分平均（最保守原则取最弱，但显示平均让用户横向对比）
+  var scored = drData.indices
+    .map(function(i) {
+      var ma5Pos  = (i.ma5Analysis  && i.ma5Analysis.position)  || '';
+      var ma20Pos = (i.ma20Analysis && i.ma20Analysis.position) || '';
+      return scoreTechnical(i.maState, i.macdState, ma5Pos, ma20Pos);
+    })
+    .filter(function(s) { return s.filled; });
+  var totalScore = 0;
+  var scoreBreakdown = '';
+  var hasScore = scored.length > 0;
+  if (hasScore) {
+    var sum = scored.reduce(function(acc, s) { return acc + s.total; }, 0);
+    totalScore = Math.round(sum / scored.length);
+    var avgMa   = Math.round(scored.reduce(function(a, s) { return a + s.ma;   }, 0) / scored.length);
+    var avgMacd = Math.round(scored.reduce(function(a, s) { return a + s.macd; }, 0) / scored.length);
+    var avgMa5  = Math.round(scored.reduce(function(a, s) { return a + s.ma5;  }, 0) / scored.length);
+    var avgMa20 = Math.round(scored.reduce(function(a, s) { return a + s.ma20; }, 0) / scored.length);
+    scoreBreakdown = '均线 ' + avgMa + ' + MACD ' + avgMacd + ' + 5日线 ' + avgMa5 + ' + 20日线 ' + avgMa20;
+    hint += ' ｜ 技术面均分：' + totalScore + '/40 → ' + scoreToTrend(totalScore);
+  }
+
   return {
     trend: weakest.trendResult,
-    hint: hint
+    hint: hint,
+    totalScore: totalScore,
+    scoreBreakdown: scoreBreakdown,
+    hasScore: hasScore
   };
 }
 
 // 整体走势 + 整体仓位 重新计算
 function recalcDROverall() {
-  // 1. 综合走势
+  // 1. 综合走势（含技术面均分）
   var overall = recalcDROverallTrend();
-  updateDRTrendResultUI(overall.trend, overall.hint);
+  updateDRTrendResultUI(overall.trend, overall.hint, overall.totalScore, overall.scoreBreakdown);
 
   // 2. 整体仓位 = 各指数命中规则中取最保守的（仓位区间最小的）
   autoCalcDRPosition();
 
   // 3. 同步刷新历史复盘列表（让当前编辑的复盘卡片实时反映走势+仓位变化）
   renderReviewHistory();
+}
+
+// ==================== 技术面 0-40 分自动评分 ====================
+// 设计原则：4 个维度加权求和，每个维度按强弱分配不同分值
+//   - 均线状态        0-12 分（趋势方向）
+//   - MACD 状态       0-12 分（动能强弱）
+//   - 价格 vs 5日线   0-8 分（短期超强势）
+//   - 价格 vs 20日线  0-8 分（中期趋势）
+// 总分 0-40 → 6 档走势映射（与原 6 档一致）
+//   32-40 → 强势上涨
+//   24-31 → 多头趋势
+//   18-23 → 反弹观察
+//   12-17 → 震荡整理
+//    6-11 → 趋势走弱
+//    0-5  → 弱势下跌
+var SCORE_MA_MAP = {
+  '多头排列': 12,
+  '5-10金叉': 10,
+  '5-10粘合': 5,
+  '5-10死叉': 3,
+  '空头排列': 0
+};
+var SCORE_MACD_MAP = {
+  '水上金叉': 12,
+  '水上多头': 10,
+  '水下底背离':  9,   // 弱势酝酿反转，参考价值高
+  '水下金叉':   8,   // 弱势转强
+  '水下多头':   6,
+  '水上死叉':   4,   // 强势转弱
+  '水上空头':   3,
+  '水上顶背离': 3,   // 顶部信号，强转弱
+  '水下死叉':   2,
+  '水下空头':   0
+};
+// 价格 vs 均线位置：上方 8 / 下方 0；未填按中性 4（不打分也不扣分）
+var SCORE_POS_MAP = { 'above': 8, 'below': 0 };
+var SCORE_POS_NEUTRAL = 4;
+
+// 单个指数技术面评分
+// 入参: maState / macdState / ma5Pos('above'|'below'|''|undefined) / ma20Pos(同上)
+// 返回: { ma, macd, ma5, ma20, total, trendFromScore, filled }
+function scoreTechnical(maState, macdState, ma5Pos, ma20Pos) {
+  var ma   = SCORE_MA_MAP[maState]   != null ? SCORE_MA_MAP[maState]   : 0;
+  var macd = SCORE_MACD_MAP[macdState] != null ? SCORE_MACD_MAP[macdState] : 0;
+  var ma5  = (ma5Pos  && SCORE_POS_MAP[ma5Pos]  != null) ? SCORE_POS_MAP[ma5Pos]  : SCORE_POS_NEUTRAL;
+  var ma20 = (ma20Pos && SCORE_POS_MAP[ma20Pos] != null) ? SCORE_POS_MAP[ma20Pos] : SCORE_POS_NEUTRAL;
+  var total = ma + macd + ma5 + ma20;
+  return {
+    ma: ma,
+    macd: macd,
+    ma5: ma5,
+    ma20: ma20,
+    total: total,
+    trendFromScore: scoreToTrend(total),
+    filled: !!(maState && macdState)
+  };
+}
+
+// 分数 → 6 档走势（与原 DR_TREND_RANK 一一对应）
+function scoreToTrend(total) {
+  if (total >= 32) return '强势上涨';
+  if (total >= 24) return '多头趋势';
+  if (total >= 18) return '反弹观察';
+  if (total >= 12) return '震荡整理';
+  if (total >=  6) return '趋势走弱';
+  return '弱势下跌';
+}
+
+// 评分等级 CSS class
+function getScoreBadgeClass(total) {
+  if (total >= 32) return 'score-max';
+  if (total >= 24) return 'score-bullish';
+  if (total >= 18) return 'score-rebound';
+  if (total >= 12) return 'score-neutral';
+  if (total >=  6) return 'score-warning';
+  return 'score-weak';
 }
 
 // 单个指数的走势判定（5-10 均线 + MACD + 价格 vs 5日线位置 → 6 种走势之一）
@@ -896,10 +1035,11 @@ function analyzeTrend(maState, macdState, ma5Position) {
   return { trend: trend, reason: reason };
 }
 
-// 综合走势 UI 更新
-function updateDRTrendResultUI(trend, hint) {
+// 综合走势 UI 更新（含技术面均分显示）
+function updateDRTrendResultUI(trend, hint, totalScore, scoreBreakdown) {
   var valEl = document.getElementById('drTrendResultValue');
   var hintEl = document.getElementById('drTrendResultHint');
+  var scoreEl = document.getElementById('drTrendResultScore');
   if (!valEl) return;
   valEl.className = 'dr-trend-result-value';
 
@@ -910,6 +1050,22 @@ function updateDRTrendResultUI(trend, hint) {
   } else {
     valEl.textContent = '—';
     if (hintEl) hintEl.textContent = hint || '请为每个指数选择「均线状态」和「MACD 状态」';
+  }
+
+  // 技术面 0-40 分均分徽章（只在有评分时显示）
+  if (scoreEl) {
+    if (totalScore && scoreBreakdown) {
+      scoreEl.style.display = '';
+      var valSpan = scoreEl.querySelector('.dr-trend-result-score-value');
+      var detailSpan = scoreEl.querySelector('.dr-trend-result-score-detail');
+      if (valSpan) {
+        valSpan.textContent = '技术分 ' + totalScore + '/40';
+        valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalScore);
+      }
+      if (detailSpan) detailSpan.textContent = scoreBreakdown || '';
+    } else {
+      scoreEl.style.display = 'none';
+    }
   }
 }
 

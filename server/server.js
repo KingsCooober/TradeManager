@@ -9,6 +9,8 @@ const bcrypt = require('bcryptjs');
 
 // P0-1: 引入自实现的轻量 JWT 认证模块（与标准 JWT 兼容）
 const auth = require('./auth');
+// 行情数据代理（腾讯股票 API 免 Key）
+const market = require('./market-quote');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -811,6 +813,33 @@ app.get('/api/admin/stats', auth.authMiddleware, auth.requireAdmin, (req, res) =
       });
     });
   });
+});
+
+// ===== 行情数据代理（腾讯 API 免 Key） =====
+// 数据延迟约 15 分钟；前端用 authFetch 调用，自动注入 JWT
+// 注意：行情数据与用户无关，但保持与前端其他 API 一致的鉴权风格
+
+// 单只指数：实时行情 + 5/10/20/60 日均价
+app.get('/api/market/index/:key', auth.authMiddleware, async (req, res) => {
+  const { key } = req.params;
+  try {
+    const data = await market.getIndexMarket(key);
+    res.json(data);
+  } catch (e) {
+    console.error('[market] getIndexMarket 失败:', key, e.message);
+    res.status(500).json({ error: '行情获取失败: ' + e.message });
+  }
+});
+
+// 全部 4 只指数批量：一次拉完，前端轮询用
+app.get('/api/market/indices', auth.authMiddleware, async (req, res) => {
+  try {
+    const data = await market.getAllIndicesMarket();
+    res.json(data);
+  } catch (e) {
+    console.error('[market] getAllIndicesMarket 失败:', e.message);
+    res.status(500).json({ error: '行情获取失败: ' + e.message });
+  }
 });
 
 // 启动服务器

@@ -388,6 +388,76 @@
   line-height: 1.4;
 }
 
+/* 技术面 0-40 分评分徽章（每个指数卡片底部） */
+.dr-index-score-badge {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border-left: 3px solid var(--border-card);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  line-height: 1.4;
+  transition: all 0.2s ease;
+}
+.dr-index-score-badge .dr-index-score-text {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.dr-index-score-badge .dr-index-score-detail {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 评分等级配色（与 6 档走势配色对应） */
+.dr-index-score-badge.score-empty    { background: var(--bg-subtle); border-left-color: var(--border-card); }
+.dr-index-score-badge.score-empty    .dr-index-score-text { color: var(--text-tertiary); }
+.dr-index-score-badge.score-max      { background: rgba(6, 214, 160, 0.08);  border-left-color: var(--color-green); }
+.dr-index-score-badge.score-max      .dr-index-score-text { color: var(--color-green); }
+.dr-index-score-badge.score-bullish  { background: rgba(239, 71, 111, 0.06); border-left-color: var(--color-red); }
+.dr-index-score-badge.score-bullish  .dr-index-score-text { color: var(--color-red); }
+.dr-index-score-badge.score-rebound  { background: rgba(67, 97, 238, 0.06);  border-left-color: var(--color-blue); }
+.dr-index-score-badge.score-rebound  .dr-index-score-text { color: var(--color-blue); }
+.dr-index-score-badge.score-neutral  { background: rgba(67, 97, 238, 0.04);  border-left-color: var(--color-blue); }
+.dr-index-score-badge.score-neutral  .dr-index-score-text { color: var(--color-blue); }
+.dr-index-score-badge.score-warning  { background: rgba(255, 209, 102, 0.12); border-left-color: #b8860b; }
+.dr-index-score-badge.score-warning  .dr-index-score-text { color: #b8860b; }
+.dr-index-score-badge.score-weak     { background: rgba(239, 71, 111, 0.08); border-left-color: var(--color-red); }
+.dr-index-score-badge.score-weak     .dr-index-score-text { color: var(--color-red); }
+
+/* 综合走势区域的技术面均分显示（drTrendResultScore） */
+.dr-trend-result-score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--border-card);
+  margin-top: 6px;
+  font-size: 13px;
+}
+.dr-trend-result-score-value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+.dr-trend-result-score-value.score-max     { color: var(--color-green); }
+.dr-trend-result-score-value.score-bullish { color: var(--color-red); }
+.dr-trend-result-score-value.score-rebound { color: var(--color-blue); }
+.dr-trend-result-score-value.score-neutral { color: var(--color-blue); }
+.dr-trend-result-score-value.score-warning { color: #b8860b; }
+.dr-trend-result-score-value.score-weak    { color: var(--color-red); }
+.dr-trend-result-score-detail {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 手动走势选择：单行布局（左 select，右结果） */
 .dr-index-trend-row {
   display: flex;
