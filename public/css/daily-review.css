@@ -429,6 +429,26 @@
 .dr-index-score-badge.score-weak     { background: rgba(239, 71, 111, 0.08); border-left-color: var(--color-red); }
 .dr-index-score-badge.score-weak     .dr-index-score-text { color: var(--color-red); }
 
+/* 行情数据自动填充标记 */
+.dr-auto-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-blue);
+  border-radius: 8px;
+  vertical-align: middle;
+  letter-spacing: 0.2px;
+}
+.dr-ma-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 综合走势区域的技术面均分显示（drTrendResultScore） */
 .dr-trend-result-score {
   display: flex;

@@ -27,6 +27,9 @@ var drAllTrades = [];      // 从数据库加载的所有交易记录
 var drDisciplineRules = []; // 全局交易纪律
 var drDataDirty = false;   // 标记是否有未保存的修改
 var drAutoSaveTimer = null; // 延迟自动保存定时器
+var drMarketData = null;    // 行情数据缓存（来自 /api/market/indices，5 分钟有效）
+var drMarketLoadTime = 0;   // 上次加载行情时间
+var drMarketLoadPromise = null; // 防止并发请求
 
 function initDailyReview() {
   drCurrentDate = getToday();
@@ -42,6 +45,9 @@ function initDailyReview() {
   setupDRLoginEvents();
   // 注册全局搜索（每日复盘页：搜索历史复盘）
   setupDRGlobalSearch();
+  // 多维分析 · 技术面数据源：自动从行情 API 拉取 4 只指数实时价/均线，
+  // 算出价格在 ma5/ma20 上/下方，让 4 维评分中后 2 维「数据驱动」而非手填
+  loadDRMarketData();
 }
 
 // 订阅全局登录/登出事件，修复"未登录状态打开页面后登录"导致复盘不同步的 bug
@@ -49,6 +55,8 @@ function setupDRLoginEvents() {
   window.addEventListener('user-login', function() {
     console.log('[DR] 收到 user-login 事件，重新检查登录状态');
     checkDRLoginStatus();
+    // 登录后重新拉行情（认证通过才可调用 /api/market/indices）
+    if (typeof loadDRMarketData === 'function') loadDRMarketData(true);
   });
   window.addEventListener('user-logout', function() {
     console.log('[DR] 收到 user-logout 事件，重置登录状态');
@@ -600,12 +608,22 @@ function renderDRIndicesMAStatus() {
     html += '</select></div>';
 
     // 5 日均线位置（在 MACD 旁边：3 选项）— 放在走势判断之前，保持 3 select 同一行
-    html += '<div class="dr-field"><label>价格 vs 5日线</label>';
+    var ma5Auto = (idx.ma5Analysis && idx.ma5Analysis.source === 'auto');
+    var ma5Price = (idx.ma5Analysis && idx.ma5Analysis.currentPrice) ? idx.ma5Analysis.currentPrice.toFixed(2) : '';
+    var ma5MaVal  = (idx.ma5Analysis && idx.ma5Analysis.ma5)         ? idx.ma5Analysis.ma5.toFixed(2)         : '';
+    var ma5Hint = (ma5Auto && ma5Price && ma5MaVal) ? '📊 自动（价 ' + ma5Price + ' / ma5 ' + ma5MaVal + '）' : '';
+    html += '<div class="dr-field"><label>价格 vs 5日线';
+    if (ma5Auto) html += ' <span class="dr-auto-tag" title="' + esc(ma5Hint) + '">📊 自动</span>';
+    html += '</label>';
     html += '<select class="dr-select dr-index-ma5pos" data-index="' + i + '">';
     html += '<option value="">请选择</option>';
     html += '<option value="above"' + (ma5Pos === 'above' ? ' selected' : '') + '>在 5 日线上方</option>';
     html += '<option value="below"' + (ma5Pos === 'below' ? ' selected' : '') + '>在 5 日线下方</option>';
-    html += '</select></div>';
+    html += '</select>';
+    if (ma5Auto && ma5Price) {
+      html += '<div class="dr-ma-hint">实时价 ' + ma5Price + ' · ma5 ' + ma5MaVal + ' → ' + (ma5Pos === 'above' ? '上' : '下') + '方</div>';
+    }
+    html += '</div>';
 
     // 局部走势结果（dr-field-wide 独占一行，强制换行）— 改成手动选择下拉框
     html += '<div class="dr-field dr-field-wide dr-index-trend" data-index="' + i + '">';
@@ -622,10 +640,13 @@ function renderDRIndicesMAStatus() {
     html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '请选择走势') + '</div>';
     html += '</div>';
     // 技术面 0-40 分评分徽章（4 维度加权：均线 + MACD + 5日线 + 20日线）
+    // ma5/ma20 后缀图标：📊 表示来自行情数据自动填充
+    var ma5Auto  = (idx.ma5Analysis  && idx.ma5Analysis.source  === 'auto') ? '📊' : '';
+    var ma20Auto = (idx.ma20Analysis && idx.ma20Analysis.source === 'auto') ? '📊' : '';
     html += '<div class="dr-index-score-badge ' + scoreBadgeCls + '" data-index="' + i + '">';
     html += '<span class="dr-index-score-text">' + esc(scoreText) + '</span>';
     if (scoreObj.filled) {
-      html += '<span class="dr-index-score-detail">均线 ' + scoreObj.ma + ' + MACD ' + scoreObj.macd + ' + 5日线 ' + scoreObj.ma5 + ' + 20日线 ' + scoreObj.ma20 + '</span>';
+      html += '<span class="dr-index-score-detail">均线 ' + scoreObj.ma + ' + MACD ' + scoreObj.macd + ' + 5日线 ' + scoreObj.ma5 + ma5Auto + ' + 20日线 ' + scoreObj.ma20 + ma20Auto + '</span>';
     }
     html += '</div>';
     html += '</div>';
@@ -756,7 +777,9 @@ function updateDRIndexTrendUI(idx) {
     }
     if (detailEl) {
       if (s.filled) {
-        detailEl.textContent = '均线 ' + s.ma + ' + MACD ' + s.macd + ' + 5日线 ' + s.ma5 + ' + 20日线 ' + s.ma20;
+        var ma5Auto  = (item.ma5Analysis  && item.ma5Analysis.source  === 'auto') ? '📊' : '';
+        var ma20Auto = (item.ma20Analysis && item.ma20Analysis.source === 'auto') ? '📊' : '';
+        detailEl.textContent = '均线 ' + s.ma + ' + MACD ' + s.macd + ' + 5日线 ' + s.ma5 + ma5Auto + ' + 20日线 ' + s.ma20 + ma20Auto;
         detailEl.style.display = '';
       } else {
         detailEl.style.display = 'none';
@@ -808,7 +831,12 @@ function recalcDROverallTrend() {
     var avgMacd = Math.round(scored.reduce(function(a, s) { return a + s.macd; }, 0) / scored.length);
     var avgMa5  = Math.round(scored.reduce(function(a, s) { return a + s.ma5;  }, 0) / scored.length);
     var avgMa20 = Math.round(scored.reduce(function(a, s) { return a + s.ma20; }, 0) / scored.length);
-    scoreBreakdown = '均线 ' + avgMa + ' + MACD ' + avgMacd + ' + 5日线 ' + avgMa5 + ' + 20日线 ' + avgMa20;
+    // 4 个指数里只要有一个 ma5/ma20 是 auto，就给后缀加 📊 提示数据驱动
+    var anyMa5Auto  = drData.indices.some(function(i) { return i.ma5Analysis  && i.ma5Analysis.source  === 'auto'; });
+    var anyMa20Auto = drData.indices.some(function(i) { return i.ma20Analysis && i.ma20Analysis.source === 'auto'; });
+    var s5  = anyMa5Auto  ? '📊' : '';
+    var s20 = anyMa20Auto ? '📊' : '';
+    scoreBreakdown = '均线 ' + avgMa + ' + MACD ' + avgMacd + ' + 5日线 ' + avgMa5 + s5 + ' + 20日线 ' + avgMa20 + s20;
     hint += ' ｜ 技术面均分：' + totalScore + '/40 → ' + scoreToTrend(totalScore);
   }
 
@@ -908,6 +936,112 @@ function getScoreBadgeClass(total) {
   if (total >= 12) return 'score-neutral';
   if (total >=  6) return 'score-warning';
   return 'score-weak';
+}
+
+// ==================== 行情数据自动填充 ma5/ma20 ====================
+// 数据源：/api/market/indices（代理腾讯股票 API）
+// 用途：让 4 维技术面评分中后 2 维「数据驱动」而非手填
+//   - ma5：用户没填时用实时价 vs ma5 推算；用户已填则保留其选择
+//   - ma20：始终从实时数据填充（无 UI，避免冲突）
+// 缓存策略：5 分钟（与后端一致）；过期重新拉取
+// 失败容错：网络/接口失败时保持空，评分按中性 4 分计算
+
+var DR_MARKET_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
+
+// 拉取全部 4 只指数的行情（带缓存和并发合并）
+function loadDRMarketData(force) {
+  // 缓存命中：5 分钟内不重复请求
+  if (!force && drMarketData && (Date.now() - drMarketLoadTime) < DR_MARKET_CACHE_TTL) {
+    applyMarketDataToIndices();
+    return Promise.resolve(drMarketData);
+  }
+  // 防止并发：复用进行中的请求
+  if (drMarketLoadPromise) return drMarketLoadPromise;
+
+  drMarketLoadPromise = authFetch('/api/market/indices', { method: 'GET' })
+    .then(function(r) {
+      if (!r.ok) throw new Error('行情接口返回 ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      drMarketData = data;
+      drMarketLoadTime = Date.now();
+      console.log('[DR] 行情数据已加载', Object.keys(data.data || {}).map(function(k) {
+        var it = data.data[k];
+        return k + '(' + (it.quote && it.quote.price) + ')';
+      }).join(' '));
+      applyMarketDataToIndices();
+      return data;
+    })
+    .catch(function(e) {
+      console.warn('[DR] 行情数据加载失败，保持空值（评分按中性 4 分计算）:', e.message);
+      return null;
+    })
+    .then(function(d) {
+      drMarketLoadPromise = null;
+      return d;
+    });
+  return drMarketLoadPromise;
+}
+
+// 计算单只指数的价格 vs 均线位置（'above' / 'below' / ''）
+function deriveMaPosition(price, ma) {
+  if (price == null || ma == null || isNaN(price) || isNaN(ma)) return '';
+  if (price > ma) return 'above';
+  if (price < ma) return 'below';
+  return '';  // 完全相等按未知处理
+}
+
+// 把行情数据套用到当前 drData.indices
+//  - 已有 ma5Analysis.position 的不覆盖（用户手填优先）
+//  - 没有 ma20Analysis 的创建并填充
+//  - 自动填的字段标记 source='auto'，UI 用「📊 自动」徽章区分
+function applyMarketDataToIndices() {
+  if (!drMarketData || !drMarketData.data) return;
+  if (!Array.isArray(drData.indices)) return;
+
+  var changed = false;
+  drData.indices.forEach(function(idx) {
+    var m = drMarketData.data[idx.key];
+    if (!m || !m.quote) return;
+    var price = m.quote.price;
+    var ma5  = m.ma5;
+    var ma20 = m.ma20;
+
+    // ma5：仅当用户没填时才自动填
+    if (!idx.ma5Analysis) idx.ma5Analysis = { currentPrice: null, ma5: null, position: '' };
+    if (!idx.ma5Analysis.position) {
+      var pos5 = deriveMaPosition(price, ma5);
+      if (pos5) {
+        idx.ma5Analysis.position = pos5;
+        idx.ma5Analysis.currentPrice = price;
+        idx.ma5Analysis.ma5 = ma5;
+        idx.ma5Analysis.source = 'auto';
+        changed = true;
+      }
+    } else {
+      // 用户已填，刷新 currentPrice/ma5 但不覆盖 position
+      idx.ma5Analysis.currentPrice = price;
+      idx.ma5Analysis.ma5 = ma5;
+    }
+
+    // ma20：始终自动填（无 UI）
+    if (!idx.ma20Analysis) idx.ma20Analysis = { currentPrice: null, ma20: null, position: '' };
+    var pos20 = deriveMaPosition(price, ma20);
+    if (pos20) {
+      idx.ma20Analysis.position = pos20;
+      idx.ma20Analysis.currentPrice = price;
+      idx.ma20Analysis.ma20 = ma20;
+      idx.ma20Analysis.source = 'auto';
+      changed = true;
+    }
+  });
+
+  // 触发 UI 重渲染：每个指数卡片上的「📊 自动」徽章需要重画
+  if (changed) {
+    if (typeof renderDRIndicesMAStatus === 'function') renderDRIndicesMAStatus();
+    if (typeof recalcDROverall === 'function') recalcDROverall();
+  }
 }
 
 // 单个指数的走势判定（5-10 均线 + MACD + 价格 vs 5日线位置 → 6 种走势之一）
@@ -1146,15 +1280,23 @@ function renderDRMarketRegime() {
 
   setTextVal('drRegimeNote', mr.note || '');
 
-  // 如果已记录命中规则 → 重新展示
+  // 历史数据中可能保留旧规则的 matchedRuleId（593c9eb 之前）。新规则统一为
+  // 'trend_<走势名>' 格式，源自 TREND_TO_POSITION。如果旧规则 id 找不到，
+  // 静默回退到 autoCalcDRPosition（按当前整体走势重新匹配）。
   if (mr.matchedRuleId) {
-    var rule = DR_POSITION_RULES.find(function(r) { return r.id === mr.matchedRuleId; });
-    if (rule) {
-      updateDRSuggestedPosUI(mr.position || rule.position, rule.posClass, '匹配规则：' + rule.desc);
-      updateDRMatchedRuleUI(rule, '');
-      highlightDRMatchedRuleRow(rule.id);
+    var trendFromRule = null;
+    if (typeof mr.matchedRuleId === 'string' && mr.matchedRuleId.indexOf('trend_') === 0) {
+      trendFromRule = mr.matchedRuleId.substring('trend_'.length);
+    }
+    if (trendFromRule && TREND_TO_POSITION[trendFromRule]) {
+      var pos = TREND_TO_POSITION[trendFromRule];
+      updateDRSuggestedPosUI(mr.position || pos.range, pos.cls, '匹配规则：整体走势「' + trendFromRule + '」 → 仓位 ' + pos.range);
+      hideDRMatchedRule();
       return;
     }
+    // 旧规则 id：已删除的 DR_POSITION_RULES 找不到，直接重算
+    mr.matchedRuleId = '';
+    mr.matchedRuleDesc = '';
   }
   // 否则尝试根据 indices 重新匹配
   if (Array.isArray(drData.indices) && drData.indices.some(function(i) { return i.maState && i.macdState; })) {
