@@ -364,17 +364,33 @@ function syncData() {
 }
 
 function handleLogout() {
-  localStorage.removeItem('currentUser');
-  diary2CurrentUserId = null;
-  diary2IsLoggedIn = false;
-  document.getElementById('headerSyncLoggedIn').style.display = 'none';
-  document.getElementById('headerSyncLoggedOut').style.display = 'flex';
+  // P1-1/P1-2: 退出登录前二次确认（用 showConfirm 替代原生 confirm）
+  showConfirm({
+    title: '退出登录',
+    message: '确定要退出登录吗？',
+    confirmText: '退出',
+    type: 'warning'
+  }).then(function(ok) {
+    if (!ok) return;
+    localStorage.removeItem('currentUser');
+    diary2CurrentUserId = null;
+    diary2IsLoggedIn = false;
+    document.getElementById('headerSyncLoggedIn').style.display = 'none';
+    document.getElementById('headerSyncLoggedOut').style.display = 'flex';
+  });
 }
 
 function openLoginModal() {
-  if (confirm('您需要登录才能同步数据。是否返回主页面进行登录？\n\n提示：您可以在未登录状态下使用本地存储功能。')) {
-    window.location.href = 'index.html';
-  }
+  // P1-2: 用 showConfirm 替代原生 confirm
+  showConfirm({
+    title: '登录同步',
+    message: '需要登录才能同步数据。是否返回主页面进行登录？\n\n提示：您可以在未登录状态下使用本地存储功能。',
+    confirmText: '去登录'
+  }).then(function(ok) {
+    if (ok) {
+      window.location.href = 'index.html';
+    }
+  });
 }
 
 function showSyncStatus(message, type) {
@@ -620,7 +636,7 @@ function openAddDiaryModal() {
     }
   } catch (error) {
     console.error('打开模态框失败:', error);
-    alert('打开记录表单失败，请刷新页面重试');
+    showToast('打开记录表单失败，请刷新页面重试', 'error');
   }
 }
 
@@ -757,7 +773,7 @@ function saveDiaryRecord(event) {
   };
   
   if (!record.tradeDate || !record.symbol) {
-    alert('请填写必填字段');
+    showToast('请填写必填字段', 'error');
     return;
   }
   
@@ -842,15 +858,15 @@ function importDiaryData(event) {
           })));
           saveDiaryData();
           applyFilters();
-          alert(`成功导入 ${newData.length} 条记录`);
+          showToast('成功导入 ' + newData.length + ' 条记录', 'success');
         } else {
-          alert('导入失败：数据格式不正确');
+          showToast('导入失败：数据格式不正确', 'error');
         }
       } else {
-        alert('导入失败：不是有效的JSON数组');
+        showToast('导入失败：不是有效的JSON数组', 'error');
       }
     } catch (err) {
-      alert('导入失败：' + err.message);
+      showToast('导入失败：' + err.message, 'error');
     }
   };
   reader.readAsText(file);
@@ -866,7 +882,7 @@ function escapeHtml(text) {
 
 function handleFullSync() {
   if (!syncModule.isLoggedIn()) {
-    alert('请先登录');
+    showToast('请先登录', 'error');
     return;
   }
   var statusEl = document.getElementById('syncStatus');

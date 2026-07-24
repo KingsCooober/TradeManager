@@ -447,7 +447,7 @@ function confirmAddTradeFromCalc() {
   var entry = parseFloat(calcEntryEl.value);
   var stop = parseFloat(calcStopEl.value);
   if (!entry || !stop) {
-    alert('请填写入场价和止损价');
+    showToast('请填写入场价和止损价', 'error');
     return;
   }
   var cap = getCurrentCapital(),
@@ -551,7 +551,7 @@ function executeAddTradeFromCalc(skipConfirm) {
   if (!skipConfirm) {
     var agreeCheckbox = document.getElementById('tradeConfirmAgree');
     if (agreeCheckbox && !agreeCheckbox.checked) {
-      alert('请先勾选「我已确认本次开仓符合上述交易纪律」');
+      showToast('请先勾选「我已确认本次开仓符合上述交易纪律」', 'warning');
       return;
     }
   }
@@ -601,7 +601,7 @@ function buildTradeFromCalc() {
   var entry = parseFloat(calcEntryEl.value);
   var stop = parseFloat(calcStopEl.value);
   if (!entry || !stop) {
-    alert('请填写入场价和止损价');
+    showToast('请填写入场价和止损价', 'error');
     return null;
   }
   var cap = getCurrentCapital(),

@@ -317,4 +317,99 @@ describe('utils.js 纯函数测试', () => {
       assert.equal(calcExitDist({ entry: 100 }), '-');
     });
   });
+
+  describe('calcPnl() — P1-4', () => {
+    // calcPnl 依赖全局 getFeeRate()（storage.js 提供），这里 mock 一个固定费率
+    let origGetFeeRate;
+    before(() => {
+      origGetFeeRate = globalThis.getFeeRate;
+      globalThis.getFeeRate = () => 0.1; // 0.1% 费率
+    });
+    after(() => {
+      if (origGetFeeRate === undefined) delete globalThis.getFeeRate;
+      else globalThis.getFeeRate = origGetFeeRate;
+    });
+
+    test('多头盈利：exit > entry 时 pnl 为正（扣手续费后）', () => {
+      // entry=100, exit=110, pos=10000, lots=100, dir=多
+      // grossPnl = 10000 * (110-100)/100 = 1000
+      // feeRate = 0.001；openFee = 10000*0.001 = 10
+      // exitFee = 110*100*0.001 = 11；totalFees = 21
+      // pnl = round((1000-21)*100)/100 = 979
+      const pnl = calcPnl({ entry: 100, exit: 110, posSize: 10000, actualLots: 100, dir: '多' });
+      assert.equal(pnl, 979);
+    });
+
+    test('空头盈利：exit < entry 且 dir=空 时 pnl 为正', () => {
+      // entry=110, exit=100, pos=10000, lots=100, dir=空
+      // grossPnl = 10000 * (110-100)/110 = 909.0909...
+      // openFee = 10; exitFee = 100*100*0.001 = 10; totalFees = 20
+      // pnl = round((909.0909-20)*100)/100 = 889.09
+      const pnl = calcPnl({ entry: 110, exit: 100, posSize: 10000, actualLots: 100, dir: '空' });
+      assert.ok(pnl > 0, '空头盈利应为正');
+      assert.equal(pnl, 889.09);
+    });
+
+    test('多头亏损：exit < entry 时 pnl 为负', () => {
+      const pnl = calcPnl({ entry: 110, exit: 100, posSize: 10000, actualLots: 100, dir: '多' });
+      assert.ok(pnl < 0, '多头亏损应为负');
+    });
+
+    test('无 actualLots 时用 posSize 计算出场手续费', () => {
+      // 无 lots：exitFee = pos * feeRate
+      // entry=100, exit=110, pos=10000, dir=多
+      // grossPnl = 1000; openFee = 10; exitFee = 10000*0.001 = 10; totalFees = 20
+      // pnl = round((1000-20)*100)/100 = 980
+      const pnl = calcPnl({ entry: 100, exit: 110, posSize: 10000, actualLots: 0, dir: '多' });
+      assert.equal(pnl, 980);
+    });
+
+    test('入参为 null 返回 null', () => {
+      assert.strictEqual(calcPnl(null), null);
+    });
+
+    test('缺少 entry 返回 null', () => {
+      assert.strictEqual(calcPnl({ exit: 110, posSize: 10000, actualLots: 100, dir: '多' }), null);
+    });
+
+    test('缺少 exit 返回 null', () => {
+      assert.strictEqual(calcPnl({ entry: 100, posSize: 10000, actualLots: 100, dir: '多' }), null);
+    });
+
+    test('posSize 为 0 返回 null', () => {
+      assert.strictEqual(calcPnl({ entry: 100, exit: 110, posSize: 0, actualLots: 100, dir: '多' }), null);
+    });
+
+    test('entry 为 0 返回 null（避免除零）', () => {
+      assert.strictEqual(calcPnl({ entry: 0, exit: 110, posSize: 10000, actualLots: 100, dir: '多' }), null);
+    });
+
+    test('默认 dir 非"多"时按空头计算', () => {
+      // dir 未指定（undefined），按空头：pct = (entry - exit)/entry
+      // entry=110, exit=100, pos=10000, lots=100
+      const pnlShort = calcPnl({ entry: 110, exit: 100, posSize: 10000, actualLots: 100, dir: '空' });
+      const pnlDefault = calcPnl({ entry: 110, exit: 100, posSize: 10000, actualLots: 100 });
+      assert.equal(pnlDefault, pnlShort, '缺省 dir 应等同空头计算');
+    });
+
+    test('getFeeRate 缺失时按 0 费率计算', () => {
+      const orig = globalThis.getFeeRate;
+      delete globalThis.getFeeRate;
+      try {
+        // 无手续费：pnl = grossPnl = 1000
+        const pnl = calcPnl({ entry: 100, exit: 110, posSize: 10000, actualLots: 100, dir: '多' });
+        assert.equal(pnl, 1000);
+      } finally {
+        globalThis.getFeeRate = orig;
+      }
+    });
+
+    test('结果四舍五入到 2 位小数', () => {
+      // 选一组会产生小数的参数
+      const pnl = calcPnl({ entry: 100, exit: 105.555, posSize: 3333, actualLots: 30, dir: '多' });
+      // 验证最多 2 位小数
+      const decimals = (String(pnl).split('.')[1] || '').length;
+      assert.ok(decimals <= 2, '应四舍五入到 2 位小数');
+    });
+  });
 });

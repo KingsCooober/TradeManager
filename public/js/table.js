@@ -132,17 +132,9 @@ function updateTrade(id, field, value) {
 
     var pos = parseFloat(t.posSize) || 0;
     if (!isNaN(e) && !isNaN(ex) && pos > 0 && e !== 0) {
-      var pct = t.dir === '多' ? (ex - e) / e : (e - ex) / e;
-      var grossPnl = pos * pct; // 毛盈亏
-
-      // 计算手续费（开仓 + 出场）
-      var feeRate = getFeeRate() / 100;
-      var openFee = pos * feeRate; // 开仓手续费
-      var exitFee = lots > 0 ? (ex * lots * feeRate) : (pos * feeRate); // 出场手续费
-      var totalFees = openFee + exitFee;
-
-      // 净盈亏 = 毛盈亏 - 手续费
-      t.pnl = Math.round((grossPnl - totalFees) * 100) / 100;
+      // P1-4: 净盈亏计算抽离到 utils.js 的 calcPnl()（含手续费）
+      var pnl = calcPnl(t);
+      if (pnl !== null) t.pnl = pnl;
 
       if (t.riskAmount && !isNaN(parseFloat(t.riskAmount)) && parseFloat(t.riskAmount) !== 0) {
         var riskForPnlR = calcActualRisk(t) || parseFloat(t.riskAmount);
@@ -365,8 +357,9 @@ function renderTable() {
       '<td class="col-plan col-secondary" style="text-align:center">' + planSelect + '</td>' +
       '<td class="col-note col-secondary"><textarea class="in-note" rows="2" placeholder="备注" onchange="updateTrade(' + sqesc(t.id) + ',\'note\',this.value)">' + esc(t.note || '') + '</textarea></td>' +
       '<td class="col-actions" style="text-align:center;white-space:nowrap">' +
-        '<button class="btn btn-sm btn-ghost" onclick="openTradeDetail(' + sqesc(t.id) + ')" title="查看 / 编辑详情" aria-label="详情">🔍</button>' +
-        '<button class="btn btn-danger btn-sm" onclick="openDeleteConfirm(' + sqesc(t.id) + ', ' + sqesc(t.symbol || '') + ', ' + sqesc(t.dir || '') + ', ' + sqesc(t.entry || '') + ')" title="删除" aria-label="删除">🗑</button>' +
+        // P2-3: 改用事件委托（data-action + data-trade-id），不再用内联 onclick 字符串拼装
+        '<button class="btn btn-sm btn-ghost" data-action="detail" data-trade-id="' + esc(t.id) + '" title="查看 / 编辑详情" aria-label="详情">🔍</button>' +
+        '<button class="btn btn-danger btn-sm" data-action="delete" data-trade-id="' + esc(t.id) + '" title="删除" aria-label="删除">🗑</button>' +
       '</td></tr>';
   }
   tbody.innerHTML = html;
@@ -639,7 +632,45 @@ function initSortButtons() {
 document.addEventListener('DOMContentLoaded', function() {
   initSortButtons();
   initStatusFilter();
+  // P2-3: 一次性事件委托，避免 renderTable 重新设置 innerHTML 后丢失按钮 onclick
+  bindTradeTableDelegation();
 });
+
+// P2-3: 交易表格容器上的事件委托
+// 取代表格行内 onclick="..." 字符串拼装，支持 innerHTML 重置后按钮仍可点击
+// 约定：按钮 data-action="detail"|"delete"、data-trade-id="..."
+function bindTradeTableDelegation() {
+  var table = document.getElementById('tradeTable');
+  if (!table) return;
+  // 防止重复绑定（多次触发 DOMContentLoaded 也不应重复挂监听）
+  if (table.__delegationBound) return;
+  table.__delegationBound = true;
+
+  table.addEventListener('click', function(e) {
+    var btn = e.target && e.target.closest && e.target.closest('[data-action]');
+    if (!btn || !table.contains(btn)) return;
+    var action = btn.dataset.action;
+    var tradeId = btn.dataset.tradeId;
+    if (!action || !tradeId) return;
+
+    if (action === 'detail') {
+      if (typeof openTradeDetail === 'function') openTradeDetail(tradeId);
+    } else if (action === 'delete') {
+      // 从 trades 中查询展示信息（openDeleteConfirm 需要 symbol/dir/entry）
+      var trade = (typeof trades !== 'undefined' && Array.isArray(trades))
+        ? trades.find(function(t) { return String(t.id) === String(tradeId); })
+        : null;
+      if (typeof openDeleteConfirm === 'function') {
+        openDeleteConfirm(
+          tradeId,
+          trade ? (trade.symbol || '') : '',
+          trade ? (trade.dir || '') : '',
+          trade ? (trade.entry || '') : ''
+        );
+      }
+    }
+  });
+}
 
 // ===== 表格列显示切换 =====
 function toggleTableColumns() {
@@ -888,7 +919,7 @@ function saveTradeFromModal() {
   var stop = num('te_stop');
 
   if (!symbol && !entry) {
-    alert('请至少填写品种或入场价');
+    showToast('请至少填写品种或入场价', 'error');
     return;
   }
 
@@ -940,17 +971,10 @@ function saveTradeFromModal() {
   }
 
   // 自动计算盈亏（如果入场价、出场价、仓位金额齐全且用户未填盈亏）
+  // P1-4: 净盈亏计算抽离到 utils.js 的 calcPnl()（含手续费），与 updateTrade 共用同一逻辑
   if (tradeData.entry !== '' && tradeData.exit !== '' && tradeData.posSize !== '' && tradeData.pnl === '') {
-    var e = parseFloat(tradeData.entry), ex = parseFloat(tradeData.exit), pos = parseFloat(tradeData.posSize);
-    if (e && ex && pos && e !== 0) {
-      var pct = tradeData.dir === '多' ? (ex - e) / e : (e - ex) / e;
-      var grossPnl = pos * pct;
-      var feeRate = getFeeRate() / 100;
-      var lots = parseFloat(tradeData.actualLots) || 0;
-      var openFee = pos * feeRate;
-      var exitFee = lots > 0 ? (ex * lots * feeRate) : (pos * feeRate);
-      tradeData.pnl = Math.round((grossPnl - openFee - exitFee) * 100) / 100;
-    }
+    var pnl = calcPnl(tradeData);
+    if (pnl !== null) tradeData.pnl = pnl;
   }
   // 自动计算 pnlR（如果风险金额存在且 pnl 已知）
   if (tradeData.pnl !== '' && tradeData.riskAmount !== '' && parseFloat(tradeData.riskAmount) !== 0 && tradeData.pnlR === '') {
@@ -999,8 +1023,20 @@ function saveTradeFromModal() {
 function deleteTradeFromEditModal() {
   var id = document.getElementById('te_id').value;
   if (!id) return;
-  if (!confirm('确认删除此交易记录？此操作不可撤销。')) return;
+  // P1-2: 用 showConfirm 替代原生 confirm（异步）
+  showConfirm({
+    title: '删除确认',
+    message: '确认删除此交易记录？此操作不可撤销。',
+    confirmText: '删除',
+    type: 'warning'
+  }).then(function(ok) {
+    if (!ok) return;
+    __proceedDeleteTrade(id);
+  });
+}
 
+// P1-2: 删除交易的实际逻辑（confirm 通过后调用）
+function __proceedDeleteTrade(id) {
   var idStr = String(id);
   // 先关闭编辑弹窗
   closeTradeEditModal();

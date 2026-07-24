@@ -24,14 +24,64 @@
 const SYNC_CONFIG = {
   // 服务器地址 - 使用当前页面的域名，避免CORS错误
   serverUrl: localStorage.getItem('sync_server_url') || window.location.origin,
-  // 同步间隔（毫秒）
-  syncInterval: 30000,
+  // 同步间隔（毫秒）— P2-实时同步：5s 轮询，编辑后 < 1s 上传，跨设备 < 5s 可见
+  syncInterval: 5000,
   // 自动同步开关（默认开启）
   autoSync: localStorage.getItem('sync_auto') !== 'false'
 };
 
 let currentUser = null;
 let syncTimer = null;
+
+// P2-实时同步：防止 syncToServer/syncFromServer 与 setInterval tick 重叠
+// 短间隔（5s）+ 防抖（200ms）下，编辑触发的 push 与轮询可能撞车
+let _syncInFlight = false;
+
+// P2-实时同步：失败时的指数退避（1s, 2s, 4s, 8s, 16s, 30s 封顶）
+let _syncRetryDelay = 0;
+let _syncRetryTimer = null;
+
+// P0-1: JWT token 管理（与 currentUser 一起持久化在 localStorage，刷新页面保持登录态）
+function getToken() {
+  try { return localStorage.getItem('sync_token') || null; } catch(e) { return null; }
+}
+function setToken(token) {
+  try {
+    if (token) localStorage.setItem('sync_token', token);
+    else localStorage.removeItem('sync_token');
+  } catch(e) {}
+}
+function clearToken() { setToken(null); }
+
+// P0-1: 统一的鉴权 fetch 包装 —— 自动注入 Authorization 头 + 处理 401 失效
+// 用法：authFetch(url, options) 等价于 fetch(url, options)，但自动带 token
+async function authFetch(url, options) {
+  options = options || {};
+  // 复制 headers 避免修改调用方对象
+  var headers = Object.assign({}, options.headers || {});
+  var token = getToken();
+  if (token) {
+    headers['Authorization'] = 'Bearer ' + token;
+  }
+  // 默认 JSON content-type（除非已是 FormData 等特殊情况）
+  if (!headers['Content-Type'] && options.body && typeof options.body === 'string') {
+    headers['Content-Type'] = 'application/json';
+  }
+  options.headers = headers;
+  var res = await fetch(url, options);
+  // 401 失效：清 token + 提示登录态失效（避免后续请求连环失败）
+  if (res.status === 401 && getToken()) {
+    clearToken();
+    showSyncStatus('登录态已过期，请重新登录', 'error');
+    if (typeof currentUser !== 'undefined' && currentUser) {
+      currentUser = null;
+      try { localStorage.removeItem('sync_user'); } catch(e) {}
+      stopAutoSync();
+      if (typeof updateHeaderSyncUI === 'function') updateHeaderSyncUI();
+    }
+  }
+  return res;
+}
 
 // 上次同步成功的时间戳（毫秒）
 let lastSyncTime = null;
@@ -107,6 +157,7 @@ async function register(username, password) {
   try {
     console.log('[sync] 尝试注册:', SYNC_CONFIG.serverUrl + '/api/register', '用户:', username);
     var regUrl = SYNC_CONFIG.serverUrl + '/api/register';
+    // P0-1: register 端点本身不需要 token，但走 authFetch 以统一错误处理
     const res = await fetch(regUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -131,6 +182,8 @@ async function register(username, password) {
     if (!res.ok) throw new Error(data.error || '注册失败（' + res.status + '）');
     currentUser = { id: data.userId, username: data.username, role: data.role || 'user' };
     localStorage.setItem('sync_user', JSON.stringify(currentUser));
+    // P0-1: 保存服务端签发的 JWT token
+    if (data.token) setToken(data.token);
     return data;
   } catch (err) {
     console.error('注册失败:', err);
@@ -176,6 +229,8 @@ async function login(username, password) {
     if (!res.ok) throw new Error(data.error || '登录失败（' + res.status + '）');
     currentUser = { id: data.userId, username: data.username, role: data.role || 'user' };
     localStorage.setItem('sync_user', JSON.stringify(currentUser));
+    // P0-1: 保存服务端签发的 JWT token
+    if (data.token) setToken(data.token);
     return data;
   } catch (err) {
     console.error('登录失败:', err);
@@ -186,6 +241,8 @@ async function login(username, password) {
 function logout() {
   currentUser = null;
   localStorage.removeItem('sync_user');
+  // P0-1: 退出登录时清除 token
+  clearToken();
   stopAutoSync();
 }
 
@@ -308,7 +365,7 @@ async function syncToServer() {
     console.log('上传到服务器的数据:', localData);
     
     // 上传到服务器
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/sync/${user.id}`, {
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/sync/${user.id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(localData)
@@ -348,7 +405,7 @@ async function syncFromServer() {
   }
   
   try {
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/sync/${user.id}`);
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/sync/${user.id}`);
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error);
@@ -430,18 +487,63 @@ async function fullSync() {
 
 // ===== 自动同步 =====
 
+// P2-实时同步：执行一次完整的 push+pull 同步（带守卫和退避）
+async function _doSyncTick() {
+  if (!getCurrentUser() || _syncInFlight) return false;
+  _syncInFlight = true;
+  setSyncIndicatorState('syncing', '正在同步...');
+  let ok = true;
+  try {
+    // 1. 先推送本地修改
+    await syncToServer();
+    // 2. 拉取服务器最新（但避免覆盖未同步的本地编辑）
+    if (typeof hasUnsyncedChanges === 'function' && hasUnsyncedChanges()) {
+      console.log('[sync] 本地有未同步变更，跳过 pull');
+    } else {
+      await syncFromServer();
+    }
+    _resetSyncRetry();
+  } catch (e) {
+    console.error('[sync] 同步异常:', e);
+    ok = false;
+    _scheduleSyncRetry();
+  } finally {
+    _syncInFlight = false;
+  }
+  return ok;
+}
+
+// P2-实时同步：失败后按指数退避安排重试
+function _scheduleSyncRetry() {
+  if (_syncRetryTimer) return; // 已有重试在排队
+  if (_syncRetryDelay === 0) _syncRetryDelay = 1000;
+  else _syncRetryDelay = Math.min(_syncRetryDelay * 2, 30000);
+  console.log('[sync] 同步失败，' + (_syncRetryDelay / 1000) + 's 后重试');
+  _syncRetryTimer = setTimeout(function() {
+    _syncRetryTimer = null;
+    _doSyncTick();
+  }, _syncRetryDelay);
+}
+
+function _resetSyncRetry() {
+  _syncRetryDelay = 0;
+  if (_syncRetryTimer) {
+    clearTimeout(_syncRetryTimer);
+    _syncRetryTimer = null;
+  }
+}
+
 function startAutoSync() {
   if (syncTimer) clearInterval(syncTimer);
   SYNC_CONFIG.autoSync = true;
   localStorage.setItem('sync_auto', 'true');
-  
-  syncTimer = setInterval(() => {
-    if (getCurrentUser()) {
-      syncToServer();
-    }
-  }, SYNC_CONFIG.syncInterval);
-  
-  console.log('自动同步已启动');
+  _resetSyncRetry();
+
+  // P2-实时同步：每次 tick 执行 push+pull，而非仅 push
+  // 这是跨设备同步的核心 — 之前只 push，B 电脑永远拿不到 A 的更新
+  syncTimer = setInterval(_doSyncTick, SYNC_CONFIG.syncInterval);
+
+  console.log('自动同步已启动，间隔 ' + (SYNC_CONFIG.syncInterval / 1000) + 's');
 }
 
 function stopAutoSync() {
@@ -451,6 +553,7 @@ function stopAutoSync() {
   }
   SYNC_CONFIG.autoSync = false;
   localStorage.setItem('sync_auto', 'false');
+  _resetSyncRetry();
   console.log('自动同步已停止');
 }
 
@@ -470,7 +573,7 @@ async function addTradeToServer(trade) {
   if (!user) return;
   
   try {
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/trades/${user.id}`, {
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/trades/${user.id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(tradeToServerFormat(trade))
@@ -494,7 +597,7 @@ async function deleteTradeFromServer(tradeId) {
   }
   
   try {
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/trades/${user.id}/${tradeId}`, {
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/trades/${user.id}/${tradeId}`, {
       method: 'DELETE'
     });
     
@@ -522,7 +625,7 @@ async function clearServerData() {
 
   try {
     // 调用服务器 API 清空用户的所有交易数据
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/clear/${user.id}`, {
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/clear/${user.id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -557,7 +660,7 @@ async function clearServerTradesData() {
   }
 
   try {
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/clear-trades/${user.id}`, {
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/clear-trades/${user.id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -585,7 +688,7 @@ async function clearServerFundsData() {
   }
 
   try {
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/clear-funds/${user.id}`, {
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/clear-funds/${user.id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -608,7 +711,7 @@ async function addDepositToServer(amount, date) {
   if (!user) return;
   
   try {
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/deposits/${user.id}`, {
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/deposits/${user.id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount, date })
@@ -625,7 +728,7 @@ async function addWithdrawalToServer(amount, date) {
   if (!user) return;
   
   try {
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/withdrawals/${user.id}`, {
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/withdrawals/${user.id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount, date })
@@ -649,7 +752,7 @@ async function saveSettingsToServer() {
   };
   
   try {
-    const res = await fetch(`${SYNC_CONFIG.serverUrl}/api/settings/${user.id}`, {
+    const res = await authFetch(`${SYNC_CONFIG.serverUrl}/api/settings/${user.id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings)
@@ -701,13 +804,51 @@ function updateSyncUI() {
 function initSync() {
   // 恢复登录状态
   getCurrentUser();
-  
+
   // 如果设置了自动同步，启动它
   if (SYNC_CONFIG.autoSync && currentUser) {
     startAutoSync();
   }
-  
+
+  // P2-实时同步：窗口重新获得焦点时拉取最新数据
+  // 多设备场景：A 编辑后切到 B 标签页，无需等 5s 轮询即可看到
+  window.addEventListener('focus', function() {
+    if (!getCurrentUser() || _syncInFlight) return;
+    if (typeof hasUnsyncedChanges === 'function' && hasUnsyncedChanges()) {
+      console.log('[sync] focus 拉取跳过：本地有未同步变更');
+      return;
+    }
+    console.log('[sync] focus 触发拉取');
+    _syncInFlight = true;
+    syncFromServer().finally(function() { _syncInFlight = false; });
+  });
+
   console.log('同步模块已初始化');
+}
+
+// P1-1: 检测本地是否有未同步到服务器的变更
+// 用于退出登录前的兜底同步判断，避免脏数据丢失
+// P2-实时同步：扩展覆盖 funds（pendingDeletedDeposits/Withdrawals）
+// dirtyTradeIds / pendingDeletedTradeIds 定义在 storage.js（全局作用域，可直接读取）
+function hasUnsyncedChanges() {
+  try {
+    if (typeof dirtyTradeIds !== 'undefined' && Object.keys(dirtyTradeIds).length > 0) {
+      return true;
+    }
+    if (typeof pendingDeletedTradeIds !== 'undefined' && pendingDeletedTradeIds.length > 0) {
+      return true;
+    }
+    // P2-实时同步：资金记录的删除也算未同步
+    if (typeof pendingDeletedDeposits !== 'undefined' && pendingDeletedDeposits.length > 0) {
+      return true;
+    }
+    if (typeof pendingDeletedWithdrawals !== 'undefined' && pendingDeletedWithdrawals.length > 0) {
+      return true;
+    }
+  } catch (e) {
+    console.warn('检测未同步变更出错:', e);
+  }
+  return false;
 }
 
 // 导出函数
@@ -737,5 +878,15 @@ window.syncModule = {
   setSyncIndicatorState,
   buildSyncTooltip,
   refreshSyncIndicatorTooltip,
-  getLastSyncTime: function() { return lastSyncTime; }
+  getLastSyncTime: function() { return lastSyncTime; },
+  // P1-1: 检测本地是否有未同步变更（用于退出登录前的兜底同步判断）
+  hasUnsyncedChanges: hasUnsyncedChanges,
+  // P0-1: 暴露 token 工具与 authFetch 供 main.js 等模块使用
+  getToken: getToken,
+  setToken: setToken,
+  clearToken: clearToken,
+  authFetch: authFetch
 };
+
+// P0-1: 同时把 authFetch 暴露到全局，便于 main.js 等直接使用
+window.authFetch = authFetch;

@@ -53,9 +53,15 @@ function fmtR(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(2) + 'R';
 }
 
-// HTML转义
+// HTML转义（P0-2: 补全单引号转义，统一作为全局唯一的转义函数）
 function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // 转义单引号，用于JavaScript字符串
@@ -68,6 +74,16 @@ function getDaysInMonth(year, month) {
   return new Date(year, month, 0).getDate();
 }
 
+// 获取年份范围（当前年前后各 5 年，共 11 年），用于日期选择器的年份下拉
+function getYearRange() {
+  var currentYear = new Date().getFullYear();
+  var years = [];
+  for (var y = currentYear - 5; y <= currentYear + 5; y++) {
+    years.push(y);
+  }
+  return years;
+}
+
 function calcTpDist(t) {
   if (!t.entry || !t.target || !parseFloat(t.entry) || !parseFloat(t.target)) return '-';
   return (Math.abs(parseFloat(t.target) - parseFloat(t.entry)) / parseFloat(t.entry) * 100).toFixed(2) + '%';
@@ -77,6 +93,29 @@ function calcExitDist(t) {
   if (!t.entry || !t.exit || !parseFloat(t.entry) || !parseFloat(t.exit)) return '-';
   var raw = parseFloat(t.exit) - parseFloat(t.entry);
   return (raw >= 0 ? '+' : '-') + (Math.abs(raw) / parseFloat(t.entry) * 100).toFixed(2) + '%';
+}
+
+// P1-4: 计算单笔交易的净盈亏（毛盈亏 - 开仓/出场手续费）
+// 消除 table.js 中 updateTrade 与 saveTradeFromModal 的重复计算逻辑
+// 入参 trade：需含 entry, exit, posSize, actualLots, dir
+//   - dir '多': (exit - entry) / entry；dir '空': (entry - exit) / entry
+//   - 手续费：开仓 = pos * feeRate；出场 = lots>0 ? exit*lots*feeRate : pos*feeRate
+// 返回：净盈亏（四舍五入到 2 位小数）；入参不全或无意义时返回 null
+// 依赖全局 getFeeRate()（storage.js，运行时存在）；缺失时按 0 费率计算
+function calcPnl(trade) {
+  if (!trade) return null;
+  var e = parseFloat(trade.entry),
+      ex = parseFloat(trade.exit),
+      pos = parseFloat(trade.posSize) || 0,
+      lots = parseFloat(trade.actualLots) || 0;
+  if (isNaN(e) || isNaN(ex) || pos <= 0 || e === 0) return null;
+  var pct = trade.dir === '多' ? (ex - e) / e : (e - ex) / e;
+  var grossPnl = pos * pct;
+  var feeRate = (typeof getFeeRate === 'function' ? getFeeRate() : 0) / 100;
+  var openFee = pos * feeRate;
+  var exitFee = lots > 0 ? (ex * lots * feeRate) : (pos * feeRate);
+  var totalFees = openFee + exitFee;
+  return Math.round((grossPnl - totalFees) * 100) / 100;
 }
 
 // 计算持仓时间（使用出场日期减去开仓日期）

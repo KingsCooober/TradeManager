@@ -264,13 +264,16 @@ function syncToServerDR() {
 }
 
 function handleDRLogout() {
-  localStorage.removeItem('currentUser');
-  drCurrentUserId = null;
-  drIsLoggedIn = false;
-  var loggedIn = document.getElementById('headerSyncLoggedIn');
-  var loggedOut = document.getElementById('headerSyncLoggedOut');
-  if (loggedIn) loggedIn.style.display = 'none';
-  if (loggedOut) loggedOut.style.display = 'flex';
+  // P1-1: 退出登录前增加二次确认（复用页面已有的 drConfirm 自定义弹窗）
+  drConfirm('退出登录', '确定要退出登录吗？', '退出', function() {
+    localStorage.removeItem('currentUser');
+    drCurrentUserId = null;
+    drIsLoggedIn = false;
+    var loggedIn = document.getElementById('headerSyncLoggedIn');
+    var loggedOut = document.getElementById('headerSyncLoggedOut');
+    if (loggedIn) loggedIn.style.display = 'none';
+    if (loggedOut) loggedOut.style.display = 'flex';
+  });
 }
 
 function openDRLoginModal() {

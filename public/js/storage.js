@@ -500,9 +500,29 @@ function importFromFile(event) {
   reader.onload = function(e) {
     try {
       var data = JSON.parse(e.target.result);
-      if (!confirm('导入将覆盖当前所有数据，是否继续？')) return;
-      
-      if (dbInitialized && db && data.trades) {
+      // P1-2: 用 showConfirm 替代原生 confirm
+      showConfirm({
+        title: '导入确认',
+        message: '导入将覆盖当前所有数据，是否继续？',
+        confirmText: '导入',
+        type: 'warning'
+      }).then(function(ok) {
+        if (!ok) return;
+        __proceedImport(data);
+      });
+    } catch (err) {
+      console.error('解析文件失败:', err);
+      showToast('导入失败：无法解析文件内容', 'error');
+    }
+  };
+  reader.onerror = function() { showToast('读取文件失败', 'error'); };
+  reader.readAsText(file);
+}
+
+// P1-2: 拆分出 importFromFile 的实际导入逻辑（confirm 通过后调用）
+function __proceedImport(data) {
+  try {
+    if (dbInitialized && db && data.trades) {
         // 清空现有数据
         clearAllTradesFromDB().then(function() {
           // 导入新数据
@@ -529,14 +549,11 @@ function importFromFile(event) {
       } else {
         importToLocalStorage(data);
       }
-    } catch (err) {
-      var el = document.getElementById('syncStatus');
-      el.textContent = '解析失败';
-      el.style.color = '#ff5252';
-    }
-  };
-  reader.readAsText(file);
-  event.target.value = '';
+  } catch (err) {
+    var el = document.getElementById('syncStatus');
+    el.textContent = '解析失败';
+    el.style.color = '#ff5252';
+  }
 }
 
 // 导入到localStorage（回退）

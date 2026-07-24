@@ -8,7 +8,8 @@ const { setupBrowserMock, teardownBrowserMock, loadFrontendScripts } = require('
 describe('calculator.js 测试', () => {
   before(() => {
     setupBrowserMock();
-    loadFrontendScripts(['utils.js', 'calculator.js']);
+    // P1-2: calculator.js 已用 showToast 替代 alert，需先加载 ui.js
+    loadFrontendScripts(['utils.js', 'ui.js', 'calculator.js']);
   });
 
   after(() => {
@@ -147,16 +148,16 @@ describe('calculator.js 测试', () => {
       const calcStop = globalThis.document.getElementById('calcStop');
       calcStop.value = '41000';
 
-      // 重写 alert 避免中断测试
-      const originalAlert = globalThis.alert;
-      let alertCalled = false;
-      globalThis.alert = () => { alertCalled = true; };
+      // P1-2: calculator.js 已用 showToast 替代 alert，重写 showToast 检测调用
+      const originalToast = globalThis.showToast;
+      let toastCalled = false;
+      globalThis.showToast = () => { toastCalled = true; return { close: () => {} }; };
 
       try {
         addTradeFromCalc();
-        assert.equal(alertCalled, true, '应弹出 alert 提示');
+        assert.equal(toastCalled, true, '应弹出 showToast 提示');
       } finally {
-        globalThis.alert = originalAlert;
+        globalThis.showToast = originalToast;
       }
     });
   });

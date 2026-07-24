@@ -156,6 +156,56 @@ function clearAllTradesFromDB() {
   });
 }
 
+// P0-3: 清空所有资金记录（deposits + withdrawals）
+// 修复 clearAllFundsData 只清空内存/localStorage、IndexedDB 残留导致刷新后复活的 bug
+// 采用单事务同时清空两个 store，保证原子性；任一 store 不存在时降级跳过，不影响另一个
+function clearAllFundsFromDB() {
+  return new Promise(function(resolve) {
+    if (!db) {
+      resolve(); // 没有数据库也视为成功
+      return;
+    }
+
+    // 仅清理实际存在的 store，避免事务因 store 名缺失而 abort
+    var stores = ['deposits', 'withdrawals'].filter(function(name) {
+      return db.objectStoreNames && db.objectStoreNames.contains(name);
+    });
+    if (stores.length === 0) {
+      resolve();
+      return;
+    }
+
+    var tx = db.transaction(stores, 'readwrite');
+    var cleared = 0;
+
+    for (var i = 0; i < stores.length; i++) {
+      (function(storeName) {
+        var store = tx.objectStore(storeName);
+        var req = store.clear();
+        req.onsuccess = function() {
+          cleared++;
+          if (cleared === stores.length) resolve();
+        };
+        req.onerror = function(e) {
+          console.warn('清空 ' + storeName + ' 失败:', e.target.error);
+          cleared++;
+          if (cleared === stores.length) resolve();
+        };
+      })(stores[i]);
+    }
+
+    // 事务整体失败兜底
+    tx.onabort = function() {
+      console.warn('清空资金记录事务被中止');
+      resolve();
+    };
+    tx.onerror = function() {
+      console.warn('清空资金记录事务出错');
+      resolve();
+    };
+  });
+}
+
 // 清空 IndexedDB 所有数据（trades + deposits + withdrawals + settings）
 function clearAllDataFromDB() {
   return new Promise(function(resolve, reject) {

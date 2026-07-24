@@ -18,6 +18,7 @@ deploy.zip
 .workbuddy/
 .env
 .mimocode/
+.trae/
 
 # 日志
 *.log

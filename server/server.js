@@ -7,6 +7,9 @@ const sqlite3 = require('sqlite3').verbose();
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 
+// P0-1: 引入自实现的轻量 JWT 认证模块（与标准 JWT 兼容）
+const auth = require('./auth');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -17,6 +20,12 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 // 数据库初始化
 const db = new sqlite3.Database(path.join(__dirname, 'data.db'));
+
+// P0-1: 向 auth 模块注入 db 实例（避免循环依赖）
+auth.setDb(db);
+
+// 导出 db 供测试使用
+module.exports = { app, db };
 
 db.serialize(() => {
   // 用户表
@@ -158,6 +167,21 @@ db.serialize(() => {
       else if (this.changes > 0) console.log('已清理 ' + this.changes + ' 条重复复盘记录');
     });
   });
+
+  // P1-6: 创建关键索引（消除全表扫描，提升按 user_id 过滤 + 按日期排序的性能）
+  // 索引策略：单列 user_id 索引（最常 WHERE 过滤）+ 复合 (user_id, date) 索引（覆盖 ORDER BY）
+  // 使用 CREATE INDEX IF NOT EXISTS 确保幂等（重复启动不会报错）
+  db.run('CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_trades_user_open_date ON trades(user_id, open_date DESC)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_deposits_user_date ON deposits(user_id, date DESC)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_withdrawals_user_date ON withdrawals(user_id, date DESC)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_diary2_user_id ON diary2(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_diary2_user_trade_date ON diary2(user_id, trade_date DESC)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_daily_reviews_user_id ON daily_reviews(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_daily_reviews_user_review_date ON daily_reviews(user_id, review_date DESC)');
+  console.log('关键索引已就绪');
 });
 
 // ===== API 路由 =====
@@ -166,13 +190,13 @@ db.serialize(() => {
 app.post('/api/register', (req, res) => {
   const { username, password, role = 'user' } = req.body;
   const userId = uuidv4();
-  
+
   if (role === 'admin' && username !== 'admin') {
     return res.status(403).json({ error: '只有管理员可以创建管理员账户' });
   }
-  
+
   const hashedPassword = bcrypt.hashSync(password, 10);
-  
+
   db.run(
     'INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)',
     [userId, username, hashedPassword, role],
@@ -184,7 +208,9 @@ app.post('/api/register', (req, res) => {
         return res.status(500).json({ error: err.message });
       }
       db.run('INSERT INTO settings (user_id) VALUES (?)', [userId]);
-      res.json({ userId, username, role, message: '注册成功' });
+      // P0-1: 注册成功后自动签发 token，实现注册即登录
+      const token = auth.sign({ userId: userId, username: username, role: role });
+      res.json({ userId, username, role, token, message: '注册成功' });
     }
   );
 });
@@ -192,45 +218,48 @@ app.post('/api/register', (req, res) => {
 // 用户登录
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
-  
+
   db.get(
     'SELECT * FROM users WHERE username = ?',
     [username],
     (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!row) return res.status(401).json({ error: '用户名或密码错误' });
-      
+
       const isPasswordValid = bcrypt.compareSync(password, row.password);
       if (!isPasswordValid) return res.status(401).json({ error: '用户名或密码错误' });
-      
-      res.json({ userId: row.id, username: row.username, role: row.role, message: '登录成功' });
+
+      // P0-1: 登录成功签发 JWT
+      const token = auth.sign({ userId: row.id, username: row.username, role: row.role });
+      res.json({ userId: row.id, username: row.username, role: row.role, token, message: '登录成功' });
     }
   );
 });
 
-// 修改密码
-app.post('/api/change-password', (req, res) => {
-  const { userId, oldPassword, newPassword } = req.body;
-  
-  if (!userId || !oldPassword || !newPassword) {
-    return res.status(400).json({ error: '请提供用户ID、旧密码和新密码' });
+// 修改密码（P0-1: 加 token 鉴权）
+app.post('/api/change-password', auth.authMiddleware, (req, res) => {
+  const { oldPassword, newPassword } = req.body;
+  const userId = req.user.userId;
+
+  if (!oldPassword || !newPassword) {
+    return res.status(400).json({ error: '请提供旧密码和新密码' });
   }
-  
+
   if (newPassword.length < 6) {
     return res.status(400).json({ error: '新密码至少需要6位' });
   }
-  
+
   db.get('SELECT * FROM users WHERE id = ?', [userId], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!row) return res.status(401).json({ error: '用户不存在' });
-    
+
     const isOldPasswordValid = bcrypt.compareSync(oldPassword, row.password);
     if (!isOldPasswordValid) {
       return res.status(401).json({ error: '旧密码错误' });
     }
-    
+
     const hashedPassword = bcrypt.hashSync(newPassword, 10);
-    
+
     db.run(
       'UPDATE users SET password = ? WHERE id = ?',
       [hashedPassword, userId],
@@ -243,7 +272,7 @@ app.post('/api/change-password', (req, res) => {
 });
 
 // 获取用户所有数据
-app.get('/api/sync/:userId', (req, res) => {
+app.get('/api/sync/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const result = { trades: [], deposits: [], withdrawals: [], settings: null };
   
@@ -266,7 +295,7 @@ app.get('/api/sync/:userId', (req, res) => {
 });
 
 // 同步数据（上传本地数据到服务器）
-app.post('/api/sync/:userId', (req, res) => {
+app.post('/api/sync/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const { trades, deposits, withdrawals, settings, deletedTradeIds, deletedDepositIds, deletedWithdrawalIds } = req.body;
   
@@ -341,7 +370,7 @@ app.post('/api/sync/:userId', (req, res) => {
 });
 
 // 添加单条交易
-app.post('/api/trades/:userId', (req, res) => {
+app.post('/api/trades/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const trade = req.body;
   const tradeId = trade.id || uuidv4();
@@ -367,7 +396,7 @@ app.post('/api/trades/:userId', (req, res) => {
 });
 
 // 删除交易
-app.delete('/api/trades/:userId/:tradeId', (req, res) => {
+app.delete('/api/trades/:userId/:tradeId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId, tradeId } = req.params;
   db.run('DELETE FROM trades WHERE id = ? AND user_id = ?', [tradeId, userId], function(err) {
     if (err) return res.status(500).json({ error: err.message });
@@ -376,11 +405,11 @@ app.delete('/api/trades/:userId/:tradeId', (req, res) => {
 });
 
 // 添加入金
-app.post('/api/deposits/:userId', (req, res) => {
+app.post('/api/deposits/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const { amount, date } = req.body;
   const depositId = uuidv4();
-  
+
   db.run(
     'INSERT INTO deposits (id, user_id, amount, date) VALUES (?, ?, ?, ?)',
     [depositId, userId, amount, date],
@@ -392,11 +421,11 @@ app.post('/api/deposits/:userId', (req, res) => {
 });
 
 // 添加出金
-app.post('/api/withdrawals/:userId', (req, res) => {
+app.post('/api/withdrawals/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const { amount, date } = req.body;
   const withdrawalId = uuidv4();
-  
+
   db.run(
     'INSERT INTO withdrawals (id, user_id, amount, date) VALUES (?, ?, ?, ?)',
     [withdrawalId, userId, amount, date],
@@ -408,7 +437,7 @@ app.post('/api/withdrawals/:userId', (req, res) => {
 });
 
 // 更新设置
-app.post('/api/settings/:userId', (req, res) => {
+app.post('/api/settings/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const { initCapital, riskPct, maxRisk, feeRate } = req.body;
 
@@ -425,7 +454,7 @@ app.post('/api/settings/:userId', (req, res) => {
 
 // ===== 交易纪律（全局） =====
 // 获取用户的交易纪律
-app.get('/api/discipline-rules/:userId', (req, res) => {
+app.get('/api/discipline-rules/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   db.get(
     'SELECT discipline_rules_json FROM settings WHERE user_id = ?',
@@ -443,7 +472,7 @@ app.get('/api/discipline-rules/:userId', (req, res) => {
 });
 
 // 保存用户的交易纪律
-app.post('/api/discipline-rules/:userId', (req, res) => {
+app.post('/api/discipline-rules/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const { rules } = req.body;
   if (!Array.isArray(rules)) {
@@ -466,7 +495,7 @@ app.post('/api/discipline-rules/:userId', (req, res) => {
 });
 
 // 清空用户的所有数据
-app.delete('/api/clear/:userId', (req, res) => {
+app.delete('/api/clear/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   
   db.serialize(() => {
@@ -489,7 +518,7 @@ app.delete('/api/clear/:userId', (req, res) => {
 });
 
 // 精准清空：只清空交易记录（不影响入金出金、复盘、纪律）
-app.delete('/api/clear-trades/:userId', (req, res) => {
+app.delete('/api/clear-trades/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
 
   db.run('DELETE FROM trades WHERE user_id = ?', [userId], function(err) {
@@ -500,7 +529,7 @@ app.delete('/api/clear-trades/:userId', (req, res) => {
 });
 
 // 精准清空：只清空资金记录（入金 + 出金）
-app.delete('/api/clear-funds/:userId', (req, res) => {
+app.delete('/api/clear-funds/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
 
   db.serialize(() => {
@@ -522,7 +551,7 @@ app.delete('/api/clear-funds/:userId', (req, res) => {
 // ===== 复盘总结2 API =====
 
 // 获取用户复盘总结2数据
-app.get('/api/diary/:userId', (req, res) => {
+app.get('/api/diary/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   
   db.all(
@@ -536,7 +565,7 @@ app.get('/api/diary/:userId', (req, res) => {
 });
 
 // 保存日记2数据
-app.post('/api/diary/:userId', (req, res) => {
+app.post('/api/diary/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const { diary } = req.body;
   
@@ -578,7 +607,7 @@ app.post('/api/diary/:userId', (req, res) => {
 // ===== 每日复盘 API =====
 
 // 获取用户某日的复盘
-app.get('/api/daily-review/:userId', (req, res) => {
+app.get('/api/daily-review/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const { date } = req.query;
 
@@ -604,7 +633,7 @@ app.get('/api/daily-review/:userId', (req, res) => {
 });
 
 // 保存每日复盘
-app.post('/api/daily-review/:userId', (req, res) => {
+app.post('/api/daily-review/:userId', auth.authMiddleware, auth.requireSelfOrAdmin, (req, res) => {
   const { userId } = req.params;
   const { review } = req.body;
 
@@ -665,48 +694,39 @@ function checkAdmin(userId, callback) {
 }
 
 // 管理员获取所有用户列表
-app.get('/api/admin/users', (req, res) => {
-  const { adminId } = req.query;
-  
-  checkAdmin(adminId, (err) => {
-    if (err) return res.status(403).json({ error: err.message });
-    
-    db.all('SELECT id, username, role, created_at FROM users ORDER BY created_at DESC', (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ users: rows });
-    });
+app.get('/api/admin/users', auth.authMiddleware, auth.requireAdmin, (req, res) => {
+  // 兼容期：旧前端依赖 checkAdmin + adminId 查询参数；requireAdmin 已校验过，这里不再重复
+  db.all('SELECT id, username, role, created_at FROM users ORDER BY created_at DESC', (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ users: rows });
   });
 });
 
 // 管理员获取指定用户的所有数据
-app.get('/api/admin/user/:userId', (req, res) => {
+app.get('/api/admin/user/:userId', auth.authMiddleware, auth.requireAdmin, (req, res) => {
   const { userId } = req.params;
-  const { adminId } = req.query;
-  
-  checkAdmin(adminId, (err) => {
-    if (err) return res.status(403).json({ error: err.message });
-    
-    const result = { trades: [], deposits: [], withdrawals: [], diary2: [], settings: null };
-    
-    db.get('SELECT * FROM settings WHERE user_id = ?', [userId], (err, settings) => {
-      if (settings) result.settings = settings;
-      
-      db.all('SELECT * FROM trades WHERE user_id = ? ORDER BY open_date DESC', [userId], (err, trades) => {
-        result.trades = trades || [];
-        
-        db.all('SELECT * FROM deposits WHERE user_id = ? ORDER BY date DESC', [userId], (err, deposits) => {
-          result.deposits = deposits || [];
-          
-          db.all('SELECT * FROM withdrawals WHERE user_id = ? ORDER BY date DESC', [userId], (err, withdrawals) => {
-            result.withdrawals = withdrawals || [];
-            
-            db.all('SELECT * FROM diary2 WHERE user_id = ? ORDER BY trade_date DESC', [userId], (err, diary2) => {
-              result.diary2 = diary2 || [];
-              
-              db.get('SELECT username FROM users WHERE id = ?', [userId], (err, user) => {
-                result.username = user ? user.username : null;
-                res.json(result);
-              });
+  // 注：requireAdmin 已校验管理员身份；管理员可访问任意用户数据，故不再用 requireSelfOrAdmin
+
+  const result = { trades: [], deposits: [], withdrawals: [], diary2: [], settings: null };
+
+  db.get('SELECT * FROM settings WHERE user_id = ?', [userId], (err, settings) => {
+    if (settings) result.settings = settings;
+
+    db.all('SELECT * FROM trades WHERE user_id = ? ORDER BY open_date DESC', [userId], (err, trades) => {
+      result.trades = trades || [];
+
+      db.all('SELECT * FROM deposits WHERE user_id = ? ORDER BY date DESC', [userId], (err, deposits) => {
+        result.deposits = deposits || [];
+
+        db.all('SELECT * FROM withdrawals WHERE user_id = ? ORDER BY date DESC', [userId], (err, withdrawals) => {
+          result.withdrawals = withdrawals || [];
+
+          db.all('SELECT * FROM diary2 WHERE user_id = ? ORDER BY trade_date DESC', [userId], (err, diary2) => {
+            result.diary2 = diary2 || [];
+
+            db.get('SELECT username FROM users WHERE id = ?', [userId], (err, user) => {
+              result.username = user ? user.username : null;
+              res.json(result);
             });
           });
         });
@@ -716,72 +736,60 @@ app.get('/api/admin/user/:userId', (req, res) => {
 });
 
 // 管理员删除指定用户及其所有数据
-app.delete('/api/admin/user/:userId', (req, res) => {
+app.delete('/api/admin/user/:userId', auth.authMiddleware, auth.requireAdmin, (req, res) => {
   const { userId } = req.params;
-  const { adminId } = req.query;
-  
-  checkAdmin(adminId, (err) => {
-    if (err) return res.status(403).json({ error: err.message });
-    
-    db.serialize(() => {
-      db.run('DELETE FROM trades WHERE user_id = ?', [userId]);
-      db.run('DELETE FROM deposits WHERE user_id = ?', [userId]);
-      db.run('DELETE FROM withdrawals WHERE user_id = ?', [userId]);
-      db.run('DELETE FROM settings WHERE user_id = ?', [userId]);
-      db.run('DELETE FROM users WHERE id = ?', [userId]);
-      
-      console.log(`[管理员删除] 用户 ${userId} 及其所有数据已删除`);
-      res.json({ message: '用户及其所有数据已删除' });
-    });
+
+  db.serialize(() => {
+    db.run('DELETE FROM trades WHERE user_id = ?', [userId]);
+    db.run('DELETE FROM deposits WHERE user_id = ?', [userId]);
+    db.run('DELETE FROM withdrawals WHERE user_id = ?', [userId]);
+    db.run('DELETE FROM settings WHERE user_id = ?', [userId]);
+    // P0-4: 修复管理员删除用户漏删复盘数据的 bug
+    db.run('DELETE FROM diary2 WHERE user_id = ?', [userId]);
+    db.run('DELETE FROM daily_reviews WHERE user_id = ?', [userId]);
+    db.run('DELETE FROM users WHERE id = ?', [userId]);
+
+    console.log(`[管理员删除] 用户 ${userId} 及其所有数据已删除（含复盘/每日复盘）`);
+    res.json({ message: '用户及其所有数据已删除' });
   });
 });
 
 // 管理员创建管理员账户
-app.post('/api/admin/register', (req, res) => {
-  const { adminId, username, password } = req.body;
-  
-  checkAdmin(adminId, (err) => {
-    if (err) return res.status(403).json({ error: err.message });
-    
-    const userId = uuidv4();
-    const hashedPassword = bcrypt.hashSync(password, 10);
-    
-    db.run(
-      'INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)',
-      [userId, username, hashedPassword, 'admin'],
-      function(err) {
-        if (err) {
-          if (err.message.includes('UNIQUE constraint failed')) {
-            return res.status(400).json({ error: '用户名已存在' });
-          }
-          return res.status(500).json({ error: err.message });
+app.post('/api/admin/register', auth.authMiddleware, auth.requireAdmin, (req, res) => {
+  const { username, password } = req.body;
+
+  const userId = uuidv4();
+  const hashedPassword = bcrypt.hashSync(password, 10);
+
+  db.run(
+    'INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)',
+    [userId, username, hashedPassword, 'admin'],
+    function(err) {
+      if (err) {
+        if (err.message.includes('UNIQUE constraint failed')) {
+          return res.status(400).json({ error: '用户名已存在' });
         }
-        db.run('INSERT INTO settings (user_id) VALUES (?)', [userId]);
-        res.json({ userId, username, role: 'admin', message: '管理员账户创建成功' });
+        return res.status(500).json({ error: err.message });
       }
-    );
-  });
+      db.run('INSERT INTO settings (user_id) VALUES (?)', [userId]);
+      res.json({ userId, username, role: 'admin', message: '管理员账户创建成功' });
+    }
+  );
 });
 
 // 管理员统计数据
-app.get('/api/admin/stats', (req, res) => {
-  const { adminId } = req.query;
-  
-  checkAdmin(adminId, (err) => {
-    if (err) return res.status(403).json({ error: err.message });
-    
-    db.get('SELECT COUNT(*) as user_count FROM users', (err, userResult) => {
-      db.get('SELECT COUNT(*) as trade_count FROM trades', (err, tradeResult) => {
-        db.get('SELECT COUNT(*) as deposit_count, SUM(amount) as total_deposit FROM deposits', (err, depositResult) => {
-          db.get('SELECT COUNT(*) as withdrawal_count, SUM(amount) as total_withdrawal FROM withdrawals', (err, withdrawalResult) => {
-            res.json({
-              user_count: userResult.user_count || 0,
-              trade_count: tradeResult.trade_count || 0,
-              deposit_count: depositResult.deposit_count || 0,
-              total_deposit: depositResult.total_deposit || 0,
-              withdrawal_count: withdrawalResult.withdrawal_count || 0,
-              total_withdrawal: withdrawalResult.total_withdrawal || 0
-            });
+app.get('/api/admin/stats', auth.authMiddleware, auth.requireAdmin, (req, res) => {
+  db.get('SELECT COUNT(*) as user_count FROM users', (err, userResult) => {
+    db.get('SELECT COUNT(*) as trade_count FROM trades', (err, tradeResult) => {
+      db.get('SELECT COUNT(*) as deposit_count, SUM(amount) as total_deposit FROM deposits', (err, depositResult) => {
+        db.get('SELECT COUNT(*) as withdrawal_count, SUM(amount) as total_withdrawal FROM withdrawals', (err, withdrawalResult) => {
+          res.json({
+            user_count: userResult.user_count || 0,
+            trade_count: tradeResult.trade_count || 0,
+            deposit_count: depositResult.deposit_count || 0,
+            total_deposit: depositResult.total_deposit || 0,
+            withdrawal_count: withdrawalResult.withdrawal_count || 0,
+            total_withdrawal: withdrawalResult.total_withdrawal || 0
           });
         });
       });
@@ -794,5 +802,3 @@ app.listen(PORT, () => {
   console.log(`服务器运行在 http://localhost:${PORT}`);
   console.log(`本地访问: http://localhost:${PORT}`);
 });
-
-module.exports = app;

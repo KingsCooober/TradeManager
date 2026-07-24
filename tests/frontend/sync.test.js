@@ -292,4 +292,35 @@ describe('sync.js 测试', () => {
       assert.equal(globalThis.localStorage.getItem('sync_user'), null);
     });
   });
+
+  describe('hasUnsyncedChanges() — P1-1', () => {
+    test('无脏数据时返回 false', () => {
+      // 确保 dirtyTradeIds / pendingDeletedTradeIds 为空
+      globalThis.dirtyTradeIds = {};
+      globalThis.pendingDeletedTradeIds = [];
+      assert.strictEqual(hasUnsyncedChanges(), false);
+    });
+
+    test('dirtyTradeIds 有项时返回 true', () => {
+      globalThis.dirtyTradeIds = { 'trade-1': true, 'trade-2': true };
+      globalThis.pendingDeletedTradeIds = [];
+      assert.strictEqual(hasUnsyncedChanges(), true);
+    });
+
+    test('pendingDeletedTradeIds 有项时返回 true', () => {
+      globalThis.dirtyTradeIds = {};
+      globalThis.pendingDeletedTradeIds = ['trade-3'];
+      assert.strictEqual(hasUnsyncedChanges(), true);
+    });
+
+    test('dirtyTradeIds 未定义（storage.js 未加载）时安全返回 false', () => {
+      delete globalThis.dirtyTradeIds;
+      delete globalThis.pendingDeletedTradeIds;
+      assert.strictEqual(hasUnsyncedChanges(), false);
+    });
+
+    test('暴露到 syncModule', () => {
+      assert.strictEqual(typeof window.syncModule.hasUnsyncedChanges, 'function');
+    });
+  });
 });

@@ -24,12 +24,12 @@ function debounce(func, wait) {
   };
 }
 
-// 自动保存函数（带防抖，500ms延迟）
+// 自动保存函数（带防抖，200ms 延迟 — P2-实时同步：500→200ms 让编辑更快上传）
 var autoSave = debounce(function() {
   if (typeof save === 'function') {
     save().then(function() {
       console.log('本地保存完成');
-      
+
       // 如果已登录，自动同步到服务器 SQLite 数据库
       if (typeof syncModule !== 'undefined' && syncModule.isLoggedIn()) {
         syncModule.syncToServer().then(function(success) {
@@ -46,7 +46,7 @@ var autoSave = debounce(function() {
       console.error('本地保存失败:', err);
     });
   }
-}, 500);
+}, 200);
 
 // 触发自动保存
 function triggerAutoSave() {
@@ -55,7 +55,26 @@ function triggerAutoSave() {
 
 // 页面关闭前保存数据
 window.addEventListener('beforeunload', function() {
-  try { localStorage.setItem('trades_v4', JSON.stringify(trades)); } catch(e) {}
+  try {
+    // P2-实时同步：备份全部三份数据，不再只备份 trades
+    localStorage.setItem('trades_v4', JSON.stringify(trades));
+    localStorage.setItem('funds_v1', JSON.stringify({
+      deposits: (typeof deposits !== 'undefined' && Array.isArray(deposits)) ? deposits : [],
+      withdrawals: (typeof withdrawals !== 'undefined' && Array.isArray(withdrawals)) ? withdrawals : []
+    }));
+  } catch(e) {}
+});
+
+// P2-实时同步：pagehide 事件在 iOS Safari / 移动端比 beforeunload 更可靠
+// beforeunload 在移动浏览器经常不触发；pagehide 是 BFCache 切换和返回手势的统一钩子
+window.addEventListener('pagehide', function() {
+  try {
+    localStorage.setItem('trades_v4', JSON.stringify(trades));
+    localStorage.setItem('funds_v1', JSON.stringify({
+      deposits: (typeof deposits !== 'undefined' && Array.isArray(deposits)) ? deposits : [],
+      withdrawals: (typeof withdrawals !== 'undefined' && Array.isArray(withdrawals)) ? withdrawals : []
+    }));
+  } catch(e) {}
 });
 
 // ===== 统计数据更新 =====
@@ -111,7 +130,13 @@ function updateStats() {
 }
 
 // ===== 主更新函数 =====
-function updateAll() {
+// P2-2: updateAll 拆分为 refresh* 系列函数
+// - updateAll 保留为兼容入口（调用所有 refresh）
+// - 局部操作（仅改账户参数/仅添交易/仅触发图表重绘）可调用对应 refresh，避免全量重算
+// - 所有 refresh* 函数对 DOM 缺失元素都做空值检查，安全降级
+
+// 刷新顶部资金/盈亏/风险/入金出金等汇总指标
+function refreshStats() {
   var cap = getCurrentCapital(),
       init = getInitCapital(),
       td = getTotalDeposit(),
@@ -121,45 +146,37 @@ function updateAll() {
       rPct = getRiskPct(),
       maxR = getMaxRisk();
 
-  // 更新今日仪表盘
-  updateTodayDashboard();
-  
   var availableCapital = init + td - tw;
   var totalReturn = availableCapital > 0 ? (tradePnl / availableCapital) * 100 : 0;
-  
   var rAmt = cap * rPct / 100,
       maxRiskAmt = rAmt * maxR,
       usedRisk = getUsedRisk(),
       remainRisk = maxRiskAmt - usedRisk;
 
-  // 实时保存账户参数到数据库和 LocalStorage
-  saveAccountParams();
-
-  // 更新账户资金显示
+  // 账户资金
   var cp = document.getElementById('currentCapital');
   if (cp) cp.textContent = CNY(cap);
+  // 总盈亏
   var pEl = document.getElementById('totalPnl');
   if (pEl) {
     pEl.textContent = (tradePnl >= 0 ? '+' : '-') + CNY(Math.abs(tradePnl));
     pEl.className = 'val ' + (tradePnl >= 0 ? 'glow-red' : 'glow-green');
   }
+  // 总收益率
   var rEl = document.getElementById('totalReturn');
   if (rEl) {
     rEl.textContent = (totalReturn >= 0 ? '+' : '') + totalReturn.toFixed(2) + '%';
     rEl.className = 'val ' + (totalReturn >= 0 ? 'glow-red' : 'glow-green');
   }
-
-  // 更新入金出金显示
+  // 入金出金
   var tdEl = document.getElementById('totalDeposit');
   if (tdEl) tdEl.textContent = CNY(td);
   var twEl = document.getElementById('totalWithdraw');
   if (twEl) twEl.textContent = CNY(tw);
-
-  // 更新手续费显示
+  // 手续费
   var tfEl = document.getElementById('totalFees');
   if (tfEl) tfEl.textContent = CNY(totalFees);
-
-  // 更新风险参数显示
+  // 风险参数
   var rAmtEl = document.getElementById('rAmount');
   if (rAmtEl) rAmtEl.textContent = CNY(rAmt);
   var mrEl = document.getElementById('maxRiskAmount');
@@ -174,13 +191,39 @@ function updateAll() {
     rmEl.textContent = CNY(remainRisk);
     rmEl.className = 'val ' + (remainRisk < 0 ? 'glow-green' : 'glow-cyan');
   }
+}
 
-  // 重新计算并更新
-  calcPosition();
-  renderTableWithSelects();
-  updateStats();
+// 刷新交易表格
+function refreshTable() {
+  if (typeof renderTableWithSelects === 'function') renderTableWithSelects();
+  if (typeof updateStats === 'function') updateStats();
+}
+
+// 刷新图表（收益曲线 + 持仓饼图）
+function refreshCharts() {
   if (typeof drawEquityCurve === 'function') drawEquityCurve();
   if (typeof drawPositionPie === 'function') drawPositionPie();
+}
+
+// 刷新今日仪表盘
+function refreshDashboard() {
+  if (typeof updateTodayDashboard === 'function') updateTodayDashboard();
+}
+
+// 刷新计算器（开仓仓位计算）
+function refreshCalculator() {
+  if (typeof calcPosition === 'function') calcPosition();
+}
+
+// updateAll 兼容入口：调用所有 refresh；新代码应按需调用单个 refresh
+function updateAll() {
+  // 同步持久化账户参数
+  if (typeof saveAccountParams === 'function') saveAccountParams();
+  refreshStats();
+  refreshDashboard();
+  refreshCalculator();
+  refreshTable();
+  refreshCharts();
 }
 
 // ===== 入金出金弹窗函数 =====
@@ -316,25 +359,28 @@ function renderDepositHistory() {
 }
 
 function deleteDepositRecord(id) {
-  if (!confirm('确认删除此入金记录？')) return;
-  deleteDeposit(id).then(function(ok) {
-    if (ok) {
-      updateAll();
-      renderDepositHistory();
-      if (typeof triggerAutoSave === 'function') triggerAutoSave();
-    } else {
-      alert('未找到该记录');
-    }
-  }).catch(function(err) {
-    console.error('删除入金失败:', err);
-    alert('删除入金记录失败');
+  // P1-2: 用 showConfirm 替代原生 confirm（异步）
+  showConfirm({ title: '删除确认', message: '确认删除此入金记录？', confirmText: '删除', type: 'warning' }).then(function(ok) {
+    if (!ok) return;
+    deleteDeposit(id).then(function(ok) {
+      if (ok) {
+        updateAll();
+        renderDepositHistory();
+        if (typeof triggerAutoSave === 'function') triggerAutoSave();
+      } else {
+        showToast('未找到该记录', 'error');
+      }
+    }).catch(function(err) {
+      console.error('删除入金失败:', err);
+      showToast('删除入金记录失败', 'error');
+    });
   });
 }
 
 function confirmDeposit() {
   var amt = parseFloat(document.getElementById('depositAmount').value);
   if (!amt || amt <= 0) {
-    alert('请输入有效金额');
+    showToast('请输入有效金额', 'error');
     return;
   }
   var date = document.getElementById('depositDate').value || getToday();
@@ -347,7 +393,7 @@ function confirmDeposit() {
     }
   }).catch(function(err) {
     console.error('入金失败:', err);
-    alert('入金记录失败');
+    showToast('入金记录失败', 'error');
   });
 }
 
@@ -388,25 +434,28 @@ function renderWithdrawHistory() {
 }
 
 function deleteWithdrawRecord(id) {
-  if (!confirm('确认删除此出金记录？')) return;
-  deleteWithdrawal(id).then(function(ok) {
-    if (ok) {
-      updateAll();
-      renderWithdrawHistory();
-      if (typeof triggerAutoSave === 'function') triggerAutoSave();
-    } else {
-      alert('未找到该记录');
-    }
-  }).catch(function(err) {
-    console.error('删除出金失败:', err);
-    alert('删除出金记录失败');
+  // P1-2: 用 showConfirm 替代原生 confirm（异步）
+  showConfirm({ title: '删除确认', message: '确认删除此出金记录？', confirmText: '删除', type: 'warning' }).then(function(ok) {
+    if (!ok) return;
+    deleteWithdrawal(id).then(function(ok) {
+      if (ok) {
+        updateAll();
+        renderWithdrawHistory();
+        if (typeof triggerAutoSave === 'function') triggerAutoSave();
+      } else {
+        showToast('未找到该记录', 'error');
+      }
+    }).catch(function(err) {
+      console.error('删除出金失败:', err);
+      showToast('删除出金记录失败', 'error');
+    });
   });
 }
 
 function confirmWithdraw() {
   var amt = parseFloat(document.getElementById('withdrawAmount').value);
   if (!amt || amt <= 0) {
-    alert('请输入有效金额');
+    showToast('请输入有效金额', 'error');
     return;
   }
   var date = document.getElementById('withdrawDate').value || getToday();
@@ -419,7 +468,7 @@ function confirmWithdraw() {
     }
   }).catch(function(err) {
     console.error('出金失败:', err);
-    alert('出金记录失败');
+    showToast('出金记录失败', 'error');
   });
 }
 
@@ -520,7 +569,7 @@ function executeClearAction() {
   updateAll();
   // 重新打开设置弹窗以刷新统计
   openSettingsModal();
-  alert('清空操作已完成');
+  showToast('清空操作已完成', 'success');
 }
 
 function clearAllTradesData() {
@@ -552,10 +601,14 @@ function clearAllTradesData() {
 function clearAllFundsData() {
   deposits = [];
   withdrawals = [];
-  if (dbInitialized && db) {
-    // 假设 DB 中也有 funds store - 这里只是清空内存和 localStorage
-    // 完整的 DB 清空需要 addDepositToDB 等函数支持
-    console.log('内存中的资金记录已清空');
+  // P0-3: 清空 IndexedDB 中的 deposits/withdrawals store
+  // 修复：之前仅清空内存与 localStorage，导致刷新后从 IndexedDB 重新加载时资金记录"复活"
+  if (dbInitialized && db && typeof clearAllFundsFromDB === 'function') {
+    clearAllFundsFromDB().then(function() {
+      console.log('本地数据库资金记录已清空');
+    }).catch(function(err) {
+      console.error('清空数据库资金记录失败:', err);
+    });
   }
   localStorage.removeItem('funds_v1');
   // 如果已登录，精准通知服务器只清空资金记录
@@ -653,14 +706,14 @@ function handleLogin() {
   const serverUrl = document.getElementById('syncServerUrl').value.trim();
   
   if (!username || !password) {
-    alert('请输入用户名和密码');
+    showToast('请输入用户名和密码', 'error');
     return;
   }
-  
+
   if (serverUrl) {
     syncModule.setServerUrl(serverUrl);
   }
-  
+
   syncModule.login(username, password)
     .then(() => {
       syncModule.updateSyncUI();
@@ -675,7 +728,7 @@ function handleLogin() {
       try { window.dispatchEvent(new CustomEvent('user-login', { detail: syncModule.getCurrentUser() })); } catch(e) {}
     })
     .catch(err => {
-      alert('登录失败: ' + err.message);
+      showToast('登录失败: ' + err.message, 'error');
     });
 }
 
@@ -729,19 +782,19 @@ function handleRegister() {
   const serverUrl = document.getElementById('syncServerUrl').value.trim();
   
   if (!username || !password) {
-    alert('请输入用户名和密码');
+    showToast('请输入用户名和密码', 'error');
     return;
   }
-  
+
   if (password.length < 6) {
-    alert('密码至少需要6位');
+    showToast('密码至少需要6位', 'error');
     return;
   }
-  
+
   if (serverUrl) {
     syncModule.setServerUrl(serverUrl);
   }
-  
+
   syncModule.register(username, password)
     .then(() => {
       syncModule.updateSyncUI();
@@ -761,15 +814,52 @@ function handleRegister() {
       });
     })
     .catch(err => {
-      alert('注册失败: ' + err.message);
+      showToast('注册失败: ' + err.message, 'error');
     });
 }
 
 function handleLogout() {
-  // 关闭管理员面板（如果打开）
-  var adminPanel = document.getElementById('adminPanel');
-  if (adminPanel) adminPanel.style.display = 'none';
+  // P1-1/P1-2: 退出登录前增加二次确认（用 showConfirm 替代原生 confirm）
+  var hasUnsynced = window.syncModule && typeof window.syncModule.hasUnsyncedChanges === 'function'
+    && window.syncModule.hasUnsyncedChanges();
 
+  var confirmMsg = hasUnsynced
+    ? '检测到本地有未同步的交易变更。\n点击"退出"将先尝试同步到服务器，再退出登录；\n点击"取消"返回继续操作。'
+    : '确定要退出登录吗？退出后将清除本地数据。';
+
+  showConfirm({
+    title: hasUnsynced ? '退出前同步确认' : '退出登录',
+    message: confirmMsg,
+    type: hasUnsynced ? 'warning' : 'info',
+    confirmText: '退出'
+  }).then(function(ok) {
+    if (!ok) return;
+    // 关闭管理员面板（如果打开）
+    var adminPanel = document.getElementById('adminPanel');
+    if (adminPanel) adminPanel.style.display = 'none';
+
+    // P1-1: 若有未同步数据，先兜底同步一次；同步失败也允许退出，但提示用户
+    if (hasUnsynced && window.syncModule && typeof window.syncModule.fullSync === 'function') {
+      window.syncModule.fullSync().then(function(ok) {
+        if (ok) {
+          syncModule.showSyncStatus('已同步最新数据，正在退出...', 'success');
+        } else {
+          syncModule.showSyncStatus('同步失败，本地数据仍会被清除（服务器可能缺少最新变更）', 'error');
+        }
+        performLogoutCleanup();
+      }).catch(function(err) {
+        console.error('退出前同步失败:', err);
+        syncModule.showSyncStatus('同步异常，本地数据仍会被清除', 'error');
+        performLogoutCleanup();
+      });
+    } else {
+      performLogoutCleanup();
+    }
+  });
+}
+
+// P1-1: 退出登录的实际清理逻辑（同步完成后或无需同步时调用）
+function performLogoutCleanup() {
   // 退出时先清空本地数据，回到未登录的空白状态
   clearLocalDataAndRefresh();
   syncModule.logout();
@@ -799,41 +889,39 @@ function handleChangePassword() {
   const oldPassword = document.getElementById('changePwdOld').value;
   const newPassword = document.getElementById('changePwdNew').value;
   const confirmPassword = document.getElementById('changePwdConfirm').value;
-  
+
   // 验证输入
   if (!oldPassword || !newPassword || !confirmPassword) {
-    alert('请填写所有字段');
+    showToast('请填写所有字段', 'error');
     return;
   }
-  
+
   if (newPassword.length < 6) {
-    alert('新密码至少需要6位');
+    showToast('新密码至少需要6位', 'error');
     return;
   }
-  
+
   if (newPassword !== confirmPassword) {
-    alert('两次输入的新密码不一致');
+    showToast('两次输入的新密码不一致', 'error');
     return;
   }
-  
+
   if (!syncModule.isLoggedIn()) {
-    alert('请先登录');
+    showToast('请先登录', 'error');
     return;
   }
-  
+
   const user = syncModule.getCurrentUser();
   const serverUrl = syncModule.getServerUrl();
-  
+
   console.log('[修改密码] 用户信息:', user);
   console.log('[修改密码] 服务器地址:', serverUrl);
-  
-  fetch(serverUrl + '/api/change-password', {
+
+  // P0-1: 改用 authFetch 自动带 token；服务端从 token 解析 userId，不再信任 body 中的 userId
+  authFetch(serverUrl + '/api/change-password', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      userId: user.id,
       oldPassword: oldPassword,
       newPassword: newPassword
     })
@@ -847,27 +935,29 @@ function handleChangePassword() {
     try {
       const data = JSON.parse(rawText);
       if (data.error) {
-        alert('修改失败: ' + data.error);
+        showToast('修改失败: ' + data.error, 'error');
       } else {
-        alert('密码修改成功，请重新登录');
-        closeChangePasswordModal();
-        handleLogout();
+        // P1-2: 用 alertDialog 阻塞，用户确认后再登出，避免 toast 与退出确认框叠加
+        alertDialog({ title: '修改成功', message: '密码修改成功，请重新登录', type: 'success' }).then(function() {
+          closeChangePasswordModal();
+          handleLogout();
+        });
       }
     } catch (parseErr) {
       console.error('解析响应失败:', parseErr);
-      alert('服务器响应格式错误: ' + rawText.substring(0, 100));
+      showToast('服务器响应格式错误: ' + rawText.substring(0, 100), 'error');
     }
   })
   .catch(err => {
     console.error('修改密码失败:', err);
-    alert('修改密码失败，请稍后重试\n错误: ' + err.message);
+    showToast('修改密码失败，请稍后重试\n错误: ' + err.message, 'error');
   });
 }
 
 // 仅从服务器下载数据（用于登录/注册后，不上传）
 function handleDownloadOnly() {
   if (!syncModule.isLoggedIn()) {
-    alert('请先登录');
+    showToast('请先登录', 'error');
     return;
   }
   var statusEl = document.getElementById('syncStatus');
@@ -884,7 +974,7 @@ function handleDownloadOnly() {
 
 function handleFullSync() {
   if (!syncModule.isLoggedIn()) {
-    alert('请先登录');
+    showToast('请先登录', 'error');
     return;
   }
   // 显示顶部状态
@@ -932,7 +1022,7 @@ function refreshAdminStats() {
   var userId = syncModule.getCurrentUser().id;
   var serverUrl = syncModule.getServerUrl();
   
-  fetch(serverUrl + '/api/admin/stats?adminId=' + userId)
+  authFetch(serverUrl + '/api/admin/stats?adminId=' + userId)
     .then(res => res.json())
     .then(data => {
       document.getElementById('adminStatUsers').textContent = data.user_count || 0;
@@ -953,7 +1043,7 @@ function refreshAdminUserList() {
   var userId = syncModule.getCurrentUser().id;
   var serverUrl = syncModule.getServerUrl();
   
-  fetch(serverUrl + '/api/admin/users?adminId=' + userId)
+  authFetch(serverUrl + '/api/admin/users?adminId=' + userId)
     .then(res => res.json())
     .then(data => {
       adminUserList = data.users || [];
@@ -1015,7 +1105,7 @@ function showUserDetailTab(tab) {
   var userId = syncModule.getCurrentUser().id;
   var serverUrl = syncModule.getServerUrl();
   
-  fetch(serverUrl + '/api/admin/user/' + currentAdminUser.id + '?adminId=' + userId)
+  authFetch(serverUrl + '/api/admin/user/' + currentAdminUser.id + '?adminId=' + userId)
     .then(res => res.json())
     .then(data => {
       var contentEl = document.getElementById('adminDetailContent');
@@ -1191,33 +1281,40 @@ function renderAdminSettings(settings) {
 
 function deleteUserWithConfirm() {
   if (!currentAdminUser) return;
-  
-  if (!confirm(`确认删除用户 "${currentAdminUser.username}" 及其所有数据？此操作不可撤销！`)) {
-    return;
-  }
-  
-  var userId = syncModule.getCurrentUser().id;
-  var serverUrl = syncModule.getServerUrl();
-  
-  fetch(serverUrl + '/api/admin/user/' + currentAdminUser.id + '?adminId=' + userId, {
-    method: 'DELETE'
-  })
-  .then(res => res.json())
-  .then(data => {
-    alert('用户删除成功');
-    closeAdminUserDetail();
-    refreshAdminUserList();
-    refreshAdminStats();
-  })
-  .catch(err => {
-    console.error('删除用户失败:', err);
-    alert('删除失败');
+
+  // P1-2: 用 showConfirm 替代原生 confirm（异步）
+  showConfirm({
+    title: '删除用户',
+    message: '确认删除用户 "' + currentAdminUser.username + '" 及其所有数据？此操作不可撤销！',
+    confirmText: '删除',
+    type: 'error'
+  }).then(function(ok) {
+    if (!ok) return;
+
+    var userId = syncModule.getCurrentUser().id;
+    var serverUrl = syncModule.getServerUrl();
+
+    authFetch(serverUrl + '/api/admin/user/' + currentAdminUser.id + '?adminId=' + userId, {
+      method: 'DELETE'
+    })
+    .then(res => res.json())
+    .then(data => {
+      showToast('用户删除成功', 'success');
+      closeAdminUserDetail();
+      refreshAdminUserList();
+      refreshAdminStats();
+    })
+    .catch(err => {
+      console.error('删除用户失败:', err);
+      showToast('删除失败', 'error');
+    });
   });
 }
 
+// P0-2: escapeHtml 统一委托给 utils.js 的 esc()，避免 3 套不一致实现导致的 XSS 风险
+// 保留 escapeHtml 名称作为向后兼容的 alias（已有大量调用方使用 escapeHtml）
 function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return esc(str);
 }
 
 // 更新管理员菜单显示

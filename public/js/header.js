@@ -159,9 +159,11 @@ document.addEventListener('DOMContentLoaded', function() {
   setupGlobalSearch();
 });
 
-// HTML 转义（避免重复定义）
+// P0-2: HTML 转义统一委托给 utils.js 的 esc()（仅当 esc 未定义时降级，避免循环依赖）
+// utils.js 在 header.js 之前加载，正常情况下 esc 已存在
 if (typeof window.escapeHtml !== 'function') {
   window.escapeHtml = function(str) {
+    if (typeof esc === 'function') return esc(str);
     if (str === null || str === undefined) return '';
     return String(str)
       .replace(/&/g, '&amp;')
