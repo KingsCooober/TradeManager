@@ -30,6 +30,9 @@ var drAutoSaveTimer = null; // 延迟自动保存定时器
 var drMarketData = null;    // 行情数据缓存（来自 /api/market/indices，5 分钟有效）
 var drMarketLoadTime = 0;   // 上次加载行情时间
 var drMarketLoadPromise = null; // 防止并发请求
+var drFundData = null;      // 资金面数据缓存（来自 /api/market/fund，5 分钟有效）
+var drFundLoadTime = 0;     // 上次加载资金面时间
+var drFundLoadPromise = null; // 防止并发请求
 
 function initDailyReview() {
   drCurrentDate = getToday();
@@ -840,19 +843,43 @@ function recalcDROverallTrend() {
     hint += ' ｜ 技术面均分：' + totalScore + '/40 → ' + scoreToTrend(totalScore);
   }
 
+  // 资金面 0-20 分（数据驱动，无需用户填写）
+  var fundScore = 0;
+  var fundBreakdown = '';
+  var hasFund = false;
+  if (drFundData && drFundData.score) {
+    fundScore = drFundData.score.total;
+    fundBreakdown = drFundData.score.breakdown;
+    hasFund = true;
+    hint += ' ｜ 资金面分：' + fundScore + '/20';
+  }
+
+  // 综合分 = 技术面 0-40 + 资金面 0-20 = 0-60
+  var totalAll = (hasScore ? totalScore : 0) + (hasFund ? fundScore : 0);
+  var hasAny = hasScore || hasFund;
+  if (hasAny) {
+    var totalTrend = scoreToCompositeTrend(totalAll);
+    hint += ' ｜ 综合分：' + totalAll + '/60 → ' + totalTrend;
+  }
+
   return {
     trend: weakest.trendResult,
     hint: hint,
     totalScore: totalScore,
     scoreBreakdown: scoreBreakdown,
-    hasScore: hasScore
+    fundScore: fundScore,
+    fundBreakdown: fundBreakdown,
+    totalAll: totalAll,
+    hasScore: hasScore,
+    hasFund: hasFund
   };
 }
 
 // 整体走势 + 整体仓位 重新计算
 function recalcDROverall() {
-  // 1. 综合走势（含技术面均分）
+  // 1. 综合走势（含技术面均分 + 资金面分 + 综合分）
   var overall = recalcDROverallTrend();
+  window._lastDROverall = overall;  // 给 updateDRTrendResultUI 读
   updateDRTrendResultUI(overall.trend, overall.hint, overall.totalScore, overall.scoreBreakdown);
 
   // 2. 整体仓位 = 各指数命中规则中取最保守的（仓位区间最小的）
@@ -928,6 +955,17 @@ function scoreToTrend(total) {
   return '弱势下跌';
 }
 
+// 综合分（技术面 0-40 + 资金面 0-20 = 0-60） → 6 档走势
+// 阈值与原 scoreToTrend 等比例缩放（60 / 40 = 1.5 倍）
+function scoreToCompositeTrend(total) {
+  if (total >= 48) return '强势上涨';
+  if (total >= 36) return '多头趋势';
+  if (total >= 27) return '反弹观察';
+  if (total >= 18) return '震荡整理';
+  if (total >=  9) return '趋势走弱';
+  return '弱势下跌';
+}
+
 // 评分等级 CSS class
 function getScoreBadgeClass(total) {
   if (total >= 32) return 'score-max';
@@ -971,6 +1009,8 @@ function loadDRMarketData(force) {
         return k + '(' + (it.quote && it.quote.price) + ')';
       }).join(' '));
       applyMarketDataToIndices();
+      // 行情加载完成后再拉资金面（资金面接口需要 4 只指数成交额合计）
+      if (typeof loadDRFundData === 'function') loadDRFundData();
       return data;
     })
     .catch(function(e) {
@@ -1042,6 +1082,139 @@ function applyMarketDataToIndices() {
     if (typeof renderDRIndicesMAStatus === 'function') renderDRIndicesMAStatus();
     if (typeof recalcDROverall === 'function') recalcDROverall();
   }
+}
+
+// ==================== 资金面 0-20 分 ====================
+// 数据源：/api/market/fund（北向资金 + 融资融券 + 4 只指数成交额合计）
+// 评分维度：
+//   北向资金  0-8 分：净流入 >50亿 = 8 / 0-50亿 = 6 / 0~-50亿 = 4 / <-50亿 = 2
+//   融资余额  0-6 分：环比 >+1% = 6 / 0-1% = 4 / -1%-0% = 3 / <-1% = 1
+//   市场成交  0-6 分：>1.5万亿 = 6 / 1.0-1.5 = 5 / 0.8-1.0 = 4 / 0.6-0.8 = 2 / <0.6 = 0
+// 总分 0-20，与技术面 0-40 加起来得到综合分 0-60
+
+var DR_FUND_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
+
+// 拉取资金面数据：4 只指数成交额合计作为分母
+function loadDRFundData(force) {
+  if (!force && drFundData && (Date.now() - drFundLoadTime) < DR_FUND_CACHE_TTL) {
+    applyFundToUI();
+    return Promise.resolve(drFundData);
+  }
+  if (drFundLoadPromise) return drFundLoadPromise;
+
+  // 从已有行情数据计算 4 只指数成交额合计（单位：万元）
+  var totalAmountWan = 0;
+  if (drMarketData && drMarketData.data) {
+    DR_INDICES.forEach(function(def) {
+      var it = drMarketData.data[def.key];
+      if (it && it.quote && it.quote.amount) {
+        totalAmountWan += it.quote.amount;  // 腾讯字段 amount 单位是万元
+      }
+    });
+  }
+
+  drFundLoadPromise = authFetch('/api/market/fund?totalAmountWan=' + totalAmountWan, { method: 'GET' })
+    .then(function(r) {
+      if (!r.ok) throw new Error('资金面接口返回 ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      drFundData = data;
+      drFundLoadTime = Date.now();
+      console.log('[DR] 资金面已加载', '总成交', data.amount && data.amount.totalYi + '亿',
+        '北向净流入', data.north && (data.north.netInflow / 1e8).toFixed(2) + '亿',
+        '融资变化', data.margin && data.margin.changePct.toFixed(2) + '%',
+        '资金面分', data.score && data.score.total + '/20');
+      applyFundToUI();
+      return data;
+    })
+    .catch(function(e) {
+      console.warn('[DR] 资金面加载失败，保持空值:', e.message);
+      return null;
+    })
+    .then(function(d) {
+      drFundLoadPromise = null;
+      return d;
+    });
+  return drFundLoadPromise;
+}
+
+// 把资金面数据渲染到独立卡片
+function applyFundToUI() {
+  var card = document.getElementById('drFundCard');
+  if (!card) return;
+
+  if (!drFundData) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+
+  var score = drFundData.score || {};
+  var north = drFundData.north || {};
+  var margin = drFundData.margin || {};
+  var amount = drFundData.amount || {};
+
+  // 评分徽章
+  var scoreEl = document.getElementById('drFundScore');
+  if (scoreEl) {
+    scoreEl.textContent = score.total + '/20';
+    scoreEl.className = 'dr-fund-score ' + getFundScoreBadgeClass(score.total);
+  }
+  var breakdownEl = document.getElementById('drFundBreakdown');
+  if (breakdownEl) breakdownEl.textContent = score.breakdown || '';
+
+  // 北向资金
+  var northEl = document.getElementById('drFundNorth');
+  if (northEl) {
+    var netYi = (north.netInflow || 0) / 1e8;
+    var sign = netYi > 0 ? '+' : '';
+    northEl.textContent = sign + netYi.toFixed(2) + ' 亿';
+    northEl.className = 'dr-fund-num ' + (netYi > 0 ? 'fund-up' : (netYi < 0 ? 'fund-down' : 'fund-flat'));
+  }
+  var northHintEl = document.getElementById('drFundNorthHint');
+  if (northHintEl) northHintEl.textContent = '沪股通 ' + (north.hk2sh / 1e8).toFixed(2) + ' + 深股通 ' + (north.hk2sz / 1e8).toFixed(2) + ' 亿';
+
+  // 融资余额
+  var marginEl = document.getElementById('drFundMargin');
+  if (marginEl) {
+    var pct = margin.changePct || 0;
+    var sign2 = pct > 0 ? '+' : '';
+    marginEl.textContent = sign2 + pct.toFixed(2) + '%';
+    marginEl.className = 'dr-fund-num ' + (pct > 0 ? 'fund-up' : (pct < 0 ? 'fund-down' : 'fund-flat'));
+  }
+  var marginHintEl = document.getElementById('drFundMarginHint');
+  if (marginHintEl) marginHintEl.textContent = '余额 ' + (margin.rzye / 1e12).toFixed(2) + ' 万亿（昨日 ' + (margin.prev && margin.prev.rzye / 1e12 || 0).toFixed(2) + '）';
+
+  // 成交额
+  var amountEl = document.getElementById('drFundAmount');
+  if (amountEl) {
+    amountEl.textContent = (amount.totalYi || 0).toFixed(0) + ' 亿';
+  }
+  var amountHintEl = document.getElementById('drFundAmountHint');
+  if (amountHintEl) {
+    // 用 4 只指数的成交额明细
+    var parts = [];
+    if (drMarketData && drMarketData.data) {
+      DR_INDICES.forEach(function(def) {
+        var it = drMarketData.data[def.key];
+        if (it && it.quote && it.quote.amount) {
+          parts.push(def.name + ' ' + (it.quote.amount / 1e4).toFixed(0) + '亿');
+        }
+      });
+    }
+    amountHintEl.textContent = parts.join(' + ');
+  }
+}
+
+// 资金面 0-20 分 CSS class（与综合走势档位对齐）
+function getFundScoreBadgeClass(total) {
+  if (total >= 17) return 'fund-score-max';     // 强势（>= 17/20）
+  if (total >= 13) return 'fund-score-bullish'; // 多头（13-16）
+  if (total >= 9)  return 'fund-score-rebound'; // 反弹（9-12）
+  if (total >= 5)  return 'fund-score-neutral'; // 震荡（5-8）
+  if (total >= 2)  return 'fund-score-warning'; // 走弱（2-4）
+  return 'fund-score-weak';                     // 弱势（0-1）
 }
 
 // 单个指数的走势判定（5-10 均线 + MACD + 价格 vs 5日线位置 → 6 种走势之一）
@@ -1169,8 +1342,12 @@ function analyzeTrend(maState, macdState, ma5Position) {
   return { trend: trend, reason: reason };
 }
 
-// 综合走势 UI 更新（含技术面均分显示）
+// 综合走势 UI 更新（含技术面均分 + 资金面分 + 综合分显示）
 function updateDRTrendResultUI(trend, hint, totalScore, scoreBreakdown) {
+  // 这个函数被调用时 hint 里已经包含所有评分信息。
+  // 但 totalScore/scoreBreakdown 是技术面的，我们需要在更上层把资金面和综合分拼出来。
+  // 为了不破坏现有调用方签名，hint 已包含所有上下文，UI 直接用 hint 即可。
+  // 这里只负责把技术面分徽章放到 span 里。
   var valEl = document.getElementById('drTrendResultValue');
   var hintEl = document.getElementById('drTrendResultHint');
   var scoreEl = document.getElementById('drTrendResultScore');
@@ -1186,17 +1363,39 @@ function updateDRTrendResultUI(trend, hint, totalScore, scoreBreakdown) {
     if (hintEl) hintEl.textContent = hint || '请为每个指数选择「均线状态」和「MACD 状态」';
   }
 
-  // 技术面 0-40 分均分徽章（只在有评分时显示）
+  // 技术面 + 资金面 + 综合分徽章
   if (scoreEl) {
-    if (totalScore && scoreBreakdown) {
+    // 从 closure 找到综合分（recalcDROverallTrend 的返回值）
+    var lastOverall = window._lastDROverall || {};
+    var hasScore = !!lastOverall.hasScore;
+    var hasFund  = !!lastOverall.hasFund;
+    var techScore = lastOverall.totalScore;
+    var fundScore = lastOverall.fundScore;
+    var totalAll  = lastOverall.totalAll;
+    if (hasScore || hasFund) {
       scoreEl.style.display = '';
       var valSpan = scoreEl.querySelector('.dr-trend-result-score-value');
       var detailSpan = scoreEl.querySelector('.dr-trend-result-score-detail');
       if (valSpan) {
-        valSpan.textContent = '技术分 ' + totalScore + '/40';
-        valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalScore);
+        // 优先显示综合分
+        if (hasScore && hasFund) {
+          valSpan.textContent = '综合分 ' + totalAll + '/60';
+          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalAll);
+        } else if (hasScore) {
+          valSpan.textContent = '技术分 ' + techScore + '/40';
+          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(techScore);
+        } else {
+          valSpan.textContent = '资金分 ' + fundScore + '/20';
+          valSpan.className = 'dr-trend-result-score-value ' + getFundScoreBadgeClass(fundScore);
+        }
       }
-      if (detailSpan) detailSpan.textContent = scoreBreakdown || '';
+      if (detailSpan) {
+        var parts = [];
+        if (hasScore) parts.push('技术 ' + techScore + '/40');
+        if (hasFund)  parts.push('资金 ' + fundScore + '/20');
+        if (hasScore && hasFund) parts.push('综合 ' + totalAll + '/60');
+        detailSpan.textContent = parts.join(' · ');
+      }
     } else {
       scoreEl.style.display = 'none';
     }

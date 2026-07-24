@@ -11,6 +11,8 @@ const bcrypt = require('bcryptjs');
 const auth = require('./auth');
 // 行情数据代理（腾讯股票 API 免 Key）
 const market = require('./market-quote');
+// 资金面数据代理（北向资金 + 融资融券）
+const marketFund = require('./market-fund');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -839,6 +841,19 @@ app.get('/api/market/indices', auth.authMiddleware, async (req, res) => {
   } catch (e) {
     console.error('[market] getAllIndicesMarket 失败:', e.message);
     res.status(500).json({ error: '行情获取失败: ' + e.message });
+  }
+});
+
+// 资金面：北向资金 + 融资融券 + 成交额合计 + 评分
+// 入参：totalAmountWan 由前端从 /api/market/indices 的 4 只指数 amount 求和提供
+app.get('/api/market/fund', auth.authMiddleware, async (req, res) => {
+  const totalAmountWan = parseFloat(req.query.totalAmountWan) || 0;
+  try {
+    const data = await marketFund.getFundSnapshot(totalAmountWan);
+    res.json(data);
+  } catch (e) {
+    console.error('[market] getFundSnapshot 失败:', e.message);
+    res.status(500).json({ error: '资金面获取失败: ' + e.message });
   }
 });
 

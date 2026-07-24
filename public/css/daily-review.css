@@ -1323,13 +1323,121 @@
 .dr-pos-tag-min { background: rgba(239, 71, 111, 0.14); color: var(--color-red); }
 .dr-pos-tag-empty { background: rgba(239, 71, 111, 0.22); color: var(--color-red); font-weight: 600; }
 
+/* 资金面 0-20 分卡片（北向资金 + 融资余额 + 市场成交，自动从第三方接口拉取） */
+.dr-fund-card {
+  margin-top: 14px;
+  padding: 14px 18px;
+  background: linear-gradient(135deg, rgba(255, 167, 38, 0.05) 0%, rgba(67, 97, 238, 0.04) 100%);
+  border: 1px solid var(--border-card);
+  border-left: 4px solid #ffa726;
+  border-radius: var(--radius-md);
+}
+
+.dr-fund-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--border-card);
+}
+
+.dr-fund-card-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.dr-fund-score-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dr-fund-score {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-card);
+  line-height: 1.1;
+}
+
+/* 资金面 6 档颜色（与综合走势 6 档一致） */
+.dr-fund-score.fund-score-max     { color: var(--color-green); border-color: rgba(45, 159, 127, 0.4); background: rgba(45, 159, 127, 0.08); }
+.dr-fund-score.fund-score-bullish { color: var(--color-red);   border-color: rgba(239, 71, 111, 0.4); background: rgba(239, 71, 111, 0.08); }
+.dr-fund-score.fund-score-rebound { color: var(--color-blue);  border-color: rgba(67, 97, 238, 0.4);  background: rgba(67, 97, 238, 0.08); }
+.dr-fund-score.fund-score-neutral { color: var(--color-blue);  border-color: rgba(67, 97, 238, 0.4);  background: rgba(67, 97, 238, 0.08); }
+.dr-fund-score.fund-score-warning { color: #b8860b;            border-color: rgba(184, 134, 11, 0.4); background: rgba(184, 134, 11, 0.08); }
+.dr-fund-score.fund-score-weak    { color: var(--color-red);   border-color: rgba(239, 71, 111, 0.4); background: rgba(239, 71, 111, 0.08); }
+
+.dr-fund-breakdown {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dr-fund-card-body {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.dr-fund-item {
+  padding: 10px 12px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dr-fund-item-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.dr-fund-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+  line-height: 1.2;
+}
+
+/* 资金方向颜色（A股市场：涨=红，跌=绿） */
+.dr-fund-num.fund-up   { color: var(--color-red); }
+.dr-fund-num.fund-down { color: var(--color-green); }
+.dr-fund-num.fund-flat { color: var(--text-secondary); }
+
+.dr-fund-item-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
 @media (max-width: 900px) {
+  .dr-fund-card-body { grid-template-columns: 1fr; }
+  .dr-fund-card-header { flex-direction: column; align-items: flex-start; }
   .dr-suggested-pos { flex-direction: column; align-items: flex-start; }
   .dr-suggested-pos-hint { text-align: left; }
   .dr-trend-result { flex-direction: column; align-items: flex-start; }
   .dr-trend-result-hint { text-align: left; }
   .dr-matched-rule { flex-direction: column; align-items: flex-start; }
 }
+
 
 /* 历史列表 */
 .dr-history-section {
