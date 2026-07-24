@@ -1,7 +1,7 @@
 // ===== 每日复盘模块 =====
 
 var DR_INDICES = [
-  { key: 'sh',     name: 'A股平均股价' },
+  { key: 'sh',     name: '上证指数' },
   { key: 'zza500', name: '中证A500' },
   { key: 'cyb50',  name: '创业板50' },
   { key: 'kc50',   name: '科创50' }
@@ -559,6 +559,9 @@ function renderDRIndicesMAStatus() {
       var found = drData.indices.find(function(m) { return m.key === def.key; });
       if (!found) {
         drData.indices.push({ key: def.key, name: def.name, maState: '', macdState: '', trendResult: '', trendHint: '' });
+      } else {
+        // 同步 DR_INDICES 中的最新名称（修复重命名后旧复盘仍显示旧名的问题）
+        found.name = def.name;
       }
     });
   }
