@@ -2580,7 +2580,9 @@ function drawDRKlineChart(echarts, idx, key, data) {
       { gridIndex: 0, scale: true,
         splitLine: { lineStyle: { color: 'rgba(92, 92, 112, 0.1)' } },
         axisLabel: { fontSize: 10, color: '#9090a8' } },
-      { gridIndex: 1, scale: true, splitNumber: 2,
+      // 成交量：从 0 起点绘制（min: 0），柱条才"从 0 轴生长"，
+      // 避免 scale:true 自动缩放导致柱子"浮在半空"
+      { gridIndex: 1, min: 0, splitNumber: 2,
         splitLine: { show: false },
         axisLabel: { fontSize: 10, color: '#9090a8', formatter: function(v) { return (v / 10000).toFixed(1) + '亿'; } } },
       { gridIndex: 2, scale: true, splitNumber: 2,
