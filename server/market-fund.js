@@ -1,4 +1,4 @@
-// 资金面数据代理（东方财富 API 免 Key）
+// 资金面数据代理（东方财富 + 腾讯 API 免 Key）
 // 数据源：
 //   1) 北向资金：https://push2.eastmoney.com/api/qt/kamt/get
 //      返回 hk2sh(沪股通净买) / hk2sz(深股通净买) / sh2hk(港股通沪净买) / sz2hk(港股通深净买)
@@ -6,8 +6,8 @@
 //   2) 融资融券：https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPTA_RZRQ_LSHJ
 //      返回近 N 日：RZYE(融资余额) / RZJME(融资净买入) / RZRQYE(两融余额)
 //      单位：元
-//   3) 市场成交额：复用 market-quote.js 的指数 amount 字段求和（沪深两市估算）
-//      单位：万元
+//   3) 沪深两市总成交额：sh000001(沪市) + sz399001(深市) 的 amount 字段之和
+//      通过 market-quote.fetchMarketTotalAmount() 获取（单位：万元）
 //
 // 评分维度（0-20 分）：
 //   北向资金 0-8 分：净流入 50亿+ = 8 / 0-50亿 = 6 / 净流出 0-50亿 = 4 / >50亿 = 2
@@ -15,6 +15,7 @@
 //   成交额 0-6 分：1.5万亿+ = 6 / 1.0-1.5 = 5 / 0.8-1.0 = 4 / 0.6-0.8 = 2 / <0.6 = 0
 
 const https = require('https');
+const marketQuote = require('./market-quote');
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 分钟
 const cache = new Map();
@@ -152,16 +153,19 @@ function scoreFund(northNetInflow, marginChangePct, totalAmountWan) {
 }
 
 // 4) 主入口：合并所有数据并计算评分
-// 入参：totalAmountWan - 4 只指数成交额之和（单位万元），由调用方提供
-async function getFundSnapshot(totalAmountWan) {
+// 内部自动调用 marketQuote.fetchMarketTotalAmount() 拉沪深两市总成交额
+//   （沪市: sh000001 / 深市: sz399001，单位：万元）
+// 不再需要 totalAmountWan 入参 —— 由后端统一从行情接口获取
+async function getFundSnapshot() {
   const cacheKey = 'fund:snapshot';
   const cached = getCache(cacheKey);
   if (cached) return Object.assign({ cached: true }, cached);
 
-  // 并发获取北向资金 + 融资融券
-  const [north, margin] = await Promise.all([
+  // 并发获取：北向资金 + 融资融券 + 沪深两市总成交额
+  const [north, margin, marketAmount] = await Promise.all([
     fetchNorthbound().catch(e => ({ error: e.message, netInflow: 0 })),
-    fetchMargin().catch(e => ({ error: e.message, rzye: 0, rzjme: 0, rqye: 0, rzrqye: 0, prev: { rzye: 0, rzrqye: 0 } }))
+    fetchMargin().catch(e => ({ error: e.message, rzye: 0, rzjme: 0, rqye: 0, rzrqye: 0, prev: { rzye: 0, rzrqye: 0 } })),
+    marketQuote.fetchMarketTotalAmount().catch(e => ({ error: e.message, totalWan: 0, shWan: 0, szWan: 0 }))
   ]);
 
   // 计算融资余额环比 %
@@ -170,8 +174,9 @@ async function getFundSnapshot(totalAmountWan) {
     marginChangePct = ((margin.rzye - margin.prev.rzye) / margin.prev.rzye) * 100;
   }
 
-  // 计算评分
-  const score = scoreFund(north.netInflow || 0, marginChangePct, totalAmountWan || 0);
+  // 计算评分（总成交额单位：万元 → 亿元）
+  const totalAmountWan = (marketAmount && marketAmount.totalWan) || 0;
+  const score = scoreFund(north.netInflow || 0, marginChangePct, totalAmountWan);
 
   const data = {
     north: {
@@ -192,11 +197,17 @@ async function getFundSnapshot(totalAmountWan) {
       error: margin.error || null
     },
     amount: {
-      totalWan: totalAmountWan || 0,
-      totalYi: (totalAmountWan || 0) / 1e4
+      shWan:      (marketAmount && marketAmount.shWan)      || 0,
+      szWan:      (marketAmount && marketAmount.szWan)      || 0,
+      totalWan:   totalAmountWan,
+      shYi:       (marketAmount && marketAmount.shYi)       || 0,
+      szYi:       (marketAmount && marketAmount.szYi)       || 0,
+      totalYi:    (marketAmount && marketAmount.totalYi)    || (totalAmountWan / 1e4),
+      source:     'sh000001+sz399001',  // 数据源标识
+      error:      (marketAmount && marketAmount.error)      || null
     },
     score: score,
-    errors: [north.error, margin.error].filter(Boolean),
+    errors: [north.error, margin.error, marketAmount && marketAmount.error].filter(Boolean),
     fetchedAt: new Date().toISOString()
   };
 

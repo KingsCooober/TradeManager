@@ -11,8 +11,12 @@ const bcrypt = require('bcryptjs');
 const auth = require('./auth');
 // 行情数据代理（腾讯股票 API 免 Key）
 const market = require('./market-quote');
-// 资金面数据代理（北向资金 + 融资融券）
+// 资金面数据代理（北向资金 + 融资融券 + 沪深两市总成交额）
 const marketFund = require('./market-fund');
+// 情绪面数据代理（涨跌停统计 + 评分）
+const marketSentiment = require('./market-sentiment');
+// 市场数据历史快照（每天拉到数据时自动写入 market_history 表，供折线图展示）
+const marketHistory = require('./market-history');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,7 +24,16 @@ const PORT = process.env.PORT || 3000;
 // 中间件
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../public')));
+// 静态资源禁用浏览器缓存（避免 JS 修改后用户还得硬刷新）
+app.use(express.static(path.join(__dirname, '../public'), {
+  etag: false,
+  lastModified: false,
+  setHeaders: function(res) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+}));
 
 // 数据库初始化
 const db = new sqlite3.Database(path.join(__dirname, 'data.db'));
@@ -185,6 +198,27 @@ db.serialize(() => {
   db.run('CREATE INDEX IF NOT EXISTS idx_diary2_user_trade_date ON diary2(user_id, trade_date DESC)');
   db.run('CREATE INDEX IF NOT EXISTS idx_daily_reviews_user_id ON daily_reviews(user_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_daily_reviews_user_review_date ON daily_reviews(user_id, review_date DESC)');
+  // 市场数据历史快照表（每天拉到资金面/情绪面数据时自动写入）
+  db.run(`CREATE TABLE IF NOT EXISTS market_history (
+    date TEXT PRIMARY KEY,
+    rzye REAL DEFAULT 0,
+    rzrqye REAL DEFAULT 0,
+    margin_change_pct REAL DEFAULT 0,
+    amount_sh_yi REAL DEFAULT 0,
+    amount_sz_yi REAL DEFAULT 0,
+    amount_total_yi REAL DEFAULT 0,
+    zt_count INTEGER DEFAULT 0,
+    dt_count INTEGER DEFAULT 0,
+    zt_dt_diff INTEGER DEFAULT 0,
+    up_count INTEGER DEFAULT 0,
+    down_count INTEGER DEFAULT 0,
+    flat_count INTEGER DEFAULT 0,
+    sample_size INTEGER DEFAULT 0,
+    north_net_yi REAL DEFAULT 0,
+    fetched_at TEXT,
+    source TEXT
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_market_history_date ON market_history(date DESC)');
   console.log('关键索引已就绪');
 });
 
@@ -844,16 +878,44 @@ app.get('/api/market/indices', auth.authMiddleware, async (req, res) => {
   }
 });
 
-// 资金面：北向资金 + 融资融券 + 成交额合计 + 评分
-// 入参：totalAmountWan 由前端从 /api/market/indices 的 4 只指数 amount 求和提供
+// 资金面：北向资金 + 融资融券 + 沪深两市总成交额（沪市sh000001 + 深市sz399001）+ 评分
+// 沪深两市总成交额由后端内部从行情接口自动获取（前端无需再传 totalAmountWan）
 app.get('/api/market/fund', auth.authMiddleware, async (req, res) => {
-  const totalAmountWan = parseFloat(req.query.totalAmountWan) || 0;
   try {
-    const data = await marketFund.getFundSnapshot(totalAmountWan);
+    const data = await marketFund.getFundSnapshot();
+    // 顺手记录今日资金面（异步、不影响响应速度）
+    marketHistory.recordFundSnapshot(data).catch(e => console.warn('记录资金面失败:', e.message));
     res.json(data);
   } catch (e) {
     console.error('[market] getFundSnapshot 失败:', e.message);
     res.status(500).json({ error: '资金面获取失败: ' + e.message });
+  }
+});
+
+// 情绪面：沪深两市涨跌停统计 + 上涨/下跌家数 + 评分（0-20 分）
+// 数据源：东方财富 push2.eastmoney.com/api/qt/idxstat/get（沪市secid=1.000001 / 深市secid=0.399001）
+app.get('/api/market/sentiment', auth.authMiddleware, async (req, res) => {
+  try {
+    const data = await marketSentiment.getSentimentSnapshot();
+    // 顺手记录今日情绪面
+    marketHistory.recordSentimentSnapshot(data).catch(e => console.warn('记录情绪面失败:', e.message));
+    res.json(data);
+  } catch (e) {
+    console.error('[market] getSentimentSnapshot 失败:', e.message);
+    res.status(500).json({ error: '情绪面获取失败: ' + e.message });
+  }
+});
+
+// 市场数据历史快照：用于绘制两融余额 / 成交额 / 涨跌停折线图
+// 入参：days - 最近 N 天（默认 30，最大 730 ≈ 2 年）
+app.get('/api/market/history', auth.authMiddleware, async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 730);
+  try {
+    const rows = await marketHistory.getHistory(days);
+    res.json({ days: days, count: rows.length, data: rows });
+  } catch (e) {
+    console.error('[market] getHistory 失败:', e.message);
+    res.status(500).json({ error: '历史数据获取失败: ' + e.message });
   }
 });
 

@@ -51,6 +51,10 @@ function initDailyReview() {
   // 多维分析 · 技术面数据源：自动从行情 API 拉取 4 只指数实时价/均线，
   // 算出价格在 ma5/ma20 上/下方，让 4 维评分中后 2 维「数据驱动」而非手填
   loadDRMarketData();
+  // 情绪面数据（与资金面并行，5 分钟缓存；资金面失败时仍能加载情绪面）
+  loadDRSentimentData();
+  // 历史趋势折线图（两融余额 / 成交额 / 涨跌停比例）
+  loadDRHistoryCharts();
 }
 
 // 订阅全局登录/登出事件，修复"未登录状态打开页面后登录"导致复盘不同步的 bug
@@ -60,6 +64,10 @@ function setupDRLoginEvents() {
     checkDRLoginStatus();
     // 登录后重新拉行情（认证通过才可调用 /api/market/indices）
     if (typeof loadDRMarketData === 'function') loadDRMarketData(true);
+    // 登录后重新拉资金面、情绪面、历史数据
+    if (typeof loadDRFundData === 'function') loadDRFundData(true);
+    if (typeof loadDRSentimentData === 'function') loadDRSentimentData(true);
+    if (typeof loadDRHistoryCharts === 'function') loadDRHistoryCharts(true);
   });
   window.addEventListener('user-logout', function() {
     console.log('[DR] 收到 user-logout 事件，重置登录状态');
@@ -477,6 +485,12 @@ function loadReviewForDate(date) {
   }
   populateFormFromData();
   renderReviewHistory();
+  // 关键：drData.indices 刚刚初始化完成，如果行情数据已加载（drMarketData），
+  // 立即套用 maState/macdState/ma5/ma20 到 drData.indices。
+  // 修复"loadDRMarketData 完成时 drData.indices 尚未初始化"导致的空值问题
+  if (typeof applyMarketDataToIndices === 'function' && drMarketData) {
+    applyMarketDataToIndices();
+  }
 }
 
 // ===== 填充表单 =====
@@ -522,40 +536,15 @@ var DR_TREND_STYLES = {
   '反弹观察': { cls: 'trend-rebound',  color: 'var(--color-blue)' }
 };
 
-// 走势手动选择选项（6 档，按强到弱），用于覆盖自动计算结果
-var DR_TREND_OPTIONS = [
-  { value: '强势上涨', label: '强势上涨' },
-  { value: '多头趋势', label: '多头趋势' },
-  { value: '反弹观察', label: '反弹观察' },
-  { value: '震荡整理', label: '震荡整理' },
-  { value: '趋势走弱', label: '趋势走弱' },
-  { value: '弱势下跌', label: '弱势下跌' }
-];
-
-// 均线状态下拉选项（只看 5-10 两条均线）
-var DR_MA_OPTIONS = [
-  { value: '5-10金叉',  label: '5-10 金叉' },
-  { value: '5-10死叉',  label: '5-10 死叉' },
-  { value: '5-10粘合',  label: '5-10 粘合' },
-  { value: '多头排列',  label: '5-10 多头排列' },
-  { value: '空头排列',  label: '5-10 空头排列' }
-];
-
-// MACD 状态下拉选项（完整 10 态）
-var DR_MACD_OPTIONS = [
-  { value: '水上金叉',   label: 'MACD 水上金叉' },
-  { value: '水上死叉',   label: 'MACD 水上死叉' },
-  { value: '水上多头',   label: 'MACD 水上多头' },
-  { value: '水上空头',   label: 'MACD 水上空头' },
-  { value: '水上顶背离', label: 'MACD 水上顶背离' },
-  { value: '水下金叉',   label: 'MACD 水下金叉' },
-  { value: '水下死叉',   label: 'MACD 水下死叉' },
-  { value: '水下多头',   label: 'MACD 水下多头' },
-  { value: '水下空头',   label: 'MACD 水下空头' },
-  { value: '水下底背离', label: 'MACD 水下底背离' }
-];
+// 6 档走势（与 SCORE_MA_MAP / SCORE_MACD_MAP 评分一一对应，DR_TREND_RANK 用于排序）
+// 已废弃：DR_MA_OPTIONS / DR_MACD_OPTIONS / DR_TREND_OPTIONS 不再使用
+//   - 均线状态和 MACD 状态由后端 /api/market/indices 自动识别并填充
+//   - 走势由 scoreTechnical 自动计算 → scoreToTrend → 6 档之一
+//   - 此处保留仅供代码维护参考，不再生成 <option>
 
 // 渲染多指数卡片
+// 简化：所有 4 维评分（均线/MACD/价格 vs 5日线/价格 vs 20日线）均由后端数据自动计算，
+// 此处只显示「自动识别的指标状态」「走势结果」「技术分徽章」+ K线图（不提供任何手动输入）。
 function renderDRIndicesMAStatus() {
   var container = document.getElementById('drIndicesList');
   if (!container) return;
@@ -563,7 +552,7 @@ function renderDRIndicesMAStatus() {
   // 补齐缺失的指数
   if (!Array.isArray(drData.indices)) {
     drData.indices = DR_INDICES.map(function(def) {
-      return { key: def.key, name: def.name, maState: '', macdState: '', trendResult: '', trendHint: '' };
+      return { key: def.key, name: def.name, maState: '', macdState: '', trendResult: '', trendHint: '', ma5Analysis: { currentPrice: null, ma5: null, position: '' } };
     });
   } else {
     DR_INDICES.forEach(function(def) {
@@ -579,82 +568,13 @@ function renderDRIndicesMAStatus() {
 
   var html = '';
   drData.indices.forEach(function(idx, i) {
-    // 计算技术面评分（用于显示评分徽章；不写入 trendResult，保持 analyzeTrend 主体逻辑）
-    var ma5Pos  = (idx.ma5Analysis && idx.ma5Analysis.position)  || '';
-    var ma20Pos = (idx.ma20Analysis && idx.ma20Analysis.position) || '';
-    var scoreObj = scoreTechnical(idx.maState, idx.macdState, ma5Pos, ma20Pos);
-    var scoreBadgeCls = scoreObj.filled ? getScoreBadgeClass(scoreObj.total) : 'score-empty';
-    var scoreText = scoreObj.filled
-      ? '技术分 ' + scoreObj.total + '/40 · ' + scoreObj.trendFromScore
-      : '技术分 —/40（待填）';
-
     html += '<div class="dr-index-card" data-index="' + i + '">';
     html += '<div class="dr-index-name">' + esc(idx.name) + '</div>';
     html += '<div class="dr-index-fields">';
 
-    // 均线 select
-    html += '<div class="dr-field"><label>均线状态</label>';
-    html += '<select class="dr-select dr-index-ma" data-index="' + i + '">';
-    html += '<option value="">请选择</option>';
-    DR_MA_OPTIONS.forEach(function(opt) {
-      html += '<option value="' + esc(opt.value) + '"' + (idx.maState === opt.value ? ' selected' : '') + '>' + esc(opt.label) + '</option>';
-    });
-    html += '</select></div>';
-
-    // MACD select
-    html += '<div class="dr-field"><label>MACD 状态</label>';
-    html += '<select class="dr-select dr-index-macd" data-index="' + i + '">';
-    html += '<option value="">请选择</option>';
-    DR_MACD_OPTIONS.forEach(function(opt) {
-      html += '<option value="' + esc(opt.value) + '"' + (idx.macdState === opt.value ? ' selected' : '') + '>' + esc(opt.label) + '</option>';
-    });
-    html += '</select></div>';
-
-    // 5 日均线位置（在 MACD 旁边：3 选项）— 放在走势判断之前，保持 3 select 同一行
-    var ma5Auto = (idx.ma5Analysis && idx.ma5Analysis.source === 'auto');
-    var ma5Price = (idx.ma5Analysis && idx.ma5Analysis.currentPrice) ? idx.ma5Analysis.currentPrice.toFixed(2) : '';
-    var ma5MaVal  = (idx.ma5Analysis && idx.ma5Analysis.ma5)         ? idx.ma5Analysis.ma5.toFixed(2)         : '';
-    var ma5Hint = (ma5Auto && ma5Price && ma5MaVal) ? '📊 自动（价 ' + ma5Price + ' / ma5 ' + ma5MaVal + '）' : '';
-    html += '<div class="dr-field"><label>价格 vs 5日线';
-    if (ma5Auto) html += ' <span class="dr-auto-tag" title="' + esc(ma5Hint) + '">📊 自动</span>';
-    html += '</label>';
-    html += '<select class="dr-select dr-index-ma5pos" data-index="' + i + '">';
-    html += '<option value="">请选择</option>';
-    html += '<option value="above"' + (ma5Pos === 'above' ? ' selected' : '') + '>在 5 日线上方</option>';
-    html += '<option value="below"' + (ma5Pos === 'below' ? ' selected' : '') + '>在 5 日线下方</option>';
-    html += '</select>';
-    if (ma5Auto && ma5Price) {
-      html += '<div class="dr-ma-hint">实时价 ' + ma5Price + ' · ma5 ' + ma5MaVal + ' → ' + (ma5Pos === 'above' ? '上' : '下') + '方</div>';
-    }
-    html += '</div>';
-
-    // 局部走势结果（dr-field-wide 独占一行，强制换行）— 改成手动选择下拉框
-    html += '<div class="dr-field dr-field-wide dr-index-trend" data-index="' + i + '">';
-    html += '<label>走势判断</label>';
-    // 手动选择走势（6 档可选）；3 select 联动时会自动设置值
-    var manualTrend = idx.manualTrend || '';
-    html += '<div class="dr-index-trend-row">';
-    html += '<select class="dr-select dr-index-manual-trend" data-index="' + i + '" title="手动选择走势">';
-    DR_TREND_OPTIONS.forEach(function(opt) {
-      html += '<option value="' + esc(opt.value) + '"' + (manualTrend === opt.value ? ' selected' : '') + '>' + esc(opt.label) + '</option>';
-    });
-    html += '</select>';
-    // 高亮醒目字体显示当前走势（保留配色）
-    html += '<div class="dr-index-trend-result' + (idx.trendResult && DR_TREND_STYLES[idx.trendResult] ? ' ' + DR_TREND_STYLES[idx.trendResult].cls : '') + '">' + esc(idx.trendResult || '请选择走势') + '</div>';
-    html += '</div>';
-    // 技术面 0-40 分评分徽章（4 维度加权：均线 + MACD + 5日线 + 20日线）
-    // ma5/ma20 后缀图标：📊 表示来自行情数据自动填充
-    var ma5Auto  = (idx.ma5Analysis  && idx.ma5Analysis.source  === 'auto') ? '📊' : '';
-    var ma20Auto = (idx.ma20Analysis && idx.ma20Analysis.source === 'auto') ? '📊' : '';
-    html += '<div class="dr-index-score-badge ' + scoreBadgeCls + '" data-index="' + i + '">';
-    html += '<span class="dr-index-score-text">' + esc(scoreText) + '</span>';
-    if (scoreObj.filled) {
-      html += '<span class="dr-index-score-detail">均线 ' + scoreObj.ma + ' + MACD ' + scoreObj.macd + ' + 5日线 ' + scoreObj.ma5 + ma5Auto + ' + 20日线 ' + scoreObj.ma20 + ma20Auto + '</span>';
-    }
-    html += '</div>';
-    html += '</div>';
-
-    // K线图区域（默认隐藏，点击 📊 K线 按钮展开）
+    // K线图区域（默认隐藏，点击 📊 K线 按钮展开 / 受总开关联动控制）
+    // 单个指数的均线状态/MACD状态/价格 vs 5日线/走势判断等指标已在此处隐藏，
+    // 用户展开 K线图后从 K线本身的形态 + 走势判断，K线图已包含 MA/成交额/MACD 等参考。
     html += '<div class="dr-field dr-field-wide dr-kline-wrap" data-index="' + i + '">';
     html += '<div class="dr-kline-toolbar">';
     html += '<button type="button" class="btn btn-xs btn-ghost dr-kline-toggle" data-index="' + i + '" data-key="' + esc(idx.key) + '" onclick="toggleDRKline(this)">📊 K线</button>';
@@ -668,93 +588,104 @@ function renderDRIndicesMAStatus() {
 
   container.innerHTML = html;
 
-  // 绑定事件
-  container.querySelectorAll('.dr-index-ma, .dr-index-macd, .dr-index-ma5pos').forEach(function(el) {
-    el.addEventListener('change', function() {
-      onDRIndexChange(parseInt(el.dataset.index));
-    });
-  });
-  // 手动走势 select 独立绑定
-  container.querySelectorAll('.dr-index-manual-trend').forEach(function(el) {
-    el.addEventListener('change', function() {
-      onDRManualTrendChange(parseInt(el.dataset.index));
-    });
-  });
+  // 渲染后同步总开关的视觉状态（如果某些 K线已被展开但总开关仍是「收起」，
+  // 总开关 label 显示「部分展开」/「全部展开」取决于展开数量）
+  syncKlineToggleAllBtn();
+}
 
-  // 把所有原生 select 升级为 custom-select（视觉与"买点类型"统一）
-  if (typeof upgradeSelectToCustom === 'function') {
-    container.querySelectorAll('select.dr-select').forEach(upgradeSelectToCustom);
+// ===== 大盘研判 section 折叠/展开 =====
+function toggleDRMarketSection() {
+  var body = document.getElementById('drMarketSectionBody');
+  var icon = document.getElementById('drMarketSectionIcon');
+  var header = document.querySelector('#drMarketSection .dr-section-header--clickable');
+  if (!body) return;
+  var isCollapsed = body.style.display === 'none';
+  if (isCollapsed) {
+    body.style.display = '';
+    if (icon) icon.textContent = '▼';
+    if (header) header.setAttribute('aria-expanded', 'true');
+  } else {
+    body.style.display = 'none';
+    if (icon) icon.textContent = '▶';
+    if (header) header.setAttribute('aria-expanded', 'false');
+  }
+}
+
+// ===== K线总开关：同步展开/收起全部 4 个指数的 K线图 =====
+function toggleAllDRKline() {
+  var containers = document.querySelectorAll('.dr-kline-container');
+  if (!containers.length) return;
+  // 任意一个仍是收起状态 → 全部展开；否则全部收起
+  var anyHidden = Array.prototype.some.call(containers, function(c) {
+    return c.style.display === 'none' || c.style.display === '';
+  });
+  var newDisplay = anyHidden ? 'block' : 'none';
+  var buttons = document.querySelectorAll('.dr-kline-toggle');
+  Array.prototype.forEach.call(containers, function(c) {
+    var wasHidden = c.style.display === 'none' || c.style.display === '';
+    c.style.display = newDisplay;
+    if (newDisplay === 'block' && wasHidden) {
+      // 容器之前是隐藏的 → 懒加载 K线（保留已绘制的实例，不重新创建）
+      var wrap = c.closest('.dr-kline-wrap');
+      if (wrap) {
+        var idxAttr = wrap.getAttribute('data-index');
+        var btn = document.querySelector('.dr-kline-toggle[data-index="' + idxAttr + '"]');
+        if (btn) renderDRKlineChart(parseInt(idxAttr), btn.getAttribute('data-key'));
+      }
+    } else if (newDisplay === 'none') {
+      // 收起时，保留实例（避免下次再请求）但更新按钮文本
+      var idxAttr2 = c.id.replace('drKline', '');
+      if (drKlineCharts && drKlineCharts[idxAttr2]) {
+        // 不 dispose，只隐藏 DOM
+      }
+    }
+  });
+  // 收起状态：按钮恢复"📊 K线"；展开状态：显示"📊 收起"
+  Array.prototype.forEach.call(buttons, function(b) {
+    b.textContent = newDisplay === 'block' ? '🔼 收起' : '📊 K线';
+    if (newDisplay === 'block') b.classList.add('active');
+    else b.classList.remove('active');
+  });
+  syncKlineToggleAllBtn();
+}
+
+// 同步总开关按钮的文本和样式（根据当前各 K线的展开状态）
+function syncKlineToggleAllBtn() {
+  var btn = document.getElementById('drKlineToggleAll');
+  if (!btn) return;
+  var containers = document.querySelectorAll('.dr-kline-container');
+  if (!containers.length) {
+    btn.textContent = '📊 展开 K线';
+    return;
+  }
+  var expanded = 0;
+  Array.prototype.forEach.call(containers, function(c) {
+    if (c.style.display === 'block') expanded++;
+  });
+  if (expanded === 0) {
+    btn.textContent = '📊 展开 K线';
+    btn.classList.remove('dr-kline-toggle-all--partial');
+  } else if (expanded === containers.length) {
+    btn.textContent = '📊 收起 K线';
+    btn.classList.remove('dr-kline-toggle-all--partial');
+  } else {
+    btn.textContent = '📊 展开 K线（' + expanded + '/' + containers.length + '）';
+    btn.classList.add('dr-kline-toggle-all--partial');
   }
 }
 
 // 单个指数 select 变化 → 重新算该指数的走势 + 整体走势 + 整体仓位
+// （已废弃：UI 中已无 select，所有 4 维评分均由后端数据自动计算，保留空函数以防外部误调）
 function onDRIndexChange(idx) {
-  if (!Array.isArray(drData.indices) || !drData.indices[idx]) return;
-  var maSelect = document.querySelector('.dr-index-ma[data-index="' + idx + '"]');
-  var macdSelect = document.querySelector('.dr-index-macd[data-index="' + idx + '"]');
-  var ma5Select = document.querySelector('.dr-index-ma5pos[data-index="' + idx + '"]');
-  if (!maSelect || !macdSelect) return;
-
-  drData.indices[idx].maState = maSelect.value;
-  drData.indices[idx].macdState = macdSelect.value;
-  var ma5Pos = ma5Select ? ma5Select.value : '';
-  // 写入 ma5Analysis.position（保持现有数据结构兼容）
-  if (!drData.indices[idx].ma5Analysis) drData.indices[idx].ma5Analysis = { currentPrice: null, ma5: null, position: '' };
-  drData.indices[idx].ma5Analysis.position = ma5Pos;
-
-  // 根据 3 select 重新计算走势 → 联动到手动 select（用户可再手动改）
-  if (maSelect.value && macdSelect.value) {
-    var r = analyzeTrend(maSelect.value, macdSelect.value, ma5Pos);
-    drData.indices[idx].trendResult = r.trend;
-    drData.indices[idx].trendHint = r.reason;
-    drData.indices[idx].manualTrend = r.trend;  // 同步给手动 select
-  } else {
-    drData.indices[idx].trendResult = '';
-    drData.indices[idx].trendHint = '';
-    drData.indices[idx].manualTrend = '';
-  }
-
-  // 同步手动 select 的值（联动显示）；手动触发 change 让 custom-select 视觉同步
-  var manualSel = document.querySelector('.dr-index-manual-trend[data-index="' + idx + '"]');
-  if (manualSel) {
-    manualSel.value = drData.indices[idx].manualTrend;
-    manualSel.dispatchEvent(new Event('change'));
-  }
-
-  // 更新该指数的局部走势 UI（不重渲染整列，避免 select 闪烁）
-  updateDRIndexTrendUI(idx);
-
-  // 同步整体走势 + 整体仓位
-  recalcDROverall();
-  drDataDirty = true;
-
-  // 延迟 1 秒自动保存（防抖：选多个指数时不会频繁保存）
-  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
-  drAutoSaveTimer = setTimeout(function() {
-    saveCurrentFormToData();
-    saveDRData();
-    drDataDirty = false;
-    drAutoSaveTimer = null;
-  }, 1000);
+  // no-op: 4 维评分改为后端自动计算，无 select 需监听
+  void idx;
 }
 
 // 手动选择走势（6 档可选，3 select 联动时会自动设置值）
+// （已废弃：UI 中已无手动 select，保留空函数以防外部误调）
 function onDRManualTrendChange(idx) {
-  if (!Array.isArray(drData.indices) || !drData.indices[idx]) return;
-  var sel = document.querySelector('.dr-index-manual-trend[data-index="' + idx + '"]');
-  if (!sel) return;
-  drData.indices[idx].trendResult = sel.value;
-  updateDRIndexTrendUI(idx);
-  recalcDROverall();
-  drDataDirty = true;
-
-  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
-  drAutoSaveTimer = setTimeout(function() {
-    saveCurrentFormToData();
-    saveDRData();
-    drDataDirty = false;
-    drAutoSaveTimer = null;
-  }, 1000);
+  // no-op: 走势已由后端 4 维评分自动计算
+  void idx;
 }
 
 // 更新单个指数的走势显示 + 技术面评分徽章
@@ -801,10 +732,28 @@ function updateDRIndexTrendUI(idx) {
 }
 
 // 综合走势（最保守原则：取所有指数中走势最弱的）
+// 每个指数的 trendResult 现在由 scoreTechnical 实时计算（不再依赖 idx.trendResult 字段写入）
 function recalcDROverallTrend() {
   if (!Array.isArray(drData.indices)) return { trend: '', hint: '', totalScore: 0, scoreBreakdown: '' };
+
+  // 1. 为每个指数实时计算 trendResult（基于 maState/macdState/ma5/ma20 自动评分）
+  drData.indices.forEach(function(i) {
+    var ma5Pos  = (i.ma5Analysis  && i.ma5Analysis.position)  || '';
+    var ma20Pos = (i.ma20Analysis && i.ma20Analysis.position) || '';
+    var s = scoreTechnical(i.maState, i.macdState, ma5Pos, ma20Pos);
+    if (s.filled) {
+      i.trendResult = s.trendFromScore;
+      i.trendHint   = '均线 ' + i.maState + ' + MACD ' + i.macdState + ' → ' + s.total + ' 分';
+    } else {
+      i.trendResult = '';
+      i.trendHint   = '';
+    }
+  });
+
   var judged = drData.indices.filter(function(i) { return i.trendResult; });
-  if (judged.length === 0) return { trend: '', hint: '请为每个指数选择「均线状态」和「MACD 状态」', totalScore: 0, scoreBreakdown: '' };
+  if (judged.length === 0) {
+    return { trend: '', hint: '等待行情数据（后端自动识别均线/MACD 状态）...', totalScore: 0, scoreBreakdown: '', hasScore: false, hasFund: false, totalAll: 0, fundScore: 0, fundBreakdown: '' };
+  }
 
   var weakest = judged[0];
   judged.forEach(function(i) {
@@ -863,12 +812,23 @@ function recalcDROverallTrend() {
     hint += ' ｜ 资金面分：' + fundScore + '/20';
   }
 
-  // 综合分 = 技术面 0-40 + 资金面 0-20 = 0-60
-  var totalAll = (hasScore ? totalScore : 0) + (hasFund ? fundScore : 0);
-  var hasAny = hasScore || hasFund;
+  // 情绪面 0-20 分（数据驱动，无需用户填写）
+  var sentimentScore = 0;
+  var sentimentBreakdown = '';
+  var hasSentiment = false;
+  if (drSentimentData && drSentimentData.score) {
+    sentimentScore = drSentimentData.score.total;
+    sentimentBreakdown = drSentimentData.score.breakdown;
+    hasSentiment = true;
+    hint += ' ｜ 情绪面分：' + sentimentScore + '/20';
+  }
+
+  // 综合分 = 技术面 0-40 + 资金面 0-20 + 情绪面 0-20 = 0-80
+  var totalAll = (hasScore ? totalScore : 0) + (hasFund ? fundScore : 0) + (hasSentiment ? sentimentScore : 0);
+  var hasAny = hasScore || hasFund || hasSentiment;
   if (hasAny) {
     var totalTrend = scoreToCompositeTrend(totalAll);
-    hint += ' ｜ 综合分：' + totalAll + '/60 → ' + totalTrend;
+    hint += ' ｜ 综合分：' + totalAll + '/80 → ' + totalTrend;
   }
 
   return {
@@ -878,9 +838,12 @@ function recalcDROverallTrend() {
     scoreBreakdown: scoreBreakdown,
     fundScore: fundScore,
     fundBreakdown: fundBreakdown,
+    sentimentScore: sentimentScore,
+    sentimentBreakdown: sentimentBreakdown,
     totalAll: totalAll,
     hasScore: hasScore,
-    hasFund: hasFund
+    hasFund: hasFund,
+    hasSentiment: hasSentiment
   };
 }
 
@@ -964,14 +927,14 @@ function scoreToTrend(total) {
   return '弱势下跌';
 }
 
-// 综合分（技术面 0-40 + 资金面 0-20 = 0-60） → 6 档走势
-// 阈值与原 scoreToTrend 等比例缩放（60 / 40 = 1.5 倍）
+// 综合分（技术面 0-40 + 资金面 0-20 + 情绪面 0-20 = 0-80） → 6 档走势
+// 阈值与原 scoreToTrend 等比例缩放（80 / 40 = 2 倍）
 function scoreToCompositeTrend(total) {
-  if (total >= 48) return '强势上涨';
-  if (total >= 36) return '多头趋势';
-  if (total >= 27) return '反弹观察';
-  if (total >= 18) return '震荡整理';
-  if (total >=  9) return '趋势走弱';
+  if (total >= 64) return '强势上涨';
+  if (total >= 48) return '多头趋势';
+  if (total >= 36) return '反弹观察';
+  if (total >= 24) return '震荡整理';
+  if (total >= 12) return '趋势走弱';
   return '弱势下跌';
 }
 
@@ -1042,9 +1005,10 @@ function deriveMaPosition(price, ma) {
 }
 
 // 把行情数据套用到当前 drData.indices
-//  - 已有 ma5Analysis.position 的不覆盖（用户手填优先）
-//  - 没有 ma20Analysis 的创建并填充
-//  - 自动填的字段标记 source='auto'，UI 用「📊 自动」徽章区分
+//  - maState / macdState：后端基于 K 线自动识别，前端直接使用（每次行情刷新都更新）
+//  - ma5Analysis.position：仅当用户没填时才自动填
+//  - ma20Analysis：始终自动填（无 UI）
+//  - 自动填的字段标记 source='auto'，UI 用「📊」图标区分
 function applyMarketDataToIndices() {
   if (!drMarketData || !drMarketData.data) return;
   if (!Array.isArray(drData.indices)) return;
@@ -1057,7 +1021,17 @@ function applyMarketDataToIndices() {
     var ma5  = m.ma5;
     var ma20 = m.ma20;
 
-    // ma5：仅当用户没填时才自动填
+    // 1) maState / macdState：后端自动识别，每次刷新同步到前端
+    if (idx.maState !== (m.maState || '')) {
+      idx.maState = m.maState || '';
+      changed = true;
+    }
+    if (idx.macdState !== (m.macdState || '')) {
+      idx.macdState = m.macdState || '';
+      changed = true;
+    }
+
+    // 2) ma5：仅当用户没填时才自动填
     if (!idx.ma5Analysis) idx.ma5Analysis = { currentPrice: null, ma5: null, position: '' };
     if (!idx.ma5Analysis.position) {
       var pos5 = deriveMaPosition(price, ma5);
@@ -1074,7 +1048,7 @@ function applyMarketDataToIndices() {
       idx.ma5Analysis.ma5 = ma5;
     }
 
-    // ma20：始终自动填（无 UI）
+    // 3) ma20：始终自动填（无 UI）
     if (!idx.ma20Analysis) idx.ma20Analysis = { currentPrice: null, ma20: null, position: '' };
     var pos20 = deriveMaPosition(price, ma20);
     if (pos20) {
@@ -1094,16 +1068,17 @@ function applyMarketDataToIndices() {
 }
 
 // ==================== 资金面 0-20 分 ====================
-// 数据源：/api/market/fund（北向资金 + 融资融券 + 4 只指数成交额合计）
+// 数据源：/api/market/fund（北向资金 + 融资融券 + 沪深两市总成交额）
+//   沪深两市总成交额由后端从 sh000001(沪市) + sz399001(深市) 的 amount 字段求和
 // 评分维度：
 //   北向资金  0-8 分：净流入 >50亿 = 8 / 0-50亿 = 6 / 0~-50亿 = 4 / <-50亿 = 2
 //   融资余额  0-6 分：环比 >+1% = 6 / 0-1% = 4 / -1%-0% = 3 / <-1% = 1
 //   市场成交  0-6 分：>1.5万亿 = 6 / 1.0-1.5 = 5 / 0.8-1.0 = 4 / 0.6-0.8 = 2 / <0.6 = 0
-// 总分 0-20，与技术面 0-40 加起来得到综合分 0-60
+// 总分 0-20，与技术面 0-40 + 情绪面 0-20 = 综合分 0-80
 
 var DR_FUND_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
 
-// 拉取资金面数据：4 只指数成交额合计作为分母
+// 拉取资金面数据（后端内部自动获取沪深两市总成交额，前端无需再传 4 只指数 amount）
 function loadDRFundData(force) {
   if (!force && drFundData && (Date.now() - drFundLoadTime) < DR_FUND_CACHE_TTL) {
     applyFundToUI();
@@ -1111,18 +1086,8 @@ function loadDRFundData(force) {
   }
   if (drFundLoadPromise) return drFundLoadPromise;
 
-  // 从已有行情数据计算 4 只指数成交额合计（单位：万元）
-  var totalAmountWan = 0;
-  if (drMarketData && drMarketData.data) {
-    DR_INDICES.forEach(function(def) {
-      var it = drMarketData.data[def.key];
-      if (it && it.quote && it.quote.amount) {
-        totalAmountWan += it.quote.amount;  // 腾讯字段 amount 单位是万元
-      }
-    });
-  }
-
-  drFundLoadPromise = authFetch('/api/market/fund?totalAmountWan=' + totalAmountWan, { method: 'GET' })
+  // 不再需要 4 只指数成交额合计 —— 后端内部直接从 sh000001 + sz399001 拉取
+  drFundLoadPromise = authFetch('/api/market/fund', { method: 'GET' })
     .then(function(r) {
       if (!r.ok) throw new Error('资金面接口返回 ' + r.status);
       return r.json();
@@ -1135,6 +1100,10 @@ function loadDRFundData(force) {
         '融资变化', data.margin && data.margin.changePct.toFixed(2) + '%',
         '资金面分', data.score && data.score.total + '/20');
       applyFundToUI();
+      // 资金面加载完后，重新计算综合走势（综合分从 0-60 → 0-80）
+      if (typeof recalcDROverall === 'function') recalcDROverall();
+      // 链式加载情绪面（与资金面无依赖关系，但分批加载可降低并发压力）
+      if (typeof loadDRSentimentData === 'function') loadDRSentimentData();
       return data;
     })
     .catch(function(e) {
@@ -1147,6 +1116,600 @@ function loadDRFundData(force) {
     });
   return drFundLoadPromise;
 }
+
+// ==================== 情绪面 0-20 分 ====================
+// 数据源：/api/market/sentiment（沪深两市涨跌停统计 + 上涨家数占比）
+// 评分维度：
+//   涨跌停差   0-8 分：(涨停 - 跌停) >= 80 = 8 / 30-80 = 6 / 0-30 = 4 / -30-0 = 2 / <-30 = 0
+//   上涨占比   0-8 分：>=80% = 8 / 60-80% = 6 / 40-60% = 4 / 20-40% = 2 / <20% = 0
+//   涨停绝对数 0-4 分：>=80 = 4 / 40-80 = 3 / 20-40 = 2 / <20 = 1
+// 总分 0-20，与技术面 0-40 + 资金面 0-20 = 综合分 0-80
+
+var drSentimentData = null;      // 情绪面数据缓存（来自 /api/market/sentiment，5 分钟有效）
+var drSentimentLoadTime = 0;
+var drSentimentLoadPromise = null;
+var DR_SENTIMENT_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
+
+// 拉取情绪面数据
+function loadDRSentimentData(force) {
+  if (!force && drSentimentData && (Date.now() - drSentimentLoadTime) < DR_SENTIMENT_CACHE_TTL) {
+    applySentimentToUI();
+    return Promise.resolve(drSentimentData);
+  }
+  if (drSentimentLoadPromise) return drSentimentLoadPromise;
+
+  drSentimentLoadPromise = authFetch('/api/market/sentiment', { method: 'GET' })
+    .then(function(r) {
+      if (!r.ok) throw new Error('情绪面接口返回 ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      drSentimentData = data;
+      drSentimentLoadTime = Date.now();
+      var m = data.merged || {};
+      console.log('[DR] 情绪面已加载', '上涨', m.up, '下跌', m.down, '涨停', m.zt, '跌停', m.dt,
+        '情绪面分', data.score && data.score.total + '/20');
+      applySentimentToUI();
+      // 情绪面加载完后，重新计算综合走势（综合分 0-80）
+      if (typeof recalcDROverall === 'function') recalcDROverall();
+      return data;
+    })
+    .catch(function(e) {
+      console.warn('[DR] 情绪面加载失败，保持空值:', e.message);
+      return null;
+    })
+    .then(function(d) {
+      drSentimentLoadPromise = null;
+      return d;
+    });
+  return drSentimentLoadPromise;
+}
+
+// 渲染情绪面卡片
+function applySentimentToUI() {
+  var card = document.getElementById('drSentimentCard');
+  if (!card) return;
+
+  if (!drSentimentData) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+
+  var score = drSentimentData.score || {};
+  var merged = drSentimentData.merged || {};
+
+  // 评分徽章
+  var scoreEl = document.getElementById('drSentimentScore');
+  if (scoreEl) {
+    scoreEl.textContent = (score.total || 0) + '/20';
+    scoreEl.className = 'dr-fund-score ' + getSentimentScoreBadgeClass(score.total || 0);
+  }
+  var breakdownEl = document.getElementById('drSentimentBreakdown');
+  if (breakdownEl) breakdownEl.textContent = score.breakdown || '';
+
+  // 涨跌停差
+  var lddEl = document.getElementById('drSentimentLDD');
+  if (lddEl) {
+    var lddDiff = (merged.zt || 0) - (merged.dt || 0);
+    var sign = lddDiff > 0 ? '+' : '';
+    lddEl.textContent = sign + lddDiff;
+    lddEl.className = 'dr-fund-num ' + (lddDiff > 0 ? 'fund-up' : (lddDiff < 0 ? 'fund-down' : 'fund-flat'));
+  }
+  var lddHintEl = document.getElementById('drSentimentLDDHint');
+  if (lddHintEl) {
+    lddHintEl.textContent = '涨停 ' + (merged.zt || 0) + ' / 跌停 ' + (merged.dt || 0);
+  }
+
+  // 上涨家数占比
+  var upPctEl = document.getElementById('drSentimentUpPct');
+  if (upPctEl) {
+    var upPct = score.upPct || 0;
+    upPctEl.textContent = upPct.toFixed(1) + '%';
+    upPctEl.className = 'dr-fund-num ' + (upPct >= 50 ? 'fund-up' : (upPct >= 20 ? 'fund-flat' : 'fund-down'));
+  }
+  var upPctHintEl = document.getElementById('drSentimentUpPctHint');
+  if (upPctHintEl) {
+    upPctHintEl.textContent = '上涨 ' + (merged.up || 0) + ' / 下跌 ' + (merged.down || 0) + ' / 平盘 ' + (merged.flat || 0);
+  }
+
+  // 涨停数
+  var ztEl = document.getElementById('drSentimentZT');
+  if (ztEl) {
+    ztEl.textContent = (merged.zt || 0) + ' 只';
+  }
+  var ztHintEl = document.getElementById('drSentimentZTHint');
+  if (ztHintEl) {
+    var sh = (drSentimentData.sh && drSentimentData.sh.zt) || 0;
+    var sz = (drSentimentData.sz && drSentimentData.sz.zt) || 0;
+    ztHintEl.textContent = '沪市 ' + sh + ' + 深市 ' + sz;
+  }
+}
+
+// 情绪面 0-20 分 CSS class（与综合走势档位对齐）
+function getSentimentScoreBadgeClass(total) {
+  if (total >= 17) return 'fund-score-max';     // 强势（>= 17/20）
+  if (total >= 13) return 'fund-score-bullish'; // 多头（13-16）
+  if (total >= 9)  return 'fund-score-rebound'; // 反弹（9-12）
+  if (total >= 5)  return 'fund-score-neutral'; // 震荡（5-8）
+  if (total >= 2)  return 'fund-score-warning'; // 走弱（2-4）
+  return 'fund-score-weak';                     // 弱势（0-1）
+}
+
+// ==================== 历史趋势折线图 ====================
+// 数据源：/api/market/history?days=730（后端从 market_history 表读取近 2 年全量数据）
+// 渲染策略：
+//   - 图表折线：仅显示最近 N 天（默认 60，可选 7/30/60/90）
+//   - 历史百分位：基于近 2 年全量数据计算（确保分位数稳定、不受显示范围影响）
+// 三张折线图：
+//   1) 两融余额（亿元）       = 每日 rzrqye
+//   2) 两市总成交额（亿元）   = 每日 amount_total_yi
+//   3) 涨跌停比例（涨/跌/差）  = zt_count/dt_count/zt_dt_diff
+// 注：涨跌停历史从今天开始累积，之前的日期为 0（公开 API 无历史涨跌停数据）
+
+var drHistoryData = null;          // 全量历史数据缓存（近 2 年）
+var drDisplayDays = 60;            // 图表显示天数（默认 60）
+var drHistoryECharts = { margin: null, amount: null, ldd: null };  // ECharts 实例缓存
+var DR_HISTORY_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
+var DR_HISTORY_API_DAYS = 730;     // 后端最大可查询天数（≈ 2 年）
+
+// 拉取并渲染历史趋势图（始终拉全量，渲染时按 drDisplayDays 切片）
+function loadDRHistoryCharts(force) {
+  if (!force && drHistoryData) {
+    renderDRHistoryCharts();
+    return Promise.resolve(drHistoryData);
+  }
+  var daysEl = document.getElementById('drHistoryRange');
+  var displayDays = daysEl ? parseInt(daysEl.value) || 60 : 60;
+  drDisplayDays = displayDays;
+  var hintEl = document.getElementById('drHistoryHint');
+  if (hintEl) hintEl.textContent = '正在加载…';
+
+  return authFetch('/api/market/history?days=' + DR_HISTORY_API_DAYS, { method: 'GET' })
+    .then(function(r) {
+      if (!r.ok) throw new Error('历史接口返回 ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      drHistoryData = data;
+      if (hintEl) {
+        hintEl.textContent = '图表显示近 ' + displayDays + ' 天（共 ' + (data.count || 0) + ' 天历史数据，百分位基于近 2 年）';
+      }
+      renderDRHistoryCharts();
+      return data;
+    })
+    .catch(function(e) {
+      console.warn('[DR] 历史数据加载失败:', e.message);
+      if (hintEl) hintEl.textContent = '加载失败：' + e.message;
+      return null;
+    });
+}
+
+// 用户切换时间范围时触发
+function reloadDRHistoryCharts() {
+  drHistoryData = null;  // 清缓存
+  // 销毁旧图避免叠加
+  if (drHistoryECharts.margin) { drHistoryECharts.margin.dispose(); drHistoryECharts.margin = null; }
+  if (drHistoryECharts.amount) { drHistoryECharts.amount.dispose(); drHistoryECharts.amount = null; }
+  if (drHistoryECharts.ldd)    { drHistoryECharts.ldd.dispose();    drHistoryECharts.ldd    = null; }
+  loadDRHistoryCharts(true);
+}
+
+// 等 ECharts CDN 加载完后再画图
+function renderDRHistoryCharts() {
+  if (!drHistoryData || !drHistoryData.data || drHistoryData.data.length === 0) {
+    var hintEl2 = document.getElementById('drHistoryHint');
+    if (hintEl2) hintEl2.textContent = '暂无历史数据';
+    return;
+  }
+  if (typeof loadEcharts !== 'function') {
+    console.warn('[DR] ECharts 未加载');
+    return;
+  }
+  loadEcharts().then(function(echarts) {
+    var fullData = drHistoryData.data;
+    // 取最近 drDisplayDays 天作为显示数据
+    var displayData = fullData.slice(-drDisplayDays);
+    drawDRMarginChart(echarts, displayData, fullData);
+    drawDRAmountChart(echarts, displayData, fullData);
+    drawDRLDDChart(echarts, displayData);
+  }).catch(function(e) {
+    console.warn('[DR] ECharts 加载失败:', e.message);
+  });
+}
+
+// 通用：获取 ECharts 主题色
+function getEChartsTextStyle() {
+  var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return {
+    textColor: isDark ? '#98989d' : '#6e6e73',
+    gridLine:  isDark ? '#3a3a3c'  : '#f0f0f0',
+    bgColor:   isDark ? '#1c1c1e'  : '#ffffff'
+  };
+}
+
+// 计算当前值在历史数组中的百分位（rank-based：含当前值）
+// P=70 表示当前值 ≥ 70% 的历史值
+// 空数组或无当前值返回 null
+function calcPercentile(arr, currentVal) {
+  if (!arr || arr.length === 0 || currentVal == null || isNaN(currentVal)) return null;
+  var valid = arr.filter(function(v) { return typeof v === 'number' && !isNaN(v); });
+  if (valid.length === 0) return null;
+  var below = 0;
+  for (var i = 0; i < valid.length; i++) { if (valid[i] < currentVal) below++; }
+  // 含当前值自身的 rank 百分位：below / N * 100
+  return Math.round((below / valid.length) * 100);
+}
+
+// 计算数组在指定百分位处的值（线性插值，便于历史分位参考线）
+// p 范围 0-100；返回 null 表示数据不足
+function calcPercentileValue(arr, p) {
+  if (!arr || arr.length === 0) return null;
+  var valid = arr.filter(function(v) { return typeof v === 'number' && !isNaN(v); });
+  if (valid.length === 0) return null;
+  valid.sort(function(a, b) { return a - b; });
+  var rank = (p / 100) * (valid.length - 1);
+  var lo = Math.floor(rank);
+  var hi = Math.ceil(rank);
+  if (lo === hi) return valid[lo];
+  return valid[lo] + (valid[hi] - valid[lo]) * (rank - lo);
+}
+
+// 百分位配色：低位绿、中位黄、高位红
+function percentileColor(p) {
+  if (p == null) return '#8e8e93';
+  if (p >= 70) return '#ff453a';
+  if (p >= 30) return '#ff9f0a';
+  return '#30d158';
+}
+
+// 百分位文字徽章（HTML）
+function percentileBadge(label, p) {
+  if (p == null) return '';
+  var color = percentileColor(p);
+  return '<span style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:10px;' +
+         'background:' + color + '22;color:' + color + ';font-size:11px;font-weight:600;' +
+         'border:1px solid ' + color + '55;">' + label + ' · P' + p + '</span>';
+}
+
+// 1) 两融余额（亿元）—— 含历史百分位
+// displayData: 用于绘制折线（最近 N 天）
+// fullData:    用于计算百分位（近 2 年全量）
+function drawDRMarginChart(echarts, displayData, fullData) {
+  var el = document.getElementById('drHistoryMarginChart');
+  if (!el) return;
+  var ts = getEChartsTextStyle();
+  // 显示数据：折线
+  var dates = displayData.map(function(d) { return d.date.slice(5); });
+  var marginArr = displayData.map(function(d) { return Math.round((d.rzrqye || 0) / 1e8); });
+  // 全量数据：百分位
+  var fullMarginArr = (fullData || displayData).map(function(d) { return Math.round((d.rzrqye || 0) / 1e8); });
+  var currentVal = fullMarginArr.length ? fullMarginArr[fullMarginArr.length - 1] : 0;  // 最新一日
+  var percentP = calcPercentile(fullMarginArr, currentVal);
+  // Y 轴范围基于显示数据
+  var maxVal = marginArr.length ? Math.max.apply(null, marginArr) : 0;
+  var minVal = marginArr.length ? Math.min.apply(null, marginArr) : 0;
+  var range = maxVal - minVal || maxVal * 0.01;
+  var pColor = percentileColor(percentP);
+  // P90 历史分位参考值（基于全量数据，Y 轴要能看到这条线）
+  var p90Val = calcPercentileValue(fullMarginArr, 90);
+  if (p90Val != null && p90Val > maxVal) maxVal = p90Val;
+  if (p90Val != null && p90Val < minVal) minVal = p90Val;
+  // P95 / P98 历史分位参考值
+  var p95Val = calcPercentileValue(fullMarginArr, 95);
+  if (p95Val != null && p95Val > maxVal) maxVal = p95Val;
+  if (p95Val != null && p95Val < minVal) minVal = p95Val;
+  var p98Val = calcPercentileValue(fullMarginArr, 98);
+  if (p98Val != null && p98Val > maxVal) maxVal = p98Val;
+  if (p98Val != null && p98Val < minVal) minVal = p98Val;
+  var chart = echarts.init(el);
+  chart.setOption({
+    backgroundColor: 'transparent',
+    grid: { left: 50, right: 20, top: 20, bottom: 30 },
+    tooltip: {
+      trigger: 'axis',
+      formatter: function(p) {
+        var v = p[0];
+        return v.axisValue + '<br/>' + v.marker + ' ' + v.seriesName + ': ' + v.value + ' 亿';
+      }
+    },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisLine:  { lineStyle: { color: ts.gridLine } },
+      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 6) - 1) }
+    },
+    yAxis: {
+      type: 'value',
+      min: Math.floor(minVal - range * 0.1),
+      max: Math.ceil(maxVal + range * 0.1),
+      axisLine:  { lineStyle: { color: ts.gridLine } },
+      axisLabel: { color: ts.textColor, fontSize: 10, formatter: function(v) { return v >= 10000 ? (v/10000).toFixed(2) + ' 万亿' : v + ' 亿'; } },
+      splitLine: { lineStyle: { color: ts.gridLine, type: 'dashed' } }
+    },
+    series: [{
+      name: '两融余额',
+      type: 'line',
+      data: marginArr,
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 4,
+      lineStyle: { color: '#0a84ff', width: 2 },
+      itemStyle: { color: '#0a84ff' },
+      areaStyle: {
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: 'rgba(10,132,255,0.3)' },
+            { offset: 1, color: 'rgba(10,132,255,0.02)' }
+          ]
+        }
+      },
+      // 历史百分位：标记线（当前位置 = 不显示文字，文字由 markPoint 的 pin 承担）
+      // + P90 / P95 / P98 历史分位水平参考线（颜色从橙到深红，标注分位值）
+      markLine: {
+        silent: true,
+        symbol: ['none', 'none'],
+        data: [
+          { xAxis: dates.length - 1, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 }, label: { show: false } },
+          { yAxis: p90Val, lineStyle: { color: '#ff9f0a', width: 1, type: 'dashed', opacity: 0.55 },
+            label: { show: true, position: 'insideEndTop', formatter: 'P90 · ' + Math.round(p90Val) + ' 亿',
+              color: '#ffffff', backgroundColor: 'rgba(255,159,10,0.85)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } },
+          { yAxis: p95Val, lineStyle: { color: '#ff6b35', width: 1, type: 'dashed', opacity: 0.6 },
+            label: { show: true, position: 'insideEndTop', formatter: 'P95 · ' + Math.round(p95Val) + ' 亿',
+              color: '#ffffff', backgroundColor: 'rgba(255,107,53,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } },
+          { yAxis: p98Val, lineStyle: { color: '#ff453a', width: 1.2, type: 'dashed', opacity: 0.7 },
+            label: { show: true, position: 'insideEndTop', formatter: 'P98 · ' + Math.round(p98Val) + ' 亿',
+              color: '#ffffff', backgroundColor: 'rgba(255,69,58,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }
+        ]
+      },
+      markPoint: {
+        symbol: 'pin',
+        symbolSize: 36,
+        itemStyle: { color: pColor },
+        label: {
+          color: '#ffffff',
+          fontSize: 10,
+          fontWeight: 700,
+          formatter: percentP != null ? 'P' + percentP : ''
+        },
+        data: [{ name: '当前位置', value: currentVal, xAxis: dates.length - 1, yAxis: currentVal }]
+      }
+    }]
+  });
+  if (drHistoryECharts.margin) drHistoryECharts.margin.dispose();
+  drHistoryECharts.margin = chart;
+}
+
+// 2) 两市总成交额（亿元）+ 5 日均线 —— 含历史百分位
+// displayData: 用于绘制折线（最近 N 天）
+// fullData:    用于计算百分位（近 2 年全量）
+function drawDRAmountChart(echarts, displayData, fullData) {
+  var el = document.getElementById('drHistoryAmountChart');
+  if (!el) return;
+  var ts = getEChartsTextStyle();
+  // 显示数据：折线
+  var dates = displayData.map(function(d) { return d.date.slice(5); });
+  // 两市总成交额（亿元）
+  var amountArr = displayData.map(function(d) { return Math.round(d.amount_total_yi || 0); });
+  // 全量数据：百分位
+  var fullAmountArr = (fullData || displayData).map(function(d) { return Math.round(d.amount_total_yi || 0); });
+  var currentVal = fullAmountArr.length ? fullAmountArr[fullAmountArr.length - 1] : 0;
+  var percentP = calcPercentile(fullAmountArr, currentVal);
+  var ma5 = calcSimpleMA(amountArr, 5);
+  // Y 轴范围基于显示数据
+  var maxVal = amountArr.length ? Math.max.apply(null, amountArr) : 0;
+  var minVal = amountArr.length ? Math.min.apply(null, amountArr) : 0;
+  var range = maxVal - minVal || maxVal * 0.01;
+  var pColor = percentileColor(percentP);
+  // P90 历史分位参考值（基于全量数据，Y 轴要能看到这条线）
+  var p90Val = calcPercentileValue(fullAmountArr, 90);
+  if (p90Val != null && p90Val > maxVal) maxVal = p90Val;
+  if (p90Val != null && p90Val < minVal) minVal = p90Val;
+  // P95 / P98 历史分位参考值
+  var p95Val = calcPercentileValue(fullAmountArr, 95);
+  if (p95Val != null && p95Val > maxVal) maxVal = p95Val;
+  if (p95Val != null && p95Val < minVal) minVal = p95Val;
+  var p98Val = calcPercentileValue(fullAmountArr, 98);
+  if (p98Val != null && p98Val > maxVal) maxVal = p98Val;
+  if (p98Val != null && p98Val < minVal) minVal = p98Val;
+  var chart = echarts.init(el);
+  chart.setOption({
+    backgroundColor: 'transparent',
+    grid: { left: 50, right: 20, top: 30, bottom: 30 },
+    tooltip: { trigger: 'axis' },
+    legend: {
+      data: ['两市总成交额', '5日均线'],
+      textStyle: { color: ts.textColor, fontSize: 10 },
+      top: 0, right: 0
+    },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisLine:  { lineStyle: { color: ts.gridLine } },
+      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 6) - 1) }
+    },
+    yAxis: {
+      type: 'value',
+      min: Math.floor(minVal - range * 0.1),
+      max: Math.ceil(maxVal + range * 0.1),
+      axisLine:  { lineStyle: { color: ts.gridLine } },
+      axisLabel: { color: ts.textColor, fontSize: 10, formatter: function(v) { return v >= 10000 ? (v/10000).toFixed(2) + ' 万亿' : v + ' 亿'; } },
+      splitLine: { lineStyle: { color: ts.gridLine, type: 'dashed' } }
+    },
+    series: [
+      {
+        name: '两市总成交额',
+        type: 'line',
+        data: amountArr,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 4,
+        lineStyle: { color: '#ff9f0a', width: 2 },
+        itemStyle: { color: '#ff9f0a' },
+        areaStyle: {
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(255,159,10,0.3)' },
+              { offset: 1, color: 'rgba(255,159,10,0.02)' }
+            ]
+          }
+        },
+        // 历史百分位：标记线（当前位置 + P90 / P95 / P98 历史分位水平参考线）
+        markLine: {
+          silent: true,
+          symbol: ['none', 'none'],
+          data: [
+            { xAxis: dates.length - 1, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 }, label: { show: false } },
+            { yAxis: p90Val, lineStyle: { color: '#ff9f0a', width: 1, type: 'dashed', opacity: 0.55 },
+              label: { show: true, position: 'insideEndTop', formatter: 'P90 · ' + Math.round(p90Val) + ' 亿',
+                color: '#ffffff', backgroundColor: 'rgba(255,159,10,0.85)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } },
+            { yAxis: p95Val, lineStyle: { color: '#ff6b35', width: 1, type: 'dashed', opacity: 0.6 },
+              label: { show: true, position: 'insideEndTop', formatter: 'P95 · ' + Math.round(p95Val) + ' 亿',
+                color: '#ffffff', backgroundColor: 'rgba(255,107,53,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } },
+            { yAxis: p98Val, lineStyle: { color: '#ff453a', width: 1.2, type: 'dashed', opacity: 0.7 },
+              label: { show: true, position: 'insideEndTop', formatter: 'P98 · ' + Math.round(p98Val) + ' 亿',
+                color: '#ffffff', backgroundColor: 'rgba(255,69,58,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }
+          ]
+        },
+        markPoint: {
+          symbol: 'pin',
+          symbolSize: 36,
+          itemStyle: { color: pColor },
+          label: {
+            color: '#ffffff',
+            fontSize: 10,
+            fontWeight: 700,
+            formatter: percentP != null ? 'P' + percentP : ''
+          },
+          data: [{ name: '当前位置', value: currentVal, xAxis: dates.length - 1, yAxis: currentVal }]
+        }
+      },
+      {
+        name: '5日均线',
+        type: 'line',
+        data: ma5,
+        smooth: true,
+        symbol: 'none',
+        lineStyle: { color: '#0a84ff', width: 1.5, type: 'dashed' },
+        itemStyle: { color: '#0a84ff' }
+      }
+    ]
+  });
+  if (drHistoryECharts.amount) drHistoryECharts.amount.dispose();
+  drHistoryECharts.amount = chart;
+}
+
+// 3) 涨跌停比例（涨/跌/差）—— 柱状图（涨跌停差）+ 折线图（涨/跌比）
+// 注：涨跌停历史从今天开始累积，之前的日期为 0（公开 API 无历史涨跌停数据），所以不需要全量数据
+function drawDRLDDChart(echarts, data) {
+  var el = document.getElementById('drHistoryLDDChart');
+  if (!el) return;
+  var ts = getEChartsTextStyle();
+  var dates = data.map(function(d) { return d.date.slice(5); });
+  var ratioArr = data.map(function(d) {
+    var zt = d.zt_count || 0;
+    var dt = d.dt_count || 0;
+    if (dt === 0) return zt > 0 ? 10 : 0;  // 没跌停就显示 10
+    return Math.round((zt / dt) * 100) / 100;
+  });
+  var diffArr = data.map(function(d) { return d.zt_dt_diff || 0; });
+  var chart = echarts.init(el);
+  chart.setOption({
+    backgroundColor: 'transparent',
+    grid: { left: 50, right: 50, top: 30, bottom: 30 },
+    tooltip: {
+      trigger: 'axis',
+      formatter: function(params) {
+        var date = params[0].axisValue;
+        var idx = params[0].dataIndex;
+        var d = data[idx];
+        return date + '<br/>' +
+          '📈 涨停: ' + (d.zt_count||0) + ' / 跌停: ' + (d.dt_count||0) +
+          '<br/>📊 涨跌停差: ' + (d.zt_dt_diff||0) +
+          '<br/>📐 比例: ' + ratioArr[idx];
+      }
+    },
+    legend: {
+      data: ['涨跌停差', '涨/跌比'],
+      textStyle: { color: ts.textColor, fontSize: 10 },
+      top: 0, right: 0
+    },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisLine:  { lineStyle: { color: ts.gridLine } },
+      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 6) - 1) }
+    },
+    yAxis: [
+      {
+        type: 'value',
+        name: '差值',
+        position: 'left',
+        axisLine:  { lineStyle: { color: ts.gridLine } },
+        axisLabel: { color: ts.textColor, fontSize: 10 },
+        splitLine: { lineStyle: { color: ts.gridLine, type: 'dashed' } }
+      },
+      {
+        type: 'value',
+        name: '比值',
+        position: 'right',
+        axisLine:  { lineStyle: { color: ts.gridLine } },
+        axisLabel: { color: ts.textColor, fontSize: 10 },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      {
+        name: '涨跌停差',
+        type: 'bar',
+        yAxisIndex: 0,
+        data: diffArr,
+        itemStyle: {
+          color: function(p) { return p.value >= 0 ? '#30d158' : '#ff453a'; }
+        },
+        barMaxWidth: 14
+      },
+      {
+        name: '涨/跌比',
+        type: 'line',
+        yAxisIndex: 1,
+        data: ratioArr,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 4,
+        lineStyle: { color: '#bf5af2', width: 2 },
+        itemStyle: { color: '#bf5af2' }
+      }
+    ]
+  });
+  if (drHistoryECharts.ldd) drHistoryECharts.ldd.dispose();
+  drHistoryECharts.ldd = chart;
+}
+
+// 简单移动平均（用于辅助线）
+function calcSimpleMA(arr, n) {
+  var out = [];
+  for (var i = 0; i < arr.length; i++) {
+    if (i < n - 1) { out.push(null); continue; }
+    var s = 0;
+    for (var j = i - n + 1; j <= i; j++) s += arr[j];
+    out.push(Math.round(s / n));
+  }
+  return out;
+}
+
+// 主题切换时，让 3 张图重新计算颜色
+window.addEventListener('theme-changed', function() {
+  if (drHistoryData) renderDRHistoryCharts();
+});
+// 窗口尺寸变化时也重新计算
+window.addEventListener('resize', function() {
+  if (drHistoryECharts.margin) drHistoryECharts.margin.resize();
+  if (drHistoryECharts.amount) drHistoryECharts.amount.resize();
+  if (drHistoryECharts.ldd)    drHistoryECharts.ldd.resize();
+});
 
 // 把资金面数据渲染到独立卡片
 function applyFundToUI() {
@@ -1195,24 +1758,17 @@ function applyFundToUI() {
   var marginHintEl = document.getElementById('drFundMarginHint');
   if (marginHintEl) marginHintEl.textContent = '余额 ' + (margin.rzye / 1e12).toFixed(2) + ' 万亿（昨日 ' + (margin.prev && margin.prev.rzye / 1e12 || 0).toFixed(2) + '）';
 
-  // 成交额
+  // 成交额（沪深两市 = sh000001 + sz399001 的 amount 字段求和）
   var amountEl = document.getElementById('drFundAmount');
   if (amountEl) {
     amountEl.textContent = (amount.totalYi || 0).toFixed(0) + ' 亿';
   }
   var amountHintEl = document.getElementById('drFundAmountHint');
   if (amountHintEl) {
-    // 用 4 只指数的成交额明细
-    var parts = [];
-    if (drMarketData && drMarketData.data) {
-      DR_INDICES.forEach(function(def) {
-        var it = drMarketData.data[def.key];
-        if (it && it.quote && it.quote.amount) {
-          parts.push(def.name + ' ' + (it.quote.amount / 1e4).toFixed(0) + '亿');
-        }
-      });
-    }
-    amountHintEl.textContent = parts.join(' + ');
+    // 沪市 + 深市成交额明细（单位：亿元）
+    var shYi = (amount.shYi || 0).toFixed(0);
+    var szYi = (amount.szYi || 0).toFixed(0);
+    amountHintEl.textContent = '沪市 ' + shYi + ' 亿 + 深市 ' + szYi + ' 亿（数据源: sh000001+sz399001）';
   }
 }
 
@@ -1372,37 +1928,55 @@ function updateDRTrendResultUI(trend, hint, totalScore, scoreBreakdown) {
     if (hintEl) hintEl.textContent = hint || '请为每个指数选择「均线状态」和「MACD 状态」';
   }
 
-  // 技术面 + 资金面 + 综合分徽章
+  // 技术面 + 资金面 + 情绪面 + 综合分徽章
   if (scoreEl) {
     // 从 closure 找到综合分（recalcDROverallTrend 的返回值）
     var lastOverall = window._lastDROverall || {};
-    var hasScore = !!lastOverall.hasScore;
-    var hasFund  = !!lastOverall.hasFund;
-    var techScore = lastOverall.totalScore;
-    var fundScore = lastOverall.fundScore;
-    var totalAll  = lastOverall.totalAll;
-    if (hasScore || hasFund) {
+    var hasScore     = !!lastOverall.hasScore;
+    var hasFund      = !!lastOverall.hasFund;
+    var hasSentiment = !!lastOverall.hasSentiment;
+    var techScore     = lastOverall.totalScore;
+    var fundScore     = lastOverall.fundScore;
+    var sentimentScore = lastOverall.sentimentScore;
+    var totalAll      = lastOverall.totalAll;
+    if (hasScore || hasFund || hasSentiment) {
       scoreEl.style.display = '';
       var valSpan = scoreEl.querySelector('.dr-trend-result-score-value');
       var detailSpan = scoreEl.querySelector('.dr-trend-result-score-detail');
       if (valSpan) {
         // 优先显示综合分
-        if (hasScore && hasFund) {
-          valSpan.textContent = '综合分 ' + totalAll + '/60';
+        var allThree = hasScore && hasFund && hasSentiment;
+        if (allThree) {
+          valSpan.textContent = '综合分 ' + totalAll + '/80';
+          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalAll);
+        } else if (hasScore && hasFund) {
+          valSpan.textContent = '技术+资金 ' + totalAll + '/60';
+          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalAll);
+        } else if (hasScore && hasSentiment) {
+          valSpan.textContent = '技术+情绪 ' + totalAll + '/60';
+          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalAll);
+        } else if (hasFund && hasSentiment) {
+          valSpan.textContent = '资金+情绪 ' + totalAll + '/40';
           valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalAll);
         } else if (hasScore) {
           valSpan.textContent = '技术分 ' + techScore + '/40';
           valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(techScore);
-        } else {
+        } else if (hasFund) {
           valSpan.textContent = '资金分 ' + fundScore + '/20';
           valSpan.className = 'dr-trend-result-score-value ' + getFundScoreBadgeClass(fundScore);
+        } else {
+          valSpan.textContent = '情绪分 ' + sentimentScore + '/20';
+          valSpan.className = 'dr-trend-result-score-value ' + getSentimentScoreBadgeClass(sentimentScore);
         }
       }
       if (detailSpan) {
         var parts = [];
-        if (hasScore) parts.push('技术 ' + techScore + '/40');
-        if (hasFund)  parts.push('资金 ' + fundScore + '/20');
-        if (hasScore && hasFund) parts.push('综合 ' + totalAll + '/60');
+        if (hasScore)     parts.push('技术 ' + techScore + '/40');
+        if (hasFund)      parts.push('资金 ' + fundScore + '/20');
+        if (hasSentiment) parts.push('情绪 ' + sentimentScore + '/20');
+        if (hasScore || hasFund || hasSentiment) {
+          parts.push('综合 ' + totalAll + '/' + (allThree ? '80' : (hasScore ? '40' : (hasFund ? '20' : '20'))));
+        }
         detailSpan.textContent = parts.join(' · ');
       }
     } else {
@@ -2580,8 +3154,8 @@ function drawDRKlineChart(echarts, idx, key, data) {
       { gridIndex: 0, scale: true,
         splitLine: { lineStyle: { color: 'rgba(92, 92, 112, 0.1)' } },
         axisLabel: { fontSize: 10, color: '#9090a8' } },
-      // 成交量：从 0 起点绘制（min: 0），柱条才"从 0 轴生长"，
-      // 避免 scale:true 自动缩放导致柱子"浮在半空"
+      // 成交额（万元 → 亿元显示）。后端 volumes 字段已用「金额/10000」计算为万元。
+      // 此处改用成交额比成交量更有参考意义（金额含价格信息，反映真实资金参与度）
       { gridIndex: 1, min: 0, splitNumber: 2,
         splitLine: { show: false },
         axisLabel: { fontSize: 10, color: '#9090a8', formatter: function(v) { return (v / 10000).toFixed(1) + '亿'; } } },

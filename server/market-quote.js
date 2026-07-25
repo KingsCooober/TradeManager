@@ -6,11 +6,13 @@
 const https = require('https');
 
 // 指数代码（腾讯格式：sh=沪市 sz=深市）
+// 4 个大盘指数：symbol 用于腾讯行情接口，secid 用于东方财富 K线接口
+// secid 格式: 1.000001 = 沪市(sh)，0.399001 = 深市(sz)
 const INDEX_MAP = {
-  sh:     { symbol: 'sh000001', name: '上证指数' },
-  zza500: { symbol: 'sh000510', name: '中证A500' },
-  cyb50:  { symbol: 'sz399673', name: '创业板50' },
-  kc50:   { symbol: 'sh000688', name: '科创50' }
+  sh:     { symbol: 'sh000001', secid: '1.000001', name: '上证指数' },
+  zza500: { symbol: 'sh000510', secid: '1.000510', name: '中证A500' },
+  cyb50:  { symbol: 'sz399673', secid: '0.399673', name: '创业板50' },
+  kc50:   { symbol: 'sh000688', secid: '1.000688', name: '科创50' }
 };
 
 // 5 分钟内存缓存
@@ -32,6 +34,10 @@ function setCache(key, data) {
 }
 
 // 通用 HTTPS GET（响应可能是 GBK 编码的纯文本也可能是 UTF-8 JSON）
+// ★ 强制 IPv4：东方财富 push2his 在 Node https 模块走 IPv6 时偶尔 socket hang up
+const dns = require('dns');
+try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
+
 function httpsGet(url, redirects = 0) {
   return new Promise((resolve, reject) => {
     if (redirects > 3) return reject(new Error('Too many redirects'));
@@ -39,14 +45,15 @@ function httpsGet(url, redirects = 0) {
     const req = https.get({
       host: u.host,
       path: u.pathname + u.search,
+      family: 4,   // ★ 强制 IPv4，避免 push2his 偶发 hang up
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': '*/*',
         'Accept-Language': 'zh-CN,zh;q=0.9',
-        'Referer': 'https://gu.qq.com/',
-        'Connection': 'keep-alive'
+        'Referer': 'https://quote.eastmoney.com/',
+        'Connection': 'close'
       },
-      timeout: 10000
+      timeout: 15000
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         return httpsGet(res.headers.location, redirects + 1).then(resolve, reject);
@@ -109,23 +116,107 @@ async function fetchQuotes(symbols) {
 
 // 2) 日 K 线（用于计算 N 日均价）
 // 字段：[日期, 开, 收, 高, 低, 成交额, [成交量?], 振幅, 涨跌幅, 换手率]
-async function fetchKLine(symbol, count = 30) {
-  const url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' + symbol + ',day,,,' + count + ',qfq';
+// 全局串行锁：避免对 push2his.eastmoney.com 短时间并发请求触发 WAF/限流
+// 同一时刻只允许 1 个请求到该 host，后续请求排队等待
+// ★ 修复：之前用 promise chain + 闭包 release 变量实现的"伪锁"在第 2 次
+//   调用时会死锁（因为内层 release 被覆盖后，链上的 next 永远 pending）。
+//   改用最直观的 mutex：locked 标志 + 等待队列，O(1) 且无死锁。
+let _emLocked = false;
+let _emWaiters = [];
+function acquireEMLock() {
+  if (!_emLocked) {
+    _emLocked = true;
+    return Promise.resolve();
+  }
+  return new Promise(function(resolve) { _emWaiters.push(resolve); });
+}
+function releaseEMLock() {
+  const next = _emWaiters.shift();
+  if (next) {
+    // 链上还有等待者：直接把锁交给它（_emLocked 保持 true）
+    next();
+  } else {
+    _emLocked = false;
+  }
+}
+
+// 腾讯 K线接口：web.ifzq.gtimg.cn 可用
+// day 数组字段：[日期, 开, 收, 高, 低, 成交额(元), 成交量(手), 涨跌幅%, ...]
+async function fetchKLineFromTencent(symbol, count) {
+  const url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' +
+    encodeURIComponent(symbol + ',day,,,' + count + ',qfq');
   const buf = await httpsGet(url);
-  const text = decodeGBK(buf);
-  let json;
-  try { json = JSON.parse(text); }
-  catch (e) { throw new Error('K线 JSON 解析失败: ' + e.message); }
-  const arr = json && json.data && json.data[symbol] && json.data[symbol].day;
-  if (!Array.isArray(arr)) return [];
-  return arr.map(row => ({
-    date:   row[0],
-    open:   parseFloat(row[1]),
-    close:  parseFloat(row[2]),
-    high:   parseFloat(row[3]),
-    low:    parseFloat(row[4]),
-    amount: parseFloat(row[5])
-  }));
+  if (buf.length === 0) throw new Error('腾讯K线接口返回空');
+  const json = JSON.parse(buf.toString('utf8'));
+  if (json.code !== 0) throw new Error('腾讯K线返回 code=' + json.code);
+  const symData = json.data && json.data[symbol];
+  if (!symData || !Array.isArray(symData.day)) throw new Error('腾讯K线无 day 数组');
+  return symData.day.map(function(line) {
+    return {
+      date:   line[0],
+      open:   parseFloat(line[1]),
+      close:  parseFloat(line[2]),
+      high:   parseFloat(line[3]),
+      low:    parseFloat(line[4]),
+      amount: parseFloat(line[5]) || 0,  // 成交额（元）
+      volume: parseFloat(line[6]) || 0   // 成交量（手）
+    };
+  });
+}
+
+async function fetchKLine(symbol, count = 30) {
+  // 默认走腾讯（可访问）；东方财富 push2his 经常 socket hang up，仅作回退
+  const meta = Object.values(INDEX_MAP).find(function(m) { return m.symbol === symbol; });
+  if (!meta) throw new Error('K线接口不支持的指数: ' + symbol);
+
+  // 1) 腾讯
+  try {
+    return await fetchKLineFromTencent(meta.symbol, count);
+  } catch (e1) {
+    console.warn('[fetchKLine] 腾讯失败，回退东方财富: ' + e1.message);
+  }
+
+  // 2) 东方财富 push2his
+  const url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get' +
+    '?secid=' + meta.secid +
+    '&fields1=f1,f2,f3,f4,f5' +
+    '&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61' +
+    '&klt=101&fqt=0&end=20991231&lmt=' + count;
+
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await acquireEMLock();
+    try {
+      const buf = await httpsGet(url);
+      if (buf.length < 200 || buf[0] !== 0x7B) {
+        throw new Error('返回非JSON (length=' + buf.length + ')');
+      }
+      const json = JSON.parse(buf.toString('utf8'));
+      if (!json.data || !Array.isArray(json.data.klines)) {
+        releaseEMLock(); return [];
+      }
+      const result = json.data.klines.map(function(line) {
+        const f = line.split(',');
+        return {
+          date:   f[0],
+          open:   parseFloat(f[1]),
+          close:  parseFloat(f[2]),
+          high:   parseFloat(f[3]),
+          low:    parseFloat(f[4]),
+          volume: parseFloat(f[5]) || 0,
+          amount: parseFloat(f[6]) || 0
+        };
+      });
+      releaseEMLock();
+      return result;
+    } catch (e) {
+      releaseEMLock();
+      lastErr = e;
+      console.warn('[fetchKLine] 东方财富 ' + symbol + ' attempt ' + attempt + ' failed: ' + e.message);
+      if (attempt < 3) await new Promise(function(r) { setTimeout(r, 1000 + 2000 * attempt); });
+    }
+  }
+  throw lastErr;
 }
 
 // 计算 N 日均价（用最近 N 天收盘价平均）
@@ -134,6 +225,97 @@ function ma(klines, n) {
   const slice = klines.slice(-n);
   const sum = slice.reduce((s, k) => s + k.close, 0);
   return sum / slice.length;
+}
+
+// ==================== 均线/MACD 状态自动识别 ====================
+// 与前端 SCORE_MA_MAP / SCORE_MACD_MAP 一一对应，必须保持 label 字符串完全一致
+// MA 状态（基于最近 2 个交易日的 MA5/MA10 对比）：
+//   5-10金叉：今日 MA5 > MA10 且昨日 MA5 <= MA10（向上穿越）
+//   5-10死叉：今日 MA5 < MA10 且昨日 MA5 >= MA10（向下穿越）
+//   5-10粘合：|MA5 - MA10| / MA10 <= 0.5%  （窄幅粘合，方向待选择）
+//   多头排列：MA5 > MA10 持续（无穿越）
+//   空头排列：MA5 < MA10 持续（无穿越）
+// MACD 状态（基于最近 2 个交易日的 DIF/DEA 对比 + MACD 柱变化）：
+//   水上金叉：DIF > DEA 且 DIF 上穿 DEA 且今日 MACD 柱 > 0
+//   水上死叉：DIF < DEA 且 DIF 下穿 DEA 且昨日 MACD 柱 > 0
+//   水上多头：DIF > 0, DEA > 0, MACD 柱 > 0
+//   水上空头：DIF < 0, DEA > 0（DIF 下穿 0 轴中）
+//   水上顶背离：DIF > 0, DEA > 0, MACD 柱缩短（红柱变短，趋势减弱）
+//   水下金叉：DIF > DEA 且 DIF 上穿 DEA 且今日 MACD 柱可能仍 < 0
+//   水下死叉：DIF < DEA 且 DIF 下穿 DEA
+//   水下多头：DIF > 0, DEA < 0（弱势转强中）
+//   水下空头：DIF < 0, DEA < 0, MACD 柱 < 0
+//   水下底背离：DIF < 0, DEA < 0, MACD 柱缩短（绿柱变短，酝酿反弹）
+// 注：因 K 线最新一根可能尚未收盘，使用"昨日 + 前昨日"组合作为对比基准
+function detectMaState(klines) {
+  if (!klines || klines.length < 11) return '';
+  const closes = klines.map(k => k.close);
+  const fullMA5  = calcMA(closes, 5);
+  const fullMA10 = calcMA(closes, 10);
+  const cur5  = fullMA5[fullMA5.length  - 1];
+  const cur10 = fullMA10[fullMA10.length - 1];
+  const prev5  = fullMA5[fullMA5.length  - 2];
+  const prev10 = fullMA10[fullMA10.length - 2];
+  if (cur5 == null || cur10 == null || prev5 == null || prev10 == null) return '';
+
+  // 金叉：今天 MA5 > MA10，昨天 MA5 <= MA10
+  if (cur5 > cur10 && prev5 <= prev10) return '5-10金叉';
+  // 死叉：今天 MA5 < MA10，昨天 MA5 >= MA10
+  if (cur5 < cur10 && prev5 >= prev10) return '5-10死叉';
+  // 粘合：|差| / MA10 <= 0.5%
+  const diffPct = Math.abs(cur5 - cur10) / cur10;
+  if (diffPct <= 0.005) return '5-10粘合';
+  // 多头排列：MA5 > MA10 持续
+  if (cur5 > cur10 && prev5 >= prev10) return '多头排列';
+  // 空头排列：MA5 < MA10 持续
+  if (cur5 < cur10 && prev5 <= prev10) return '空头排列';
+  return '';
+}
+
+function detectMacdState(klines) {
+  if (!klines || klines.length < 27) return '';
+  const closes = klines.map(k => k.close);
+  const m = calcMACD(closes);
+  const dif = m.dif, dea = m.dea, macd = m.macd;
+  const n = dif.length;
+  const curDif = dif[n - 1], curDea = dea[n - 1], curMacd = macd[n - 1];
+  const prevDif = dif[n - 2], prevDea = dea[n - 2], prevMacd = macd[n - 2];
+  if (curDif == null || curDea == null || prevDif == null || prevDea == null) return '';
+
+  const curMacdPos  = curMacd > 0;
+  const prevMacdPos = prevMacd > 0;
+  const difCrossUp   = curDif > curDea && prevDif <= prevDea;  // DIF 上穿 DEA
+  const difCrossDown = curDif < curDea && prevDif >= prevDea;  // DIF 下穿 DEA
+  const bothAboveZero = curDif > 0 && curDea > 0;
+  const bothBelowZero = curDif < 0 && curDea < 0;
+  const macdShrink   = Math.abs(curMacd) < Math.abs(prevMacd); // 柱变短
+
+  if (bothAboveZero) {
+    if (difCrossUp)            return '水上金叉';
+    if (difCrossDown)          return '水上死叉';
+    if (curMacdPos && macdShrink) return '水上顶背离';
+    if (curMacdPos)            return '水上多头';
+    return '水上空头';
+  }
+  if (bothBelowZero) {
+    if (difCrossUp)            return '水下金叉';
+    if (difCrossDown)          return '水下死叉';
+    if (curMacdPos)            return '水下多头';
+    if (macdShrink)            return '水下底背离';
+    return '水下空头';
+  }
+  // DIF、DEA 异侧（穿过 0 轴过程中）
+  if (curDif > 0 && curDea < 0) {
+    if (difCrossUp)  return '水上金叉';
+    return '水下多头';
+  }
+  if (curDif < 0 && curDea > 0) {
+    if (difCrossDown) return '水上死叉';
+    return '水上空头';
+  }
+  // 单 0 轴（DIF 或 DEA 之一为 0）
+  if (curDif > 0 || curDea > 0) return curMacdPos ? '水上多头' : '水上空头';
+  return curMacdPos ? '水下多头' : '水下空头';
 }
 
 // ==================== 技术指标计算 ====================
@@ -199,8 +381,9 @@ async function getKLineSnapshot(key, count = 120) {
   const klines = rawKlines.slice(-count);
   const dates = klines.map(k => k.date);
   const ohlc  = klines.map(k => [k.open, k.close, k.low, k.high]);  // ECharts candlestick 顺序
-  // 成交量（用成交额万元代替，原数据是元）
-  const volumes = klines.map(k => Math.round((k.amount || 0) / 10000));
+  // 成交额：k.amount 是东方财富返回的金额（元）→ 转为万元便于前端展示
+  // （前端 Y 轴再除以 10000 转为亿元）
+  const amounts = klines.map(k => Math.round((k.amount || 0) / 10000));
 
   // 3. 计算指标（基于完整 pre+count 序列保证 MA26/MACD 正确）
   const fullCloses = rawKlines.map(k => k.close);
@@ -225,7 +408,8 @@ async function getKLineSnapshot(key, count = 120) {
     count:   count,
     dates:   dates,
     ohlc:    ohlc,
-    volumes: volumes,
+    volumes: amounts,   // 兼容字段名（前端仍用 data.volumes）
+    amounts: amounts,   // 语义化字段名（万元）
     ma5:     ma5,
     ma10:    ma10,
     ma20:    ma20,
@@ -262,6 +446,8 @@ async function getIndexMarket(key) {
     ma10:  ma(klines, 10),
     ma20:  ma(klines, 20),
     ma60:  ma(klines, 60),
+    maState:  detectMaState(klines),
+    macdState: detectMacdState(klines),
     klineCount: klines.length,
     fetchedAt: new Date().toISOString()
   };
@@ -298,6 +484,8 @@ async function getAllIndicesMarket() {
       ma10:  ma(klines, 10),
       ma20:  ma(klines, 20),
       ma60:  ma(klines, 60),
+      maState:  detectMaState(klines),
+      macdState: detectMacdState(klines),
       klineCount: klines.length
     };
   });
@@ -307,4 +495,35 @@ async function getAllIndicesMarket() {
   return result;
 }
 
-module.exports = { getIndexMarket, getAllIndicesMarket, getKLineSnapshot, INDEX_MAP };
+// ==================== 沪深两市总成交额 ====================
+// 沪市总成交 ≈ 上证指数 sh000001 的 amount 字段（万元）
+// 深市总成交 ≈ 深证成指 sz399001 的 amount 字段（万元）
+// 两市合计返回 = sh000001.amount + sz399001.amount（单位：万元）
+// 缓存 5 分钟（与指数行情共用一个 cache，便于复用 fetchQuotes 的结果）
+const MARKET_AMOUNT_SYMBOLS = ['sh000001', 'sz399001'];
+
+async function fetchMarketTotalAmount() {
+  // 复用指数行情的 5 分钟缓存：fetchQuotes 内部会走 https
+  const quotes = await fetchQuotes(MARKET_AMOUNT_SYMBOLS);
+  const shAmount = (quotes.sh000001 && quotes.sh000001.amount) || 0; // 万元
+  const szAmount = (quotes.sz399001 && quotes.sz399001.amount) || 0; // 万元
+  return {
+    shWan: shAmount,
+    szWan: szAmount,
+    totalWan: shAmount + szAmount,
+    shYi: shAmount / 1e4,
+    szYi: szAmount / 1e4,
+    totalYi: (shAmount + szAmount) / 1e4,
+    fetchedAt: new Date().toISOString()
+  };
+}
+
+module.exports = {
+  getIndexMarket,
+  getAllIndicesMarket,
+  fetchMarketTotalAmount,
+  fetchKLine,
+  fetchQuotes,
+  getKLineSnapshot,
+  INDEX_MAP
+};

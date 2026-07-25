@@ -6,7 +6,7 @@
 <meta name="description" content="每日复盘 - 交易管理工具，记录每日交易纪律、大盘走势、仓位策略、心态评分与每日总结">
 <title>每日复盘 - Trade Manager</title>
 <link rel="stylesheet" href="css/main.css?v=15">
-<link rel="stylesheet" href="css/daily-review.css?v=20260725003">
+<link rel="stylesheet" href="css/daily-review.css?v=20260725010">
 </head>
 <body>
 
@@ -94,12 +94,17 @@
     </div>
 
     <!-- 模块1: 大盘研判与仓位策略（合并） -->
-    <section class="dr-section">
-      <div class="dr-section-header">
+    <section class="dr-section dr-section--collapsible" id="drMarketSection">
+      <div class="dr-section-header dr-section-header--clickable" onclick="toggleDRMarketSection()" role="button" tabindex="0" aria-expanded="true" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDRMarketSection();}">
         <h3>📊 大盘研判与仓位策略</h3>
-        <span class="dr-section-hint">均线 + MACD → 综合走势 → 自动仓位</span>
+        <div class="dr-section-header-right">
+          <span class="dr-section-hint">均线 + MACD → 综合走势 → 自动仓位</span>
+          <!-- K线总开关：放在 section 标题右侧 -->
+          <button type="button" class="btn btn-xs btn-ghost dr-kline-toggle-all" id="drKlineToggleAll" onclick="event.stopPropagation();toggleAllDRKline();" title="展开或收起全部 4 个指数的 K线图">📊 展开 K线</button>
+          <span class="dr-section-toggle-icon" id="drMarketSectionIcon">▼</span>
+        </div>
       </div>
-      <div class="dr-section-body">
+      <div class="dr-section-body" id="drMarketSectionBody">
 
         <!-- 子模块 A: 大盘走势分析（每个指数独立判断均线+MACD） -->
         <div class="dr-subsection">
@@ -141,9 +146,65 @@
                 <div class="dr-fund-item-hint" id="drFundMarginHint">—</div>
               </div>
               <div class="dr-fund-item">
-                <div class="dr-fund-item-label">市场总成交</div>
+                <div class="dr-fund-item-label">市场总成交（沪+深）</div>
                 <div class="dr-fund-num" id="drFundAmount">—</div>
                 <div class="dr-fund-item-hint" id="drFundAmountHint">—</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 情绪面 0-20 分（涨跌停统计 + 上涨家数占比 + 涨停绝对数） -->
+          <div class="dr-fund-card dr-sentiment-card" id="drSentimentCard" style="display:none">
+            <div class="dr-fund-card-header">
+              <div class="dr-fund-card-label">🌡️ 情绪面评分（涨跌停 + 上涨占比）</div>
+              <div class="dr-fund-score-row">
+                <span class="dr-fund-score" id="drSentimentScore">—/20</span>
+                <span class="dr-fund-breakdown" id="drSentimentBreakdown">—</span>
+              </div>
+            </div>
+            <div class="dr-fund-card-body">
+              <div class="dr-fund-item">
+                <div class="dr-fund-item-label">涨跌停差</div>
+                <div class="dr-fund-num" id="drSentimentLDD">—</div>
+                <div class="dr-fund-item-hint" id="drSentimentLDDHint">—</div>
+              </div>
+              <div class="dr-fund-item">
+                <div class="dr-fund-item-label">上涨家数占比</div>
+                <div class="dr-fund-num" id="drSentimentUpPct">—</div>
+                <div class="dr-fund-item-hint" id="drSentimentUpPctHint">—</div>
+              </div>
+              <div class="dr-fund-item">
+                <div class="dr-fund-item-label">涨停数</div>
+                <div class="dr-fund-num" id="drSentimentZT">—</div>
+                <div class="dr-fund-item-hint" id="drSentimentZTHint">—</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 历史趋势：3 张折线图（两融余额 / 沪深成交额 / 涨跌停比例），用于辅助看趋势 -->
+          <div class="dr-history-charts" id="drHistoryCharts">
+            <div class="dr-history-header">
+              <span class="dr-history-title">📈 历史趋势（图表显示近 60 天，百分位基于近 2 年）</span>
+              <span class="dr-history-hint" id="drHistoryHint">—</span>
+              <select class="dr-history-range" id="drHistoryRange" onchange="reloadDRHistoryCharts()">
+                <option value="7">7 天</option>
+                <option value="30">30 天</option>
+                <option value="60" selected>60 天</option>
+                <option value="90">90 天</option>
+              </select>
+            </div>
+            <div class="dr-history-grid">
+              <div class="dr-history-chart-wrap">
+                <div class="dr-history-chart-label">两融余额（亿元）· 含历史百分位</div>
+                <div class="dr-history-chart" id="drHistoryMarginChart"></div>
+              </div>
+              <div class="dr-history-chart-wrap">
+                <div class="dr-history-chart-label">两市总成交额（亿元）· 含历史百分位</div>
+                <div class="dr-history-chart" id="drHistoryAmountChart"></div>
+              </div>
+              <div class="dr-history-chart-wrap">
+                <div class="dr-history-chart-label">涨跌停比例（涨/跌/差）</div>
+                <div class="dr-history-chart" id="drHistoryLDDChart"></div>
               </div>
             </div>
           </div>
@@ -396,7 +457,7 @@
 <script src="js/database.js?v=4"></script>
 <script src="js/sync.js?v=9"></script>
 <script src="js/custom-select.js?v=2"></script>
-<script src="js/daily-review.js?v=20260725004"></script>
+<script src="js/daily-review.js?v=20260725018"></script>
 <script>
 renderAppHeader('daily');
 </script>

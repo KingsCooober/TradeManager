@@ -271,6 +271,48 @@
   font-weight: 600;
 }
 
+/* 可折叠 section 标题：cursor + hover 反馈 */
+.dr-section-header--clickable {
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+.dr-section-header--clickable:hover {
+  background: var(--bg-subtle);
+}
+.dr-section-header--clickable:focus-visible {
+  outline: 2px solid var(--color-blue);
+  outline-offset: -2px;
+}
+
+.dr-section-header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dr-section-toggle-icon {
+  font-size: 11px;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+  width: 16px;
+  text-align: center;
+  display: inline-block;
+}
+
+/* K线总开关按钮（部分展开时高亮提示） */
+.dr-kline-toggle-all {
+  font-size: 12px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+.dr-kline-toggle-all--partial {
+  background: var(--color-orange, #f59e0b) !important;
+  color: #fff !important;
+  border-color: var(--color-orange, #f59e0b) !important;
+}
+
 /* 子模块（合并模块内部分层） */
 .dr-subsection {
   position: relative;
@@ -478,7 +520,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 手动走势选择：单行布局（左 select，右结果） */
+/* 走势判断行：现在只显示走势结果（无 select），保持醒目字体 */
 .dr-index-trend-row {
   display: flex;
   align-items: center;
@@ -486,28 +528,37 @@
   margin-top: 4px;
 }
 
-.dr-index-trend-row .dr-index-manual-trend {
-  flex: 0 0 160px;
-  font-size: 12px;
-  padding: 5px 8px;
-}
-
-/* custom-select 升级后，wrapper 继承 select 的尺寸约束 */
-.dr-index-trend-row .custom-select-wrapper {
-  flex: 0 0 160px;
-  width: 160px;
-}
-
-.dr-index-trend-row .custom-select-wrapper .custom-select {
-  font-size: 12px;
-  padding: 5px 8px;
-}
-
 .dr-index-trend-row .dr-index-trend-result {
   flex: 1 1 auto;
   text-align: left;
   justify-content: flex-start;
   padding-left: 12px;
+}
+
+/* 自动识别指标（只读）：无 select，仅显示数值/状态 */
+.dr-index-readonly {
+  flex: 1 1 0;
+  min-width: 110px;
+}
+.dr-index-readonly label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.dr-index-readonly-val {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--color-blue);
+  font-variant-numeric: tabular-nums;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
 }
 
 .dr-manual-tag {
@@ -1384,6 +1435,77 @@
   border: 1px solid var(--border-card);
   border-left: 4px solid #ffa726;
   border-radius: var(--radius-md);
+}
+
+/* 情绪面 0-20 分卡片（涨跌停 + 上涨家数占比，区别于资金面的橙色调，紫色调） */
+.dr-fund-card.dr-sentiment-card {
+  background: linear-gradient(135deg, rgba(155, 89, 182, 0.05) 0%, rgba(67, 97, 238, 0.04) 100%);
+  border-left-color: #9b59b6;
+}
+
+/* 历史趋势折线图（两融余额 / 沪深成交额 / 涨跌停比例） */
+.dr-history-charts {
+  margin-top: 18px;
+  padding: 14px 18px 18px;
+  background: linear-gradient(135deg, rgba(0, 200, 83, 0.04) 0%, rgba(67, 97, 238, 0.04) 100%);
+  border: 1px solid var(--border-card);
+  border-left: 4px solid #00c853;
+  border-radius: var(--radius-md);
+}
+.dr-history-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.dr-history-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #2c3e50);
+}
+.dr-history-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #7f8c8d);
+  flex: 1;
+  text-align: right;
+}
+.dr-history-range {
+  height: 30px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-card, #e8e8ed);
+  background: var(--bg-card, #fff);
+  color: var(--text-primary, #2c3e50);
+  font-size: 12px;
+  cursor: pointer;
+}
+.dr-history-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+@media (min-width: 1024px) {
+  .dr-history-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+.dr-history-chart-wrap {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border-card, #e8e8ed);
+  border-radius: 8px;
+  padding: 10px 12px 4px;
+  min-height: 180px;
+}
+.dr-history-chart-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, #7f8c8d);
+  margin-bottom: 6px;
+}
+.dr-history-chart {
+  width: 100%;
+  height: 180px;
 }
 
 .dr-fund-card-header {
