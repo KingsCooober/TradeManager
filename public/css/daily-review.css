@@ -1323,6 +1323,59 @@
 .dr-pos-tag-min { background: rgba(239, 71, 111, 0.14); color: var(--color-red); }
 .dr-pos-tag-empty { background: rgba(239, 71, 111, 0.22); color: var(--color-red); font-weight: 600; }
 
+/* K线图区域（默认隐藏，点击 📊 K线 按钮展开） */
+.dr-kline-wrap {
+  margin-top: 8px;
+}
+
+.dr-kline-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.dr-kline-toggle {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-card);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.dr-kline-toggle:hover {
+  border-color: var(--color-blue);
+  color: var(--color-blue);
+}
+
+.dr-kline-toggle.active {
+  background: var(--color-blue);
+  color: #fff;
+  border-color: var(--color-blue);
+}
+
+.dr-kline-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dr-kline-container {
+  width: 100%;
+  height: 380px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+}
+
+@media (max-width: 900px) {
+  .dr-kline-container { height: 320px; }
+}
+
 /* 资金面 0-20 分卡片（北向资金 + 融资余额 + 市场成交，自动从第三方接口拉取） */
 .dr-fund-card {
   margin-top: 14px;

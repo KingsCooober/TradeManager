@@ -654,6 +654,15 @@ function renderDRIndicesMAStatus() {
     html += '</div>';
     html += '</div>';
 
+    // K线图区域（默认隐藏，点击 📊 K线 按钮展开）
+    html += '<div class="dr-field dr-field-wide dr-kline-wrap" data-index="' + i + '">';
+    html += '<div class="dr-kline-toolbar">';
+    html += '<button type="button" class="btn btn-xs btn-ghost dr-kline-toggle" data-index="' + i + '" data-key="' + esc(idx.key) + '" onclick="toggleDRKline(this)">📊 K线</button>';
+    html += '<span class="dr-kline-hint" id="drKlineHint' + i + '">点击展开日K线图（120 根）</span>';
+    html += '</div>';
+    html += '<div class="dr-kline-container" id="drKline' + i + '" style="display:none"></div>';
+    html += '</div>';
+
     html += '</div></div>';
   });
 
@@ -2435,6 +2444,189 @@ function drConfirm(title, msg, okText, callback) {
 function closeDRConfirmModal() {
   document.getElementById('drConfirmModal').classList.remove('show');
   drConfirmCallback = null;
+}
+
+// ==================== K线图（ECharts 懒加载） ====================
+// 设计要点：
+// 1. ECharts 体积大（~1MB），用动态加载避免首屏白等
+// 2. 每个指数独立 ECharts 实例（关闭时 dispose）
+// 3. 4 sub-plot 风格：K线+MA5/10/20、成交量、MACD（DIF/DEA/MACD 柱）
+// 4. A 股配色：涨=红 (#ef476f)，跌=绿 (#2d9f7f)，与项目风格一致
+var ECHARTS_CDN = 'https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js';
+var echartsLoadPromise = null;
+
+// 懒加载 ECharts（多次调用只会加载一次；失败重置 promise 允许重试）
+function loadEcharts() {
+  if (window.echarts) return Promise.resolve(window.echarts);
+  if (echartsLoadPromise) return echartsLoadPromise;
+  echartsLoadPromise = new Promise(function(resolve, reject) {
+    var script = document.createElement('script');
+    script.src = ECHARTS_CDN;
+    script.onload = function() { resolve(window.echarts); };
+    script.onerror = function() { echartsLoadPromise = null; reject(new Error('ECharts 加载失败（请检查网络）')); };
+    document.head.appendChild(script);
+  });
+  return echartsLoadPromise;
+}
+
+// 存储已初始化的 ECharts 实例（key: index 序号 → echarts instance）
+var drKlineCharts = {};
+
+// 切换 K线图展开/收起
+function toggleDRKline(btn) {
+  var idx = parseInt(btn.dataset.index);
+  var key = btn.dataset.key;
+  var container = document.getElementById('drKline' + idx);
+  if (!container) return;
+  if (container.style.display === 'none') {
+    container.style.display = 'block';
+    btn.textContent = '🔼 收起';
+    btn.classList.add('active');
+    document.getElementById('drKlineHint' + idx).textContent = '加载中...';
+    renderDRKlineChart(idx, key);
+  } else {
+    container.style.display = 'none';
+    btn.textContent = '📊 K线';
+    btn.classList.remove('active');
+    document.getElementById('drKlineHint' + idx).textContent = '点击展开日K线图（120 根）';
+    if (drKlineCharts[idx]) {
+      if (drKlineCharts[idx]._resizeHandler) {
+        window.removeEventListener('resize', drKlineCharts[idx]._resizeHandler);
+      }
+      drKlineCharts[idx].dispose();
+      drKlineCharts[idx] = null;
+    }
+  }
+}
+
+// 渲染 K线图（异步：先加载 ECharts + 拉数据，再绘图）
+function renderDRKlineChart(idx, key) {
+  Promise.all([
+    loadEcharts(),
+    authFetch('/api/market/kline/' + key + '?count=120').then(function(r) {
+      if (!r.ok) throw new Error('K线接口返回 ' + r.status);
+      return r.json();
+    })
+  ]).then(function(results) {
+    drawDRKlineChart(results[0], idx, key, results[1]);
+  }).catch(function(e) {
+    console.error('[DR] K线加载失败:', e.message);
+    var hint = document.getElementById('drKlineHint' + idx);
+    if (hint) hint.textContent = '❌ 加载失败: ' + e.message;
+    var btn = document.querySelector('.dr-kline-toggle[data-index="' + idx + '"]');
+    if (btn) { btn.textContent = '📊 重试'; btn.classList.remove('active'); }
+  });
+}
+
+// 实际绘制 K线图
+function drawDRKlineChart(echarts, idx, key, data) {
+  var container = document.getElementById('drKline' + idx);
+  if (!container) return;
+  if (drKlineCharts[idx]) {
+    drKlineCharts[idx].dispose();
+  }
+  var chart = echarts.init(container);
+  drKlineCharts[idx] = chart;
+
+  // A 股配色：涨=红，跌=绿
+  var UP_COLOR   = '#ef476f';
+  var DOWN_COLOR = '#2d9f7f';
+  var MA5_COLOR  = '#ffa726';
+  var MA10_COLOR = '#29b6f6';
+  var MA20_COLOR = '#ab47bc';
+
+  // 成交量柱颜色（根据当日涨跌）
+  var volumeColors = data.ohlc.map(function(o) {
+    return o[1] >= o[0] ? UP_COLOR : DOWN_COLOR;  // close >= open → 红
+  });
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    animation: false,
+    legend: {
+      data: ['MA5', 'MA10', 'MA20', 'DIF', 'DEA'],
+      top: 0,
+      textStyle: { fontSize: 11, color: '#5c5c70' }
+    },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      backgroundColor: 'rgba(26, 26, 46, 0.95)',
+      borderColor: '#4361ee',
+      textStyle: { color: '#fff', fontSize: 12 }
+    },
+    axisPointer: {
+      link: [{ xAxisIndex: 'all' }],
+      label: { backgroundColor: '#4361ee' }
+    },
+    grid: [
+      { left: 56, right: 16, top: 32,  height: '50%' },  // K线+MA
+      { left: 56, right: 16, top: '64%', height: '14%' },  // 成交量
+      { left: 56, right: 16, top: '82%', height: '14%' }   // MACD
+    ],
+    xAxis: [
+      { type: 'category', data: data.dates, gridIndex: 0, boundaryGap: false,
+        axisLine: { lineStyle: { color: '#5c5c70' } },
+        axisLabel: { fontSize: 10, color: '#9090a8' },
+        splitLine: { show: false } },
+      { type: 'category', data: data.dates, gridIndex: 1, boundaryGap: false,
+        axisLine: { lineStyle: { color: '#5c5c70' } },
+        axisLabel: { show: false }, splitLine: { show: false } },
+      { type: 'category', data: data.dates, gridIndex: 2, boundaryGap: false,
+        axisLine: { lineStyle: { color: '#5c5c70' } },
+        axisLabel: { fontSize: 10, color: '#9090a8' }, splitLine: { show: false } }
+    ],
+    yAxis: [
+      { gridIndex: 0, scale: true,
+        splitLine: { lineStyle: { color: 'rgba(92, 92, 112, 0.1)' } },
+        axisLabel: { fontSize: 10, color: '#9090a8' } },
+      { gridIndex: 1, scale: true, splitNumber: 2,
+        splitLine: { show: false },
+        axisLabel: { fontSize: 10, color: '#9090a8', formatter: function(v) { return (v / 10000).toFixed(1) + '亿'; } } },
+      { gridIndex: 2, scale: true, splitNumber: 2,
+        splitLine: { show: false },
+        axisLabel: { fontSize: 10, color: '#9090a8' } }
+    ],
+    dataZoom: [
+      { type: 'inside', xAxisIndex: [0, 1, 2], start: 60, end: 100 }
+    ],
+    series: [
+      {
+        name: 'K线', type: 'candlestick', data: data.ohlc,
+        itemStyle: {
+          color: UP_COLOR, color0: DOWN_COLOR,
+          borderColor: UP_COLOR, borderColor0: DOWN_COLOR
+        }
+      },
+      { name: 'MA5',  type: 'line', data: data.ma5,  smooth: true, lineStyle: { width: 1, color: MA5_COLOR  }, symbol: 'none' },
+      { name: 'MA10', type: 'line', data: data.ma10, smooth: true, lineStyle: { width: 1, color: MA10_COLOR }, symbol: 'none' },
+      { name: 'MA20', type: 'line', data: data.ma20, smooth: true, lineStyle: { width: 1, color: MA20_COLOR }, symbol: 'none' },
+      {
+        name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: data.volumes,
+        itemStyle: { color: function(params) { return volumeColors[params.dataIndex]; } }
+      },
+      { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: data.macd.dif,  smooth: true, lineStyle: { width: 1, color: '#ffa726' }, symbol: 'none' },
+      { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: data.macd.dea,  smooth: true, lineStyle: { width: 1, color: '#29b6f6' }, symbol: 'none' },
+      {
+        name: 'MACD', type: 'bar', xAxisIndex: 2, yAxisIndex: 2, data: data.macd.macd,
+        itemStyle: {
+          color: function(params) { return params.data >= 0 ? UP_COLOR : DOWN_COLOR; }
+        }
+      }
+    ]
+  });
+
+  // 自适应窗口大小
+  var resizeHandler = function() { chart.resize(); };
+  window.addEventListener('resize', resizeHandler);
+  chart._resizeHandler = resizeHandler;
+
+  // 成功提示
+  var hint = document.getElementById('drKlineHint' + idx);
+  if (hint) {
+    var lastDate = data.dates[data.dates.length - 1];
+    hint.textContent = '✅ ' + data.name + ' · ' + data.dates.length + ' 根 · 至 ' + lastDate;
+  }
 }
 
 window.addEventListener('load', function() {

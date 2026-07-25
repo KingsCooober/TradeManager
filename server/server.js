@@ -857,6 +857,20 @@ app.get('/api/market/fund', auth.authMiddleware, async (req, res) => {
   }
 });
 
+// 单只指数 K线完整快照（含 MA5/10/20 + MACD(12,26,9) + 成交额）
+// 入参：code = sh|zza500|cyb50|kc50，count = 60|120|250（默认 120）
+app.get('/api/market/kline/:code', auth.authMiddleware, async (req, res) => {
+  const code = req.params.code;
+  const count = Math.min(250, Math.max(30, parseInt(req.query.count) || 120));
+  try {
+    const data = await market.getKLineSnapshot(code, count);
+    res.json(data);
+  } catch (e) {
+    console.error('[market] getKLineSnapshot 失败:', e.message);
+    res.status(500).json({ error: 'K线获取失败: ' + e.message });
+  }
+});
+
 // 启动服务器
 app.listen(PORT, () => {
   console.log(`服务器运行在 http://localhost:${PORT}`);

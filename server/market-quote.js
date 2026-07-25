@@ -136,6 +136,107 @@ function ma(klines, n) {
   return sum / slice.length;
 }
 
+// ==================== 技术指标计算 ====================
+// 简单移动平均线（返回与 klines 等长数组，前 n-1 位置为 null）
+function calcMA(closes, n) {
+  const result = new Array(closes.length).fill(null);
+  if (closes.length < n) return result;
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += closes[i];
+  result[n - 1] = sum / n;
+  for (let i = n; i < closes.length; i++) {
+    sum += closes[i] - closes[i - n];
+    result[i] = sum / n;
+  }
+  return result;
+}
+
+// 指数移动平均（递归），返回与 closes 等长数组
+function calcEMA(closes, n) {
+  const result = new Array(closes.length).fill(null);
+  if (closes.length === 0) return result;
+  const k = 2 / (n + 1);
+  // 第一个值用 closes[0] 初始化（业界常见做法）
+  result[0] = closes[0];
+  for (let i = 1; i < closes.length; i++) {
+    result[i] = closes[i] * k + result[i - 1] * (1 - k);
+  }
+  return result;
+}
+
+// MACD(12, 26, 9)：返回 { dif, dea, macd }，每个数组与 closes 等长
+// dif = EMA12 - EMA26, dea = EMA9(dif), macd = (dif - dea) * 2
+function calcMACD(closes) {
+  const ema12 = calcEMA(closes, 12);
+  const ema26 = calcEMA(closes, 26);
+  const dif = closes.map((_, i) => (ema12[i] != null && ema26[i] != null) ? (ema12[i] - ema26[i]) : null);
+  const difValid = dif.filter(v => v != null);
+  const deaRaw = calcEMA(difValid, 9);
+  // deaRaw 长度 = difValid 长度，需要对齐到 closes
+  const offset = closes.length - difValid.length;
+  const dea = new Array(closes.length).fill(null);
+  for (let i = 0; i < deaRaw.length; i++) dea[offset + i] = deaRaw[i];
+  const macd = closes.map((_, i) => (dif[i] != null && dea[i] != null) ? (dif[i] - dea[i]) * 2 : null);
+  return { dif, dea, macd };
+}
+
+// ==================== K线完整快照（含技术指标） ====================
+// 入参：key - 指数 key (sh/zza500/cyb50/kc50)，count - 根数 (默认 120)
+// 返回：{ key, name, symbol, dates[], ohlc[], volumes[], ma5/10/20[], macd: {dif,dea,macd}[] }
+async function getKLineSnapshot(key, count = 120) {
+  const meta = INDEX_MAP[key];
+  if (!meta) throw new Error('Unknown index key: ' + key);
+
+  const cacheKey = 'kline:' + key + ':' + count;
+  const cached = getCache(cacheKey);
+  if (cached) return Object.assign({ cached: true }, cached);
+
+  // 1. 拉取 K线原始数据（多取 35 根用于计算 MA26/MACD 的预热期）
+  const rawKlines = await fetchKLine(meta.symbol, count + 35);
+  if (rawKlines.length === 0) throw new Error('K线数据为空');
+
+  // 2. 截取最后 count 根作为主数据，前面 pre 根用于指标预热
+  const klines = rawKlines.slice(-count);
+  const dates = klines.map(k => k.date);
+  const ohlc  = klines.map(k => [k.open, k.close, k.low, k.high]);  // ECharts candlestick 顺序
+  // 成交量（用成交额万元代替，原数据是元）
+  const volumes = klines.map(k => Math.round((k.amount || 0) / 10000));
+
+  // 3. 计算指标（基于完整 pre+count 序列保证 MA26/MACD 正确）
+  const fullCloses = rawKlines.map(k => k.close);
+  const fullMA5    = calcMA(fullCloses, 5);
+  const fullMA10   = calcMA(fullCloses, 10);
+  const fullMA20   = calcMA(fullCloses, 20);
+  const fullMACD   = calcMACD(fullCloses);
+
+  // 4. 截取最后 count 根对齐
+  const preLen = rawKlines.length - count;
+  const ma5   = fullMA5.slice(preLen);
+  const ma10  = fullMA10.slice(preLen);
+  const ma20  = fullMA20.slice(preLen);
+  const dif   = fullMACD.dif.slice(preLen);
+  const dea   = fullMACD.dea.slice(preLen);
+  const macd  = fullMACD.macd.slice(preLen);
+
+  const data = {
+    key:     key,
+    name:    meta.name,
+    symbol:  meta.symbol,
+    count:   count,
+    dates:   dates,
+    ohlc:    ohlc,
+    volumes: volumes,
+    ma5:     ma5,
+    ma10:    ma10,
+    ma20:    ma20,
+    macd:    { dif: dif, dea: dea, macd: macd },
+    fetchedAt: new Date().toISOString()
+  };
+
+  setCache(cacheKey, data);
+  return data;
+}
+
 // 入口：单只指数的完整行情
 async function getIndexMarket(key) {
   const meta = INDEX_MAP[key];
@@ -206,4 +307,4 @@ async function getAllIndicesMarket() {
   return result;
 }
 
-module.exports = { getIndexMarket, getAllIndicesMarket, INDEX_MAP };
+module.exports = { getIndexMarket, getAllIndicesMarket, getKLineSnapshot, INDEX_MAP };
