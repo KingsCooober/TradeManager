@@ -1,0 +1,563 @@
+/**
+ * 回测页 — ECharts 图表（K线 + MA + 成交量 + MACD + 买卖标记）
+ *
+ * 单个 ECharts 实例 + 3 个 grid（xAxis 联动共享）:
+ *   - 主图 (60% 高): 蜡烛 + MA1~MA4
+ *   - 成交量 (15% 高): 红涨绿跌柱状图
+ *   - MACD (25% 高): DIF/DEA 折线 + MACD 柱
+ *
+ * 关键设计：
+ *   - 自定义均线：MA1~MA4 周期从页面输入框读取
+ *   - 买卖标记：通过 markPoint 叠加，BT_refreshChartMarkers() 增量刷新
+ *   - 光标：监听 'updateAxisPointer' 事件，实时把光标日期+收盘价写到底部 actionbar
+ */
+
+var BT_chart = null;            // ECharts 实例
+var BT_klineData = null;        // 当前 K 线完整数据 {dates, ohlc, volumes, ma5/10/20, macd, count, ...}
+var BT_maPeriods = [5, 10, 20, 60];  // MA 周期（从输入框实时读取）
+var BT_showFlags = { ma: true, macd: true, vol: true };  // 显示开关
+var BT_currentIdx = null;       // 光标所在的 K 线索引（也存 localStorage）
+var BT_visibleBars = 250;       // 固定显示的 K 线根数（缩放比例）
+var BT_zoomLocked = false;      // 比例锁定：true 时 setCursor 不调整 dataZoom
+
+// 缩放档位（+/- 每次变化的倍率）
+var BT_ZOOM_STEP = 1.5;
+var BT_VISIBLE_BARS_MIN = 20;   // 最少 20 根（再小 K 线太挤）
+var BT_VISIBLE_BARS_MAX = 1500; // 最多 1500 根（≈ 全量）
+
+// 恢复锁定状态
+try { BT_zoomLocked = JSON.parse(localStorage.getItem('bt_state_zoomLocked') || 'false') === true; } catch (e) { BT_zoomLocked = false; }
+
+// 从输入框读取 BT_visibleBars
+function BT_getVisibleBars() {
+  var el = document.getElementById('btVisibleBars');
+  var v = el ? parseInt(el.value) : 250;
+  return (v && v > 0) ? v : 250;
+}
+
+// 计算 zoom 范围（百分比）
+// mode = 'center' → idx 居中（默认，兼容旧逻辑）
+// mode = 'pinRight' → idx 落在窗口最右边缘（"下一根K线" 用这个）
+// mode = 'pinLeft' → idx 落在窗口最左边缘
+function BT_calcZoomRange(idx, mode) {
+  if (!BT_klineData) return { start: 0, end: 100 };
+  var total = BT_klineData.dates.length;
+  if (total <= 0) return { start: 0, end: 100 };
+  var vis = Math.min(BT_visibleBars, total);
+  if (idx == null) idx = (BT_currentIdx == null ? total - 1 : BT_currentIdx);
+  mode = mode || 'center';
+  var startIdx, endIdx;
+  if (mode === 'pinRight') {
+    endIdx   = Math.min(total, idx + 1);     // idx 在窗口最右（含 idx 自身）
+    startIdx = Math.max(0, endIdx - vis);
+    // 若窗口左端还能再扩（idx 距左端 > vis），保持窗口宽度不变
+    if (endIdx - startIdx < vis && startIdx > 0) {
+      startIdx = Math.max(0, endIdx - vis);
+    }
+  } else if (mode === 'pinLeft') {
+    startIdx = Math.max(0, idx);
+    endIdx   = Math.min(total, startIdx + vis);
+  } else {
+    // center: idx 居中
+    var half = vis / 2;
+    startIdx = Math.max(0, Math.min(total - vis, idx - half));
+    endIdx   = startIdx + vis;
+  }
+  // 转百分比（ECharts dataZoom 的 start/end 对应索引百分比）
+  var denom = Math.max(1, total - 1);
+  var sPct = (startIdx / denom) * 100;
+  var ePct = (endIdx   / denom) * 100;
+  return { start: sPct, end: ePct };
+}
+
+// 颜色（与项目内其他图表保持一致）
+var BT_COLOR_UP   = '#ef476f';  // A 股红涨
+var BT_COLOR_DOWN = '#2d9f7f';  // A 股绿跌
+var BT_MA_COLORS  = ['#ffd166', '#5c7cfa', '#7209b7', '#ff8c42'];  // MA1~MA4
+
+// 初始化图表实例
+function BT_initChart() {
+  var dom = document.getElementById('btChart');
+  if (!dom) return;
+  BT_chart = echarts.init(dom, null, { renderer: 'canvas' });
+  BT_chart.setOption(BT_getBaseOption());  // 先设个空骨架
+
+  // 监听光标移动 → 更新底部 actionbar
+  BT_chart.on('updateAxisPointer', function(event) {
+    var xAxisInfo = event.axesInfo && event.axesInfo[0];
+    if (xAxisInfo && xAxisInfo.value !== undefined && BT_klineData) {
+      var idx = xAxisInfo.value;
+      if (idx >= 0 && idx < BT_klineData.dates.length) {
+        BT_currentIdx = idx;
+        BT_currentDate = BT_klineData.dates[idx];
+        BT_currentClose = BT_klineData.ohlc[idx][1]; // [open, close, low, high]
+        BT_updateCursorDisplay();
+        // 同时刷新浮动盈亏
+        BT_renderStats();
+      }
+    }
+  });
+
+  // 主题切换时重绘
+  window.addEventListener('storage', function(e) {
+    if (e.key === 'app_theme') BT_applyTheme();
+  });
+}
+
+// 主题适配：根据当前 data-theme 切换网格/坐标轴颜色
+function BT_applyTheme() {
+  if (!BT_chart) return;
+  var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  BT_chart.setOption({
+    backgroundColor: 'transparent',
+    textStyle: { color: isDark ? '#ddd' : '#333' }
+  });
+}
+
+// 基础 option 框架（不依赖具体数据，初始化时调用一次）
+function BT_getBaseOption() {
+  var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return {
+    backgroundColor: 'transparent',
+    animation: false,  // 关动画，K线滑动更顺畅
+    textStyle: { color: isDark ? '#ddd' : '#333', fontSize: 12 },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross', link: [{ xAxisIndex: 'all' }], label: { backgroundColor: '#555' } },
+      backgroundColor: isDark ? 'rgba(40,40,60,0.95)' : 'rgba(255,255,255,0.95)',
+      borderColor: isDark ? '#555' : '#ccc',
+      textStyle: { color: isDark ? '#ddd' : '#333' },
+      formatter: BT_tooltipFormatter
+    },
+    axisPointer: { link: [{ xAxisIndex: 'all' }] },
+    grid: [
+      { left: 60, right: 30, top: 30,  height: '72%' },  // K线（主图）
+      { left: 60, right: 30, top: '76%', height: '10%' }, // 量
+      { left: 60, right: 30, top: '90%', height: '8%' }  // MACD
+    ],
+    xAxis: [
+      { type: 'category', data: [], gridIndex: 0, scale: true, boundaryGap: false,
+        axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
+        axisLabel: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
+      { type: 'category', data: [], gridIndex: 1, scale: true, boundaryGap: false,
+        axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
+        axisLabel: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
+      { type: 'category', data: [], gridIndex: 2, scale: true, boundaryGap: false,
+        axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
+        axisLabel: { show: true, color: isDark ? '#aaa' : '#666' },
+        axisTick: { show: false }, splitLine: { show: false } }
+    ],
+    yAxis: [
+      { gridIndex: 0, scale: true, splitArea: { show: false },
+        axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
+        axisLabel: { color: isDark ? '#aaa' : '#666' },
+        splitLine: { lineStyle: { color: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' } } },
+      { gridIndex: 1, scale: true, splitNumber: 2,
+        axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
+        axisLabel: { color: isDark ? '#aaa' : '#666', fontSize: 10 },
+        splitLine: { show: false } },
+      { gridIndex: 2, scale: true, splitNumber: 2,
+        axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
+        axisLabel: { color: isDark ? '#aaa' : '#666', fontSize: 10 },
+        splitLine: { show: false } }
+    ],
+    dataZoom: [
+      { type: 'inside', xAxisIndex: [0, 1, 2],
+        zoomLock: true,         // 锁定缩放（窗口大小由"显示根数"决定）
+        moveOnMouseMove: true,  // 允许拖动平移
+        moveOnMouseWheel: false,
+        preventDefaultMouseMove: true,
+        start: 0, end: 100
+      },
+      { show: true, xAxisIndex: [0, 1, 2], type: 'slider', bottom: 5, height: 18,
+        start: 0, end: 100,
+        zoomLock: true,         // 禁用缩放（拖动条只能滑不能拉）
+        showDetail: false,
+        textStyle: { color: isDark ? '#aaa' : '#666', fontSize: 10 },
+        borderColor: isDark ? '#555' : '#ccc' }
+    ],
+    series: []
+  };
+}
+
+// 自定义 tooltip（鼠标 hover 时显示 OHLC + MA + 成交额）
+function BT_tooltipFormatter(params) {
+  if (!params || params.length === 0) return '';
+  var idx = params[0].dataIndex;
+  if (!BT_klineData || !BT_klineData.ohlc[idx]) return '';
+  var ohlc = BT_klineData.ohlc[idx];
+  var date = BT_klineData.dates[idx];
+  var vol = BT_klineData.volumes[idx] || 0;
+  var lines = [
+    '<div style="font-weight:600;margin-bottom:4px;">' + date + '</div>',
+    '<div>开: ' + ohlc[0].toFixed(2) + ' 收: ' + ohlc[1].toFixed(2) + '</div>',
+    '<div>高: ' + ohlc[3].toFixed(2) + ' 低: ' + ohlc[2].toFixed(2) + '</div>',
+    '<div>成交: ' + vol.toLocaleString() + ' 万元</div>'
+  ];
+  // 加 MA 数据
+  var maKeys = ['ma5', 'ma10', 'ma20'];
+  for (var i = 0; i < BT_maPeriods.length; i++) {
+    var p = BT_maPeriods[i];
+    var arr = BT_computeMAFromCloses(BT_klineData.ohlc, p);
+    if (arr[idx] != null) {
+      lines.push('<div style="color:' + BT_MA_COLORS[i] + '">MA' + p + ': ' + arr[idx].toFixed(2) + '</div>');
+    }
+  }
+  return lines.join('');
+}
+
+// 从 ohlc 数组里取收盘价序列
+function BT_getCloses() {
+  if (!BT_klineData) return [];
+  return BT_klineData.ohlc.map(function(o) { return o[1]; });
+}
+
+// 前端计算 N 周期 MA（输入 OHLC 数组和周期 N，返回数组，前 N-1 项为 null）
+function BT_computeMAFromCloses(ohlc, n) {
+  var result = new Array(ohlc.length).fill(null);
+  if (ohlc.length < n) return result;
+  var sum = 0;
+  for (var i = 0; i < n; i++) sum += ohlc[i][1];
+  result[n - 1] = sum / n;
+  for (var j = n; j < ohlc.length; j++) {
+    sum += ohlc[j][1] - ohlc[j - n][1];
+    result[j] = sum / n;
+  }
+  return result;
+}
+
+// 渲染 K 线主图
+function BT_renderKLine(data) {
+  if (!BT_chart) BT_initChart();
+  BT_klineData = data;
+
+  var dates = data.dates;
+  var ohlc  = data.ohlc;
+  var vols  = data.volumes;
+
+  // 计算 4 条 MA
+  var closes = ohlc.map(function(o) { return o[1]; });
+  var maLines = [];
+  for (var i = 0; i < BT_maPeriods.length; i++) {
+    maLines.push({
+      name: 'MA' + BT_maPeriods[i],
+      type: 'line',
+      data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
+      smooth: true,
+      lineStyle: { width: 1, color: BT_MA_COLORS[i] },
+      showSymbol: false,
+      z: 5
+    });
+  }
+
+  // K 线 + 量 + MACD
+  var klineSeries = {
+    name: 'K线',
+    type: 'candlestick',
+    data: ohlc,
+    itemStyle: {
+      color: BT_COLOR_UP,        // 阳线（收>开）
+      color0: BT_COLOR_DOWN,     // 阴线（收<开）
+      borderColor: BT_COLOR_UP,
+      borderColor0: BT_COLOR_DOWN
+    },
+    markPoint: { data: [] },  // 买卖标记
+    z: 2
+  };
+
+  // 成交量（颜色跟随涨跌）
+  var volData = vols.map(function(v, i) {
+    var rise = ohlc[i][1] >= ohlc[i][0];
+    return {
+      value: v,
+      itemStyle: { color: rise ? BT_COLOR_UP : BT_COLOR_DOWN }
+    };
+  });
+  var volSeries = {
+    name: '成交',
+    type: 'bar',
+    xAxisIndex: 1,
+    yAxisIndex: 1,
+    data: volData,
+    z: 1
+  };
+
+  // MACD：DIF/DEA 折线 + MACD 柱
+  var macdData = data.macd || { dif: [], dea: [], macd: [] };
+  var macdBarData = (macdData.macd || []).map(function(v, i) {
+    return {
+      value: v,
+      itemStyle: { color: v >= 0 ? BT_COLOR_UP : BT_COLOR_DOWN }
+    };
+  });
+  var macdSeries = [
+    {
+      name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2,
+      data: macdData.dif || [], smooth: true, lineStyle: { width: 1, color: '#ffd166' },
+      showSymbol: false, z: 3
+    },
+    {
+      name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2,
+      data: macdData.dea || [], smooth: true, lineStyle: { width: 1, color: '#5c7cfa' },
+      showSymbol: false, z: 3
+    },
+    {
+      name: 'MACD', type: 'bar', xAxisIndex: 2, yAxisIndex: 2,
+      data: macdBarData, z: 1
+    }
+  ];
+
+  // 应用到图表
+  BT_chart.setOption({
+    xAxis: [{ data: dates }, { data: dates }, { data: dates }],
+    series: [klineSeries].concat(maLines).concat([volSeries]).concat(macdSeries)
+  });
+
+  // 显示/隐藏子图（通过 grid 的 height 控制）
+  BT_updateVisibleGrids();
+
+  // 同步底部光标 + 标记
+  BT_refreshChartMarkers();
+
+  // 默认光标：最后一根
+  if (BT_currentIdx == null || BT_currentIdx >= dates.length || BT_currentIdx < 0) {
+    BT_currentIdx = dates.length - 1;
+  }
+  BT_currentDate = dates[BT_currentIdx];
+  BT_currentClose = ohlc[BT_currentIdx][1];
+
+  // 根据"显示根数"应用固定缩放：加载后把光标钉在窗口最右（让用户立刻看到最新K线在最右边缘）
+  BT_visibleBars = BT_getVisibleBars();
+  var zr = BT_calcZoomRange(BT_currentIdx, 'pinRight');
+  BT_chart.setOption({ dataZoom: [{ start: zr.start, end: zr.end }, { start: zr.start, end: zr.end }] });
+
+  // 通过 dispatchAction 把 axisPointer 移到 BT_currentIdx
+  BT_chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: BT_currentIdx });
+
+  // 同步底部光标显示
+  BT_updateCursorDisplay();
+  BT_renderStats();
+}
+
+// 切换显示/隐藏子图
+function BT_updateVisibleGrids() {
+  if (!BT_chart) return;
+  var showVol  = BT_showFlags.vol;
+  var showMacd = BT_showFlags.macd;
+  var grids = [
+    { left: 60, right: 30, top: 30,    height: '72%' },
+    { left: 60, right: 30, top: '76%', height: showVol ? '10%' : '0%' },
+    { left: 60, right: 30, top: '90%', height: showMacd ? '8%' : (showVol ? '20%' : '30%') }
+  ];
+  // 调整主图高度：隐藏子图时主图更高
+  if (!showVol && !showMacd) {
+    grids[0].height = '90%';
+  } else if (!showVol) {
+    grids[0].height = '82%';
+  } else if (!showMacd) {
+    grids[0].height = '82%';
+  } else {
+    grids[0].height = '72%';
+  }
+  BT_chart.setOption({ grid: grids });
+}
+
+// 刷新买卖标记（增量更新，不重画全图）
+function BT_refreshChartMarkers() {
+  if (!BT_chart || !BT_klineData) return;
+  var dateIndex = {};
+  for (var i = 0; i < BT_klineData.dates.length; i++) {
+    dateIndex[BT_klineData.dates[i]] = i;
+  }
+  var points = [];
+  for (var j = 0; j < BT_trades.length; j++) {
+    var t = BT_trades[j];
+    var idx = dateIndex[t.date];
+    if (idx === undefined) continue;  // 落在当前显示范围外
+    // 标在最低价下方 1% 处，避免遮挡 K 线
+    var low = BT_klineData.ohlc[idx][2];
+    var offset = low * 0.01;
+    points.push({
+      name: t.action === 'buy' ? '买' : '卖',
+      coord: [idx, low - offset],
+      value: t.action === 'buy' ? 'B' : 'S',
+      symbol: t.action === 'buy' ? 'triangle' : 'arrow',
+      symbolSize: 12,
+      symbolRotate: t.action === 'buy' ? 0 : 180,
+      itemStyle: { color: t.action === 'buy' ? BT_COLOR_UP : BT_COLOR_DOWN },
+      label: { show: true, fontSize: 10, fontWeight: 'bold', color: '#fff', formatter: '{c}' }
+    });
+  }
+  BT_chart.setOption({
+    series: [{
+      name: 'K线',
+      markPoint: {
+        data: points,
+        animation: false,
+        silent: true  // 不响应鼠标事件，避免遮挡 hover
+      }
+    }]
+  });
+}
+
+// 切换 MA 周期后重画（从输入框读）
+function BT_updateMAPeriods() {
+  var inputs = [document.getElementById('ma1'), document.getElementById('ma2'),
+                document.getElementById('ma3'), document.getElementById('ma4')];
+  var newPeriods = inputs.map(function(el) {
+    var v = parseInt(el && el.value);
+    return (v && v > 0 && v <= 250) ? v : null;
+  }).filter(function(v) { return v !== null; });
+  if (newPeriods.length === 0) {
+    BT_toast('至少需要 1 条均线', 'warn');
+    return;
+  }
+  BT_maPeriods = newPeriods;
+  if (BT_klineData) BT_renderKLine(BT_klineData);  // 重画
+}
+
+// 切换显示开关
+function BT_toggleShowMA() {
+  BT_showFlags.ma = document.getElementById('showMA').checked;
+  if (BT_klineData) BT_renderKLine(BT_klineData);
+}
+function BT_toggleShowMACD() {
+  BT_showFlags.macd = document.getElementById('showMACD').checked;
+  BT_updateVisibleGrids();
+}
+function BT_toggleShowVol() {
+  BT_showFlags.vol = document.getElementById('showVol').checked;
+  BT_updateVisibleGrids();
+}
+
+// 窗口尺寸变化时重排
+window.addEventListener('resize', function() {
+  if (BT_chart) BT_chart.resize();
+});
+
+// ===== 光标 / 固定缩放 工具函数 =====
+
+// 更新底部 actionbar 的光标显示（日期 + 收盘价）
+function BT_updateCursorDisplay() {
+  var elDate = document.getElementById('curDate');
+  var elClose = document.getElementById('curClose');
+  if (elDate && BT_currentDate)  elDate.textContent = BT_currentDate;
+  if (elClose && BT_currentClose != null) elClose.textContent = BT_currentClose.toFixed(2);
+}
+
+// 设置光标到指定索引（被 BT_nextBar/BT_prevBar/外部调用）
+// mode: 'auto' = 居中（默认，鼠标 hover 时光标在窗口中间）
+//       'pinRight' = 钉到窗口最右（"下一根K线"专用）
+//       'pinLeft'  = 钉到窗口最左
+// 锁定时（BT_zoomLocked=true）一律不调整 dataZoom
+function BT_setCursor(idx, mode) {
+  if (!BT_chart || !BT_klineData) return;
+  var total = BT_klineData.dates.length;
+  if (total === 0) return;
+  if (idx < 0) idx = 0;
+  if (idx >= total) idx = total - 1;
+  BT_currentIdx = idx;
+  BT_currentDate = BT_klineData.dates[idx];
+  BT_currentClose = BT_klineData.ohlc[idx][1];
+
+  // 调整 dataZoom（锁定时不调，保持用户当前视野）
+  if (!BT_zoomLocked) {
+    var zr = BT_calcZoomRange(idx, mode || 'auto');
+    BT_chart.setOption({ dataZoom: [{ start: zr.start, end: zr.end }, { start: zr.start, end: zr.end }] });
+  }
+  BT_chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: idx });
+
+  BT_updateCursorDisplay();
+  BT_renderStats();
+}
+
+// 应用"显示根数"变更：调整 dataZoom，不重画
+// 模式：保持光标在窗口最右（pinRight），这样 +/- 后光标不会跳
+function BT_applyVisibleBars() {
+  if (!BT_chart || !BT_klineData) return;
+  BT_visibleBars = BT_getVisibleBars();
+  var zr = BT_calcZoomRange(BT_currentIdx, 'pinRight');
+  BT_chart.setOption({ dataZoom: [{ start: zr.start, end: zr.end }, { start: zr.start, end: zr.end }] });
+}
+
+// ===== 缩放 +/- 与比例锁定 =====
+
+// 放大（K 线更密，显示更少根数）
+function BT_zoomIn() {
+  if (!BT_klineData) { BT_toast('请先加载 K 线', 'warn'); return; }
+  var newBars = Math.max(BT_VISIBLE_BARS_MIN, Math.round(BT_visibleBars / BT_ZOOM_STEP));
+  if (newBars >= BT_visibleBars) {
+    BT_toast('已经放到最大（' + BT_VISIBLE_BARS_MIN + ' 根）', 'warn');
+    return;
+  }
+  BT_visibleBars = newBars;
+  // 顺序：先同步下拉框 → 再调 applyVisibleBars（applyVisibleBars 会从下拉框读回新值）
+  BT_syncVisibleBarsSelect();
+  BT_applyVisibleBars();
+  BT_saveState();
+}
+
+// 缩小（K 线更疏，显示更多根数）
+function BT_zoomOut() {
+  if (!BT_klineData) { BT_toast('请先加载 K 线', 'warn'); return; }
+  var total = BT_klineData.dates.length;
+  var maxBars = Math.min(BT_VISIBLE_BARS_MAX, total);
+  var newBars = Math.min(maxBars, Math.round(BT_visibleBars * BT_ZOOM_STEP));
+  if (newBars <= BT_visibleBars) {
+    BT_toast('已经缩到最小（' + maxBars + ' 根）', 'warn');
+    return;
+  }
+  BT_visibleBars = newBars;
+  // 顺序：先同步下拉框 → 再调 applyVisibleBars
+  BT_syncVisibleBarsSelect();
+  BT_applyVisibleBars();
+  BT_saveState();
+}
+
+// 把当前 BT_visibleBars 同步到下拉框（若档位不匹配则临时插入一项）
+function BT_syncVisibleBarsSelect() {
+  var el = document.getElementById('btVisibleBars');
+  if (!el) return;
+  var matchIdx = -1;
+  for (var i = 0; i < el.options.length; i++) {
+    if (parseInt(el.options[i].value) === BT_visibleBars) { matchIdx = i; break; }
+  }
+  if (matchIdx >= 0) {
+    el.value = BT_visibleBars;
+  } else {
+    var opt = document.createElement('option');
+    opt.value = String(BT_visibleBars);
+    opt.textContent = BT_visibleBars + ' 根（手动）';
+    el.appendChild(opt);
+    el.value = String(BT_visibleBars);
+  }
+}
+
+// 切换比例锁定
+function BT_toggleZoomLock() {
+  BT_zoomLocked = !BT_zoomLocked;
+  try { localStorage.setItem('bt_state_zoomLocked', JSON.stringify(BT_zoomLocked)); } catch (e) {}
+  var btn = document.getElementById('btnZoomLock');
+  if (btn) {
+    btn.textContent = BT_zoomLocked ? '🔒 锁定' : '🔓 锁定';
+    btn.classList.toggle('active', BT_zoomLocked);
+    btn.title = BT_zoomLocked
+      ? '已锁定比例：拖动滑块 / 下一根K线 都不会改变窗口'
+      : '未锁定：拖动 / 推进光标时会自动调整窗口';
+  }
+  BT_toast(BT_zoomLocked ? '已锁定比例' : '已解锁比例', BT_zoomLocked ? 'success' : 'warn');
+}
+
+// 初始化锁定按钮的 UI 状态（页面加载时调用）
+function BT_initZoomLockUI() {
+  var btn = document.getElementById('btnZoomLock');
+  if (!btn) return;
+  if (BT_zoomLocked) {
+    btn.textContent = '🔒 锁定';
+    btn.classList.add('active');
+    btn.title = '已锁定比例：拖动滑块 / 下一根K线 都不会改变窗口';
+  } else {
+    btn.textContent = '🔓 锁定';
+    btn.title = '未锁定：拖动 / 推进光标时会自动调整窗口';
+  }
+}

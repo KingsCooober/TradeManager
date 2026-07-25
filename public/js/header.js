@@ -43,6 +43,7 @@ function renderAppHeader(page) {
         '<a href="index.html" class="header-tab' + (page === 'index' ? ' active' : '') + '" data-page="index" title="实时记录开仓 / 平仓 / 仓位管理；计算器辅助决策">📊 交易管理</a>' +
         '<a href="daily-review.html" class="header-tab' + (page === 'daily' ? ' active' : '') + '" data-page="daily" title="每日盘后总结：纪律 / 大盘 / 心态 / 复盘笔记">📋 每日复盘</a>' +
         '<a href="diary2.html" class="header-tab' + (page === 'diary' ? ' active' : '') + '" data-page="diary" title="历史交易深度复盘：筛选 / 排序 / 单笔分析">📖 复盘总结</a>' +
+        '<a href="backtest.html" class="header-tab' + (page === 'backtest' ? ' active' : '') + '" data-page="backtest" title="看着历史 K 线手动模拟买卖的练习工具">🎯 回测练习</a>' +
       '</nav>' +
     '</div>' +
     '<div class="header-right">' +

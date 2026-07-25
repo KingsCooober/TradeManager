@@ -3,6 +3,10 @@ const cors = require('cors');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const dns = require('dns');
+// ★ 强制 IPv4：服务器无 IPv6 出口，DNS 同时返回 A/AAAA 时 Node 默认先试 IPv6 会 ENETUNREACH
+// 兜底：各 market-* 模块自己也设了，这里再保一次，防止未来新增模块漏写
+try { dns.setDefaultResultOrder('ipv4first'); } catch (e) {}
 const sqlite3 = require('sqlite3').verbose();
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
@@ -920,15 +924,32 @@ app.get('/api/market/history', auth.authMiddleware, async (req, res) => {
 });
 
 // 单只指数 K线完整快照（含 MA5/10/20 + MACD(12,26,9) + 成交额）
-// 入参：code = sh|zza500|cyb50|kc50，count = 60|120|250（默认 120）
+// 入参：code = sh|zza500|cyb50|kc50，count = 30~1500（默认 120）
 app.get('/api/market/kline/:code', auth.authMiddleware, async (req, res) => {
   const code = req.params.code;
-  const count = Math.min(250, Math.max(30, parseInt(req.query.count) || 120));
+  const count = Math.min(1500, Math.max(30, parseInt(req.query.count) || 120));
   try {
     const data = await market.getKLineSnapshot(code, count);
     res.json(data);
   } catch (e) {
     console.error('[market] getKLineSnapshot 失败:', e.message);
+    res.status(500).json({ error: 'K线获取失败: ' + e.message });
+  }
+});
+
+// 单只个股 K线（不限 A 股个股，symbol=sh600000 / sz000001 等）
+// 入参：symbol = shXXXXXX / szXXXXXX，count = 30~1500（默认 1200，约 5 年）
+app.get('/api/market/kline-stock/:symbol', auth.authMiddleware, async (req, res) => {
+  const symbol = req.params.symbol.toLowerCase();
+  if (!/^(sh|sz)\d{6}$/.test(symbol)) {
+    return res.status(400).json({ error: 'symbol 格式错误，应为 shXXXXXX 或 szXXXXXX' });
+  }
+  const count = Math.min(1500, Math.max(30, parseInt(req.query.count) || 1200));
+  try {
+    const data = await market.getKLineSnapshotForSymbol(symbol, count);
+    res.json(data);
+  } catch (e) {
+    console.error('[market] getKLineSnapshotForSymbol 失败:', e.message);
     res.status(500).json({ error: 'K线获取失败: ' + e.message });
   }
 });

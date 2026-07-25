@@ -142,6 +142,9 @@ function releaseEMLock() {
 
 // 腾讯 K线接口：web.ifzq.gtimg.cn 可用
 // day 数组字段：[日期, 开, 收, 高, 低, 成交额(元), 成交量(手), 涨跌幅%, ...]
+// 重要：当 param 末尾带 ,qfq 时返回 qfqday（前复权），不带时返回 day（不复权）。
+// 旧代码只查 day 会导致个股/指数都报"无 day 数组"——实际是字段名错了。
+// 限制：单次最多返回 640 行（约 2.5 年），超过需要分页（见 fetchKLineFromTencentPaginated）
 async function fetchKLineFromTencent(symbol, count) {
   const url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' +
     encodeURIComponent(symbol + ',day,,,' + count + ',qfq');
@@ -150,8 +153,11 @@ async function fetchKLineFromTencent(symbol, count) {
   const json = JSON.parse(buf.toString('utf8'));
   if (json.code !== 0) throw new Error('腾讯K线返回 code=' + json.code);
   const symData = json.data && json.data[symbol];
-  if (!symData || !Array.isArray(symData.day)) throw new Error('腾讯K线无 day 数组');
-  return symData.day.map(function(line) {
+  if (!symData) throw new Error('腾讯K线无 ' + symbol + ' 数据');
+  // 兼容：qfqday（带,qfq 时）/ day（不带时）
+  const arr = symData.qfqday || symData.day;
+  if (!Array.isArray(arr) || arr.length === 0) throw new Error('腾讯K线无 day 数组');
+  return arr.map(function(line) {
     return {
       date:   line[0],
       open:   parseFloat(line[1]),
@@ -164,21 +170,62 @@ async function fetchKLineFromTencent(symbol, count) {
   });
 }
 
+// 腾讯 K线分页：单次上限 640 行，按 [startDate, endDate] 区间请求
+// 用于回测等需要 >2.5 年历史的场景
+async function fetchKLineFromTencentPaginated(symbol, startDate, endDate) {
+  const url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' +
+    encodeURIComponent(symbol + ',day,' + startDate + ',' + endDate + ',640,qfq');
+  const buf = await httpsGet(url);
+  if (buf.length === 0) throw new Error('腾讯K线分页接口返回空');
+  const json = JSON.parse(buf.toString('utf8'));
+  if (json.code !== 0) throw new Error('腾讯K线分页返回 code=' + json.code);
+  const symData = json.data && json.data[symbol];
+  if (!symData) throw new Error('腾讯K线分页无 ' + symbol + ' 数据');
+  const arr = symData.qfqday || symData.day;
+  if (!Array.isArray(arr) || arr.length === 0) throw new Error('腾讯K线分页无 day 数组');
+  return arr.map(function(line) {
+    return {
+      date:   line[0],
+      open:   parseFloat(line[1]),
+      close:  parseFloat(line[2]),
+      high:   parseFloat(line[3]),
+      low:    parseFloat(line[4]),
+      amount: parseFloat(line[5]) || 0,
+      volume: parseFloat(line[6]) || 0
+    };
+  });
+}
+
+// symbol → secid 转换（用于东方财富 K线接口）
+// 1.xxxxxx = 沪市(sh)，0.xxxxxx = 深市(sz)，116.xxxxxx = 北交所(bj)
+function symbolToSecid(symbol) {
+  if (!symbol) return null;
+  if (symbol.startsWith('sh')) return '1.' + symbol.slice(2);
+  if (symbol.startsWith('sz')) return '0.' + symbol.slice(2);
+  if (symbol.startsWith('bj')) return '116.' + symbol.slice(2);
+  return null;
+}
+
 async function fetchKLine(symbol, count = 30) {
   // 默认走腾讯（可访问）；东方财富 push2his 经常 socket hang up，仅作回退
+  // 兼容 INDEX_MAP 中的指数（带 name 元信息），也支持任意 sh/sz/bj 个股
   const meta = Object.values(INDEX_MAP).find(function(m) { return m.symbol === symbol; });
-  if (!meta) throw new Error('K线接口不支持的指数: ' + symbol);
+  const displayName = meta ? meta.name : null;
+  const secid = symbolToSecid(symbol);
+  if (!secid) throw new Error('K线接口不支持的代码: ' + symbol);
 
   // 1) 腾讯
   try {
-    return await fetchKLineFromTencent(meta.symbol, count);
+    const data = await fetchKLineFromTencent(symbol, count);
+    if (displayName && data.length > 0) data[0].__name = displayName; // 透传 name
+    return data;
   } catch (e1) {
     console.warn('[fetchKLine] 腾讯失败，回退东方财富: ' + e1.message);
   }
 
   // 2) 东方财富 push2his
   const url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get' +
-    '?secid=' + meta.secid +
+    '?secid=' + secid +
     '&fields1=f1,f2,f3,f4,f5' +
     '&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61' +
     '&klt=101&fqt=0&end=20991231&lmt=' + count;
@@ -365,24 +412,23 @@ function calcMACD(closes) {
 // ==================== K线完整快照（含技术指标） ====================
 // 入参：key - 指数 key (sh/zza500/cyb50/kc50)，count - 根数 (默认 120)
 // 返回：{ key, name, symbol, dates[], ohlc[], volumes[], ma5/10/20[], macd: {dif,dea,macd}[] }
-async function getKLineSnapshot(key, count = 120) {
-  const meta = INDEX_MAP[key];
-  if (!meta) throw new Error('Unknown index key: ' + key);
-
-  const cacheKey = 'kline:' + key + ':' + count;
-  const cached = getCache(cacheKey);
-  if (cached) return Object.assign({ cached: true }, cached);
-
+// 构造 K线快照的核心逻辑（被 getKLineSnapshot / getKLineSnapshotForSymbol 共用）
+// 入参：symbol, name, count
+// 返回：{ key/symbol, name, symbol, count, dates[], ohlc[], volumes[], ma5/10/20[], macd:{dif,dea,macd}[] }
+async function buildKLineSnapshot(symbol, name, count) {
   // 1. 拉取 K线原始数据（多取 35 根用于计算 MA26/MACD 的预热期）
-  const rawKlines = await fetchKLine(meta.symbol, count + 35);
+  //    腾讯单次最多 640 行，超过则按 2.5 年/段自动分页
+  const rawKlines = await fetchKLineWithPagination(symbol, count + 35);
   if (rawKlines.length === 0) throw new Error('K线数据为空');
+
+  // 透传 name（fetchKLine 把 INDEX_MAP 的 name 挂到首条 __name）
+  const finalName = name || (rawKlines[0] && rawKlines[0].__name) || symbol;
 
   // 2. 截取最后 count 根作为主数据，前面 pre 根用于指标预热
   const klines = rawKlines.slice(-count);
   const dates = klines.map(k => k.date);
-  const ohlc  = klines.map(k => [k.open, k.close, k.low, k.high]);  // ECharts candlestick 顺序
-  // 成交额：k.amount 是东方财富返回的金额（元）→ 转为万元便于前端展示
-  // （前端 Y 轴再除以 10000 转为亿元）
+  const ohlc  = klines.map(k => [k.open, k.close, k.low, k.high]);
+  // 成交额：k.amount（腾讯返回的是元）→ 转为万元
   const amounts = klines.map(k => Math.round((k.amount || 0) / 10000));
 
   // 3. 计算指标（基于完整 pre+count 序列保证 MA26/MACD 正确）
@@ -401,10 +447,9 @@ async function getKLineSnapshot(key, count = 120) {
   const dea   = fullMACD.dea.slice(preLen);
   const macd  = fullMACD.macd.slice(preLen);
 
-  const data = {
-    key:     key,
-    name:    meta.name,
-    symbol:  meta.symbol,
+  return {
+    name:    finalName,
+    symbol:  symbol,
     count:   count,
     dates:   dates,
     ohlc:    ohlc,
@@ -416,7 +461,89 @@ async function getKLineSnapshot(key, count = 120) {
     macd:    { dif: dif, dea: dea, macd: macd },
     fetchedAt: new Date().toISOString()
   };
+}
 
+// K线分页拉取：自动判断单次/多次
+// count <= 640：单次 fetchKLine
+// count >  640：先用 fetchKLine 拉最近 count 行（拿到最新日期 endDate），
+//               再向前按 2.5 年/段分页拉，最后合并去重排序
+async function fetchKLineWithPagination(symbol, count) {
+  if (count <= 640) {
+    return await fetchKLine(symbol, count);
+  }
+
+  // 先取最近 640 行拿到 endDate 和名称信息
+  const firstBatch = await fetchKLine(symbol, 640);
+  if (firstBatch.length === 0) return firstBatch;
+
+  const endDate = firstBatch[firstBatch.length - 1].date;
+  const name = firstBatch[0].__name;
+
+  // 估算还需多少段：每段 640 行，向上取整
+  const totalBatches = Math.ceil(count / 640);
+  const allBatches = [firstBatch];
+
+  for (let i = 1; i < totalBatches; i++) {
+    // 上一段最旧日期的前一天 = 下一段 endDate
+    const prevStartDate = allBatches[allBatches.length - 1][0].date;
+    const prevEndDate   = allBatches[allBatches.length - 1][allBatches[allBatches.length - 1].length - 1].date;
+    // 下一段：startDate 推到比 prevStartDate 更早的某个日期，endDate = prevStartDate
+    // 用 prevStartDate 的前一天作为新段的 endDate
+    const segEnd = prevStartDate; // 取到这前一天为止（不重叠）
+    const segStart = subtractYears(segEnd, 3); // 向前 3 年一段（每段实际最多 640）
+    try {
+      const seg = await fetchKLineFromTencentPaginated(symbol, segStart, segEnd);
+      if (seg.length === 0) break;
+      // 透传 name
+      if (name && seg.length > 0) seg[0].__name = name;
+      // 去除与已有数据重叠的部分（按日期）
+      const lastOldDate = allBatches[allBatches.length - 1][0].date;
+      const deduped = seg.filter(k => k.date < lastOldDate);
+      if (deduped.length === 0) break;
+      allBatches.unshift(deduped);
+      // 如果这一段没填满 640，说明已经到历史最远了
+      if (deduped.length < 600) break;
+    } catch (e) {
+      console.warn('[fetchKLineWithPagination] 分页失败: ' + e.message);
+      break;
+    }
+  }
+
+  // 合并 + 按日期升序 + 截取 count
+  const merged = [].concat(...allBatches).sort((a, b) => a.date.localeCompare(b.date));
+  return merged.slice(-count);
+}
+
+// 日期减 N 年（YYYY-MM-DD → YYYY-MM-DD）
+function subtractYears(dateStr, years) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCFullYear(d.getUTCFullYear() - years);
+  return d.toISOString().slice(0, 10);
+}
+
+async function getKLineSnapshot(key, count = 120) {
+  const meta = INDEX_MAP[key];
+  if (!meta) throw new Error('Unknown index key: ' + key);
+
+  const cacheKey = 'kline:' + key + ':' + count;
+  const cached = getCache(cacheKey);
+  if (cached) return Object.assign({ key: key, cached: true }, cached);
+
+  const data = await buildKLineSnapshot(meta.symbol, meta.name, count);
+  data.key = key;
+  setCache(cacheKey, data);
+  return data;
+}
+
+// 单只个股 K线（symbol=sh600000 / sz000001 / bj8xxxxxx）
+// 与 getKLineSnapshot 输出结构一致，额外带 key=null（标识非指数）
+async function getKLineSnapshotForSymbol(symbol, count = 1200) {
+  const cacheKey = 'kline-stock:' + symbol + ':' + count;
+  const cached = getCache(cacheKey);
+  if (cached) return Object.assign({ key: null, cached: true }, cached);
+
+  const data = await buildKLineSnapshot(symbol, null, count);
+  data.key = null;
   setCache(cacheKey, data);
   return data;
 }
@@ -525,5 +652,6 @@ module.exports = {
   fetchKLine,
   fetchQuotes,
   getKLineSnapshot,
+  getKLineSnapshotForSymbol,
   INDEX_MAP
 };

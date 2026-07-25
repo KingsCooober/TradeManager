@@ -35,6 +35,7 @@ function httpsGet(url, redirects = 0) {
     const req = https.get({
       host: u.host,
       path: u.pathname + u.search,
+      family: 4,   // ★ 强制 IPv4
       timeout: 15000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0',

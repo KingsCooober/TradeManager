@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>回测练习 - Trade Manager</title>
+<link rel="stylesheet" href="css/main.css?v=15">
+<style>
+/* 回测页专用样式（独立内联，避免污染 main.css） */
+.bt-page { padding: 16px; max-width: 1600px; margin: 0 auto; }
+
+.bt-intro {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: var(--text-secondary, #555);
+}
+
+.bt-controlbar {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+}
+.bt-controlbar label { font-size: 13px; color: var(--text-secondary, #555); margin-right: 4px; }
+.bt-controlbar input[type="text"],
+.bt-controlbar input[type="number"] {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #d0d4dc);
+  border-radius: 4px;
+  background: var(--bg-input, #f5f7fa);
+  color: var(--text-primary, #222);
+  font-size: 13px;
+  width: 100px;
+}
+.bt-controlbar input[type="text"] { width: 130px; }
+.bt-controlbar input.ma-input { width: 50px; text-align: center; }
+.bt-controlbar .bt-group {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; background: var(--bg-subtle, #f5f7fa);
+  border-radius: 6px;
+}
+.bt-controlbar .bt-actions { margin-left: auto; display: flex; gap: 8px; }
+
+.bt-chart-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 12px;
+}
+#btChart { width: 100%; height: 720px; }
+
+.bt-actionbar {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.bt-actionbar .bt-cursor {
+  font-size: 14px;
+  color: var(--text-primary, #222);
+  padding: 4px 10px;
+  background: var(--bg-subtle, #f5f7fa);
+  border-radius: 4px;
+  font-family: monospace;
+}
+.bt-actionbar .bt-cursor strong { color: var(--color-blue, #4361ee); margin: 0 4px; }
+.bt-actionbar input[type="number"] {
+  padding: 5px 8px;
+  border: 1px solid var(--border-color, #d0d4dc);
+  border-radius: 4px;
+  background: var(--bg-input, #f5f7fa);
+  color: var(--text-primary, #222);
+  font-size: 13px;
+  width: 100px;
+}
+.bt-actionbar .bt-btn-group { display: flex; gap: 6px; }
+.bt-actionbar .bt-pos-group { display: inline-flex; gap: 0; border: 1px solid var(--border-color, #d0d4dc); border-radius: 4px; overflow: hidden; }
+.bt-actionbar .bt-pos-btn {
+  padding: 5px 14px;
+  background: var(--bg-input, #f5f7fa);
+  color: var(--text-primary, #222);
+  border: none;
+  border-right: 1px solid var(--border-color, #d0d4dc);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.1s;
+}
+.bt-actionbar .bt-pos-btn:last-child { border-right: none; }
+.bt-actionbar .bt-pos-btn:hover { background: var(--border-color, #e3e6ed); }
+.bt-actionbar .bt-pos-btn.active { background: var(--color-blue, #4361ee); color: #fff; font-weight: 600; }
+
+.bt-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.bt-stat {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+.bt-stat-label { font-size: 12px; color: var(--text-secondary, #666); margin-bottom: 6px; }
+.bt-stat-value { font-size: 22px; font-weight: 600; color: var(--text-primary, #222); font-family: monospace; }
+.bt-stat-value.up { color: var(--color-green, #2d9f7f); }
+.bt-stat-value.down { color: var(--color-red, #ef476f); }
+
+.bt-trades {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+.bt-trades h3 { margin: 0 0 10px; font-size: 15px; }
+.bt-trades table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.bt-trades th {
+  text-align: left;
+  padding: 6px 8px;
+  background: var(--bg-subtle, #f5f7fa);
+  border-bottom: 1px solid var(--border-color, #e3e6ed);
+  font-weight: 600;
+  color: var(--text-secondary, #666);
+}
+.bt-trades td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color, #e3e6ed);
+  font-family: monospace;
+}
+.bt-trades tr:hover { background: var(--bg-hover, #eef3ff); }
+.bt-trades .bt-buy { color: var(--color-red, #ef476f); font-weight: 600; }
+.bt-trades .bt-sell { color: var(--color-green, #2d9f7f); font-weight: 600; }
+.bt-trades .bt-del {
+  cursor: pointer; color: var(--text-secondary, #999);
+  border: none; background: transparent; font-size: 16px;
+}
+.bt-trades .bt-del:hover { color: var(--color-red, #ef476f); }
+
+.bt-empty { color: var(--text-secondary, #999); text-align: center; padding: 20px; }
+
+.bt-toast {
+  position: fixed; top: 80px; right: 20px;
+  background: var(--bg-card); border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 6px; padding: 10px 16px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  z-index: 9999; font-size: 14px;
+  opacity: 0; transition: opacity 0.2s;
+}
+.bt-toast.show { opacity: 1; }
+.bt-toast.success { border-left: 3px solid var(--color-green, #2d9f7f); }
+.bt-toast.error { border-left: 3px solid var(--color-red, #ef476f); }
+.bt-toast.warn { border-left: 3px solid var(--color-yellow, #ffd166); }
+
+/* 小按钮（缩放/锁定） */
+.btn.btn-sm { padding: 4px 8px; font-size: 13px; line-height: 1.2; }
+.btn.active { background: var(--color-blue, #4361ee); color: #fff; border-color: var(--color-blue, #4361ee); }
+.btn.btn-sm#btnZoomLock.active { background: var(--color-yellow, #ffd166); color: #333; border-color: var(--color-yellow, #ffd166); }
+
+[data-theme="dark"] .bt-controlbar,
+[data-theme="dark"] .bt-chart-wrap,
+[data-theme="dark"] .bt-actionbar,
+[data-theme="dark"] .bt-stat,
+[data-theme="dark"] .bt-trades,
+[data-theme="dark"] .bt-intro,
+[data-theme="dark"] .bt-toast {
+  border-color: rgba(255,255,255,0.08);
+}
+</style>
+</head>
+<body>
+
+<header class="app-header" id="appHeader"></header>
+
+<div class="page-intro">
+  <div class="page-intro-text">
+    <strong>🎯 回测练习</strong> — 选标的、拉 5 年 K 线、看着图手动模拟买卖，系统帮你算胜率/盈亏比/总收益。
+    <span class="page-intro-hint">数据基于历史真实行情（不复权），纯练习用，不构成投资建议。</span>
+  </div>
+</div>
+
+<main class="bt-page">
+
+  <!-- 控制栏：标的 + 均线周期 + MACD/量 开关 + 加载按钮 -->
+  <div class="bt-controlbar">
+    <div class="bt-group">
+      <label>标的:</label>
+      <input type="text" id="btSymbol" value="sh600000" maxlength="9" placeholder="如 sh600000">
+    </div>
+    <div class="bt-group">
+      <label>回看:</label>
+      <select id="btYears">
+        <option value="1">近 1 年</option>
+        <option value="2">近 2 年</option>
+        <option value="3">近 3 年</option>
+        <option value="5" selected>近 5 年</option>
+        <option value="all">最大(1500 根)</option>
+      </select>
+    </div>
+    <div class="bt-group">
+      <label>均线:</label>
+      <input type="number" class="ma-input" id="ma1" value="5"  min="1" max="250" title="MA 周期 1">
+      <input type="number" class="ma-input" id="ma2" value="10" min="1" max="250" title="MA 周期 2">
+      <input type="number" class="ma-input" id="ma3" value="20" min="1" max="250" title="MA 周期 3">
+      <input type="number" class="ma-input" id="ma4" value="60" min="1" max="250" title="MA 周期 4">
+    </div>
+    <div class="bt-group">
+      <label>显示:</label>
+      <select id="btVisibleBars" title="固定显示根数（K线缩放比例）">
+        <option value="60">60 根</option>
+        <option value="120">120 根</option>
+        <option value="250" selected>250 根（1年）</option>
+        <option value="500">500 根（2年）</option>
+        <option value="750">750 根（3年）</option>
+        <option value="1200">1200 根（5年）</option>
+      </select>
+    </div>
+    <div class="bt-group">
+      <label>缩放:</label>
+      <button class="btn btn-sm" id="btnZoomIn"  onclick="BT_zoomIn()"  title="放大（K线更密）">🔍＋</button>
+      <button class="btn btn-sm" id="btnZoomOut" onclick="BT_zoomOut()" title="缩小（K线更疏）">🔍−</button>
+      <button class="btn btn-sm" id="btnZoomLock" onclick="BT_toggleZoomLock()" title="未锁定：拖动 / 推进光标时会自动调整窗口">🔓 锁定</button>
+    </div>
+    <div class="bt-group">
+      <label><input type="checkbox" id="showMA" checked> MA</label>
+      <label><input type="checkbox" id="showMACD" checked> MACD</label>
+      <label><input type="checkbox" id="showVol" checked> 量</label>
+    </div>
+    <div class="bt-actions">
+      <button class="btn btn-primary" id="btnLoad" onclick="BT_loadData()">📥 加载 K 线</button>
+      <button class="btn btn-gray"   id="btnClear" onclick="BT_clearTrades()">🗑 清空交易</button>
+      <button class="btn btn-warning" id="btnFinish" onclick="BT_finishBacktest()" title="标记当前标的的回测结束（保存本次回测摘要）">🏁 完成回测</button>
+    </div>
+  </div>
+
+  <!-- K 线主图（蜡烛 + MA + 成交量 + MACD 三个子图） -->
+  <div class="bt-chart-wrap">
+    <div id="btChart"></div>
+  </div>
+
+  <!-- 买卖操作栏 -->
+  <div class="bt-actionbar">
+    <span class="bt-cursor">光标: <strong id="curDate">--</strong> 收盘 <strong id="curClose">--</strong></span>
+    <div class="bt-group">
+      <label>仓位:</label>
+      <div class="bt-pos-group">
+        <button type="button" class="bt-pos-btn" data-pos="half" onclick="BT_setPosition('half')">半仓</button>
+        <button type="button" class="bt-pos-btn active" data-pos="full" onclick="BT_setPosition('full')">全仓</button>
+      </div>
+    </div>
+    <div class="bt-group">
+      <label>现价:</label>
+      <input type="number" id="btPrice" step="0.01" placeholder="默认=光标日收盘价">
+    </div>
+    <div class="bt-btn-group">
+      <button class="btn btn-primary" id="btnNextBar" onclick="BT_nextBar()" title="光标移到下一根K线（→）">⏭ 下一根K线</button>
+      <button class="btn btn-primary" id="btnPrevBar" onclick="BT_prevBar()" title="光标移到上一根K线（←）">⏮ 上一根K线</button>
+      <button class="btn btn-danger" id="btnBuy" onclick="BT_buy()">🟥 买入</button>
+      <button class="btn btn-success" id="btnSell" onclick="BT_sell()">🟩 卖出</button>
+      <button class="btn btn-warning" id="btnClearPos" onclick="BT_clearPosition()">清仓</button>
+    </div>
+    <span style="color: var(--text-secondary, #666); font-size: 12px;">
+      💡 提示：先点「⏭ 下一根K线」推进光标，再点「🟥 买入/🟩 卖出」按光标日<strong>收盘价</strong>成交。
+    </span>
+  </div>
+
+  <!-- 核心指标卡：只看胜率和盈亏比 -->
+  <div class="bt-stats" id="btStats">
+    <div class="bt-stat"><div class="bt-stat-label">胜率</div><div class="bt-stat-value" id="statWinRate">--</div></div>
+    <div class="bt-stat"><div class="bt-stat-label">盈亏比</div><div class="bt-stat-value" id="statProfitFactor">--</div></div>
+    <div class="bt-stat"><div class="bt-stat-label">交易次数</div><div class="bt-stat-value" id="statTradeCount">--</div></div>
+  </div>
+
+  <!-- 交易明细 -->
+  <div class="bt-trades">
+    <h3>📋 交易明细 <span style="font-size: 12px; color: var(--text-secondary, #999); font-weight: normal;">（点击 ✕ 删除最后一笔）</span></h3>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 50px;">#</th>
+          <th>日期</th>
+          <th>方向</th>
+          <th style="text-align: right;">价格</th>
+          <th style="text-align: right;">本笔盈亏</th>
+          <th style="width: 40px;"></th>
+        </tr>
+      </thead>
+      <tbody id="btTradesBody">
+        <tr><td colspan="6" class="bt-empty">还没有交易记录，加载 K 线后开始模拟买卖吧 👆</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</main>
+
+<div id="btToast" class="bt-toast"></div>
+
+<!-- 引入 ECharts（CDN） -->
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+
+<!-- 复用项目内已有模块（按依赖顺序） -->
+<script src="js/utils.js?v=7"></script>
+<script src="js/header.js?v=3"></script>
+<script>renderAppHeader('backtest');</script>
+<script src="js/sync.js?v=9"></script>
+
+<!-- 回测专用模块（顺序：图表 → 交易 → 入口） -->
+<script src="js/backtest-trade.js?v=2"></script>
+<script src="js/backtest-chart.js?v=40"></script>
+<script src="js/backtest-main.js?v=12"></script>
+
+<script>
+// 主题初始化（与 diary2.html 一致）
+(function() {
+  var saved = localStorage.getItem('app_theme');
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+
+window.addEventListener('load', function() {
+  BT_init();
+});
+</script>
+</body>
+</html>
