@@ -14,8 +14,10 @@
 const crypto = require('crypto');
 const os = require('os');
 
-const JWT_SECRET = process.env.JWT_SECRET ||
-  crypto.createHash('sha256').update(os.hostname() + __dirname + 'trademanager-v1').digest('hex');
+// ★ 修复：用固定字符串作为默认 secret，去掉 hostname 依赖
+// （之前用 os.hostname() 会导致本地与服务器 secret 不同，本地签的 token 在服务器 401）
+// 生产环境强烈建议通过环境变量 JWT_SECRET 注入自己的密钥
+const JWT_SECRET = process.env.JWT_SECRET || 'trademanager-fixed-jwt-secret-v1';
 
 const JWT_EXPIRES_IN = 7 * 24 * 60 * 60; // 7 天，单位：秒
 
