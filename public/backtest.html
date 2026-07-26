@@ -57,28 +57,153 @@
   padding: 8px;
   margin-bottom: 12px;
 }
-#btChart { width: 100%; height: 720px; }
+#btChart { width: 100%; height: 730px; min-width: 0; }  /* K线 360 + 量 90 + MACD 90 + 资金 120 + 间距 + slider = 730px */
+
+/* 大盘指数窗口 */
+.bt-index-body {
+  flex: 1;
+  min-width: 0;       /* 与主图 K线一致：flex 子项必须设 0 才能收缩 */
+  display: flex;
+  flex-direction: column;
+}
+.bt-index-spacer {
+  width: 180px;       /* 与主图右侧 .bt-actionbar 同宽 → 两图 K线绘图区左右对齐 */
+  flex-shrink: 0;
+}
+/* 指数图右侧数据栏：跟主图操作栏 180px 同宽，但只显示指数数据（无按钮） */
+.bt-index-actionbar {
+  width: 180px;
+  flex-shrink: 0;
+}
+.bt-index-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--bg-subtle, #f5f7fa);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+.bt-index-title { font-size: 14px; font-weight: 600; color: var(--color-blue, #4361ee); white-space: nowrap; }
+.bt-index-meta { font-size: 12px; color: var(--text-secondary, #666); font-family: monospace; white-space: nowrap; }
+#btChartIndex {
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+}
+
+/* 横向布局：K线主图 + 右侧操作栏 */
+.bt-chart-wrap {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  align-items: flex-start;
+}
 
 .bt-actionbar {
   background: var(--bg-card);
   border: 1px solid var(--border-color, #e3e6ed);
   border-radius: 8px;
-  padding: 10px 16px;
-  margin-bottom: 12px;
+  padding: 12px;
+  width: 180px;
+  flex-shrink: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+  align-self: stretch;
 }
 .bt-actionbar .bt-cursor {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--text-primary, #222);
-  padding: 4px 10px;
+  padding: 8px 10px;
   background: var(--bg-subtle, #f5f7fa);
   border-radius: 4px;
   font-family: monospace;
+  line-height: 1.55;
+  text-align: left;
 }
-.bt-actionbar .bt-cursor strong { color: var(--color-blue, #4361ee); margin: 0 4px; }
+.bt-actionbar .bt-cursor .bt-panel-title {
+  font-size: 11px;
+  color: var(--text-secondary, #999);
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.bt-actionbar .bt-cursor .bt-cursor-date {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-blue, #4361ee);
+  margin-bottom: 6px;
+  text-align: center;
+  border-bottom: 1px dashed var(--border-color, #d0d4dc);
+  padding-bottom: 4px;
+}
+.bt-actionbar .bt-cursor .bt-cursor-ohlc {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.bt-actionbar .bt-cursor .bt-cursor-ohlc > div {
+  display: flex;
+  justify-content: space-between;
+}
+.bt-actionbar .bt-cursor .bt-cursor-ohlc span {
+  color: var(--text-secondary, #777);
+  min-width: 36px;
+}
+.bt-actionbar .bt-cursor .bt-cursor-ohlc b {
+  color: var(--text-primary, #222);
+  font-weight: 600;
+  font-family: monospace;
+}
+.bt-actionbar .bt-cursor .bt-cursor-vol {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  border-top: 1px dashed rgba(128,128,128,0.2);
+  padding-top: 4px;
+}
+.bt-actionbar .bt-cursor .bt-cursor-vol span {
+  color: var(--text-secondary, #777);
+}
+.bt-actionbar .bt-cursor .bt-cursor-ma {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.bt-actionbar .bt-cursor .bt-cursor-ma > div {
+  display: flex;
+  justify-content: space-between;
+}
+.bt-actionbar .bt-cursor .bt-cursor-ma span {
+  color: var(--text-secondary, #777);
+  min-width: 36px;
+}
+.bt-actionbar .bt-cursor .bt-cursor-macd {
+  font-size: 11px;
+  color: var(--text-secondary, #777);
+  border-top: 1px dashed rgba(128,128,128,0.2);
+  padding-top: 4px;
+  line-height: 1.6;
+}
+.bt-actionbar .bt-cursor .bt-cursor-macd b {
+  color: var(--text-primary, #222);
+  font-weight: 600;
+  margin-left: 4px;
+}
+.bt-actionbar .bt-cursor strong { color: var(--color-blue, #4361ee); margin: 0 2px; }
+.bt-actionbar .bt-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bt-actionbar .bt-group label { font-size: 12px; color: var(--text-secondary, #666); }
 .bt-actionbar input[type="number"] {
   padding: 5px 8px;
   border: 1px solid var(--border-color, #d0d4dc);
@@ -86,12 +211,25 @@
   background: var(--bg-input, #f5f7fa);
   color: var(--text-primary, #222);
   font-size: 13px;
-  width: 100px;
+  width: 100%;
+  box-sizing: border-box;
 }
-.bt-actionbar .bt-btn-group { display: flex; gap: 6px; }
-.bt-actionbar .bt-pos-group { display: inline-flex; gap: 0; border: 1px solid var(--border-color, #d0d4dc); border-radius: 4px; overflow: hidden; }
+.bt-actionbar .bt-btn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bt-actionbar .bt-btn-group .btn { width: 100%; padding: 6px 8px; }
+.bt-actionbar .bt-pos-group {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border-color, #d0d4dc);
+  border-radius: 4px;
+  overflow: hidden;
+}
 .bt-actionbar .bt-pos-btn {
-  padding: 5px 14px;
+  flex: 1;
+  padding: 5px 8px;
   background: var(--bg-input, #f5f7fa);
   color: var(--text-primary, #222);
   border: none;
@@ -103,6 +241,14 @@
 .bt-actionbar .bt-pos-btn:last-child { border-right: none; }
 .bt-actionbar .bt-pos-btn:hover { background: var(--border-color, #e3e6ed); }
 .bt-actionbar .bt-pos-btn.active { background: var(--color-blue, #4361ee); color: #fff; font-weight: 600; }
+.bt-actionbar .bt-tip {
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+  background: var(--bg-subtle, #f5f7fa);
+  padding: 6px 8px;
+  border-radius: 4px;
+  line-height: 1.5;
+}
 
 .bt-stats {
   display: grid;
@@ -209,7 +355,9 @@
         <option value="2">近 2 年</option>
         <option value="3">近 3 年</option>
         <option value="5" selected>近 5 年</option>
-        <option value="all">最大(1500 根)</option>
+        <option value="7">近 7 年</option>
+        <option value="8">近 8 年</option>
+        <option value="10">近 10 年</option>
       </select>
     </div>
     <div class="bt-group">
@@ -223,11 +371,17 @@
       <label>显示:</label>
       <select id="btVisibleBars" title="固定显示根数（K线缩放比例）">
         <option value="60">60 根</option>
-        <option value="120">120 根</option>
-        <option value="250" selected>250 根（1年）</option>
-        <option value="500">500 根（2年）</option>
-        <option value="750">750 根（3年）</option>
-        <option value="1200">1200 根（5年）</option>
+        <option value="90">90 根</option>
+        <option value="120" selected>120 根</option>
+      </select>
+    </div>
+    <div class="bt-group">
+      <label>指数:</label>
+      <select id="btIndex" title="大盘指数（上方窗口，与主图同步缩放）">
+        <option value="sh000001" selected>上证指数</option>
+        <option value="sh000510">中证A500</option>
+        <option value="sz399673">创业板50</option>
+        <option value="sh000688">科创50</option>
       </select>
     </div>
     <div class="bt-group">
@@ -240,6 +394,11 @@
       <label><input type="checkbox" id="showMA" checked> MA</label>
       <label><input type="checkbox" id="showMACD" checked> MACD</label>
       <label><input type="checkbox" id="showVol" checked> 量</label>
+      <label><input type="checkbox" id="showEquity" checked> 资金</label>
+    </div>
+    <div class="bt-group">
+      <label>初始资金:</label>
+      <input type="number" id="btInitCapital" value="100000" min="1000" step="1000" style="width: 110px;" onchange="BT_setInitCapital()">
     </div>
     <div class="bt-actions">
       <button class="btn btn-primary" id="btnLoad" onclick="BT_loadData()">📥 加载 K 线</button>
@@ -248,41 +407,105 @@
     </div>
   </div>
 
-  <!-- K 线主图（蜡烛 + MA + 成交量 + MACD 三个子图） -->
-  <div class="bt-chart-wrap">
-    <div id="btChart"></div>
-  </div>
-
-  <!-- 买卖操作栏 -->
-  <div class="bt-actionbar">
-    <span class="bt-cursor">光标: <strong id="curDate">--</strong> 收盘 <strong id="curClose">--</strong></span>
-    <div class="bt-group">
-      <label>仓位:</label>
-      <div class="bt-pos-group">
-        <button type="button" class="bt-pos-btn" data-pos="half" onclick="BT_setPosition('half')">半仓</button>
-        <button type="button" class="bt-pos-btn active" data-pos="full" onclick="BT_setPosition('full')">全仓</button>
+  <!-- 大盘指数走势图（上方窗口，与主图同步缩放）-->
+  <!-- 与主图共用 .bt-chart-wrap 布局：左侧 K线 + 右侧 180px 指数数据栏（跟主图完全对称）-->
+  <div class="bt-chart-wrap" style="margin-bottom: 8px;">
+    <div class="bt-index-body">
+      <div class="bt-index-head">
+        <span class="bt-index-title" id="indexTitle">📈 上证指数</span>
+      </div>
+      <div id="btChartIndex" style="width: 100%; height: 480px;"></div>
+    </div>
+    <!-- 指数 K线 数据栏（在指数图右边，与主图操作栏对称）-->
+    <div class="bt-actionbar bt-index-actionbar" aria-label="指数数据栏">
+      <div class="bt-cursor" id="idxPanel">
+        <div class="bt-panel-title">指数 K线</div>
+        <div class="bt-cursor-date" id="idxDate">--</div>
+        <div class="bt-cursor-ohlc">
+          <div><span>开</span><b id="idxOpen">--</b></div>
+          <div><span>收</span><b id="idxClose">--</b></div>
+          <div><span>高</span><b id="idxHigh">--</b></div>
+          <div><span>低</span><b id="idxLow">--</b></div>
+          <div><span>涨跌</span><b id="idxPct">--</b></div>
+        </div>
+        <div class="bt-cursor-vol"><span>成交额</span><b id="idxVol">--</b></div>
+        <div class="bt-cursor-ma" id="idxMa"><!-- 由 BT_renderMaList 动态填充 --></div>
+        <div class="bt-cursor-macd" id="idxMacd">
+          <span>DIF</span><b id="idxDif">--</b><br>
+          <span>DEA</span><b id="idxDea">--</b><br>
+          <span>MACD</span><b id="idxMacdVal">--</b>
+        </div>
       </div>
     </div>
-    <div class="bt-group">
-      <label>现价:</label>
-      <input type="number" id="btPrice" step="0.01" placeholder="默认=光标日收盘价">
-    </div>
-    <div class="bt-btn-group">
-      <button class="btn btn-primary" id="btnNextBar" onclick="BT_nextBar()" title="光标移到下一根K线（→）">⏭ 下一根K线</button>
-      <button class="btn btn-primary" id="btnPrevBar" onclick="BT_prevBar()" title="光标移到上一根K线（←）">⏮ 上一根K线</button>
-      <button class="btn btn-danger" id="btnBuy" onclick="BT_buy()">🟥 买入</button>
-      <button class="btn btn-success" id="btnSell" onclick="BT_sell()">🟩 卖出</button>
-      <button class="btn btn-warning" id="btnClearPos" onclick="BT_clearPosition()">清仓</button>
-    </div>
-    <span style="color: var(--text-secondary, #666); font-size: 12px;">
-      💡 提示：先点「⏭ 下一根K线」推进光标，再点「🟥 买入/🟩 卖出」按光标日<strong>收盘价</strong>成交。
-    </span>
   </div>
 
-  <!-- 核心指标卡：只看胜率和盈亏比 -->
+  <!-- K 线主图 + 右侧操作栏（横向布局） -->
+  <div class="bt-chart-wrap">
+    <div id="btChart"></div>
+
+    <!-- 买卖操作栏（竖向排列，固定在 K线右边） -->
+    <div class="bt-actionbar">
+      <!-- 主图光标 K线 数据（替代浮动 tooltip） -->
+      <div class="bt-cursor" id="curPanel">
+        <div class="bt-panel-title">标的 K线</div>
+        <div class="bt-cursor-date" id="curDate">--</div>
+        <div class="bt-cursor-ohlc">
+          <div><span>开</span><b id="curOpen">--</b></div>
+          <div><span>收</span><b id="curClose">--</b></div>
+          <div><span>高</span><b id="curHigh">--</b></div>
+          <div><span>低</span><b id="curLow">--</b></div>
+          <div><span>涨跌</span><b id="curPct">--</b></div>
+        </div>
+        <div class="bt-cursor-vol"><span>成交量</span><b id="curVol">--</b></div>
+        <div class="bt-cursor-vol"><span>VOL5</span><b id="curVolMa5">--</b></div>
+        <div class="bt-cursor-vol"><span>量比</span><b id="curRatio">--</b></div>
+        <div class="bt-cursor-ma" id="curMa"><!-- 由 BT_renderMaList 动态填充 --></div>
+        <div class="bt-cursor-macd" id="curMacd">
+          <span>DIF</span><b id="curDif">--</b><br>
+          <span>DEA</span><b id="curDea">--</b><br>
+          <span>MACD</span><b id="curMacdVal">--</b>
+        </div>
+      </div>
+
+      <div class="bt-group">
+        <label>仓位:</label>
+        <div class="bt-pos-group">
+          <button type="button" class="bt-pos-btn" data-pos="half" onclick="BT_setPosition('half')">半仓</button>
+          <button type="button" class="bt-pos-btn active" data-pos="full" onclick="BT_setPosition('full')">全仓</button>
+        </div>
+      </div>
+
+      <div class="bt-group">
+        <label>现价:</label>
+        <input type="number" id="btPrice" step="0.01" placeholder="默认=光标日收盘">
+      </div>
+
+      <div class="bt-btn-group">
+        <button class="btn btn-primary" id="btnNextBar" onclick="BT_nextBar()" title="光标移到下一根K线（→）">⏭ 下一根</button>
+        <button class="btn btn-primary" id="btnPrevBar" onclick="BT_prevBar()" title="光标移到上一根K线（←）">⏮ 上一根</button>
+      </div>
+      <div class="bt-btn-group">
+        <button class="btn btn-danger" id="btnBuy" onclick="BT_buy()">🟥 买入</button>
+        <button class="btn btn-success" id="btnSell" onclick="BT_sell()">🟩 卖出</button>
+        <button class="btn btn-warning" id="btnClearPos" onclick="BT_clearPosition()">清仓</button>
+      </div>
+
+      <div class="bt-tip">
+        💡 先点「⏭ 下一根」<br>推进光标，再点<br>「🟥 买入/🟩 卖出」<br>按光标日<strong>收盘价</strong>成交
+      </div>
+    </div>
+  </div>
+
+  <!-- 核心指标卡：初始资金 + 累计收益率 + 当前仓位 + 胜率 + 盈亏比 + 交易次数 + 风险指标 -->
   <div class="bt-stats" id="btStats">
+    <div class="bt-stat"><div class="bt-stat-label">初始资金</div><div class="bt-stat-value" id="statInitCapital">¥100,000</div></div>
+    <div class="bt-stat"><div class="bt-stat-label">累计收益率</div><div class="bt-stat-value" id="statTotalReturn">--</div></div>
+    <div class="bt-stat"><div class="bt-stat-label">当前仓位</div><div class="bt-stat-value" id="statPosition">--</div></div>
+    <div class="bt-stat"><div class="bt-stat-label">当前资金</div><div class="bt-stat-value" id="statCurrentCapital">--</div></div>
     <div class="bt-stat"><div class="bt-stat-label">胜率</div><div class="bt-stat-value" id="statWinRate">--</div></div>
     <div class="bt-stat"><div class="bt-stat-label">盈亏比</div><div class="bt-stat-value" id="statProfitFactor">--</div></div>
+    <div class="bt-stat"><div class="bt-stat-label">最大回撤</div><div class="bt-stat-value" id="statMaxDrawdown">--</div></div>
+    <div class="bt-stat"><div class="bt-stat-label">最大连亏</div><div class="bt-stat-value" id="statMaxConsecLoss">--</div></div>
     <div class="bt-stat"><div class="bt-stat-label">交易次数</div><div class="bt-stat-value" id="statTradeCount">--</div></div>
   </div>
 
@@ -306,6 +529,37 @@
     </table>
   </div>
 
+  <!-- 📚 历史回测记录 -->
+  <div class="bt-trades" id="btHistorySection" style="margin-top: 16px;">
+    <h3>
+      📚 历史回测记录
+      <span style="font-size: 12px; color: var(--text-secondary, #999); font-weight: normal;">
+        （点击 🏁 完成回测 后会自动保存到这里）
+      </span>
+      <button class="btn btn-sm btn-gray" style="float: right; margin-left: 8px;"
+              onclick="BT_clearAllHistory()" title="清空所有历史记录">🗑 清空全部</button>
+    </h3>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 50px;">#</th>
+          <th>标的</th>
+          <th>完成时间</th>
+          <th style="text-align: right;">初始资金</th>
+          <th style="text-align: right;">交易数</th>
+          <th style="text-align: right;">胜率</th>
+          <th style="text-align: right;">盈亏比</th>
+          <th style="text-align: right;">累计收益率</th>
+          <th style="text-align: right;">已实现盈亏</th>
+          <th style="text-align: right;">最大回撤</th>
+          <th style="text-align: right;">最大连亏</th>
+          <th style="width: 80px;">操作</th>
+        </tr>
+      </thead>
+      <tbody id="btHistoryBody"></tbody>
+    </table>
+  </div>
+
 </main>
 
 <div id="btToast" class="bt-toast"></div>
@@ -320,9 +574,9 @@
 <script src="js/sync.js?v=9"></script>
 
 <!-- 回测专用模块（顺序：图表 → 交易 → 入口） -->
-<script src="js/backtest-trade.js?v=2"></script>
-<script src="js/backtest-chart.js?v=40"></script>
-<script src="js/backtest-main.js?v=12"></script>
+<script src="js/backtest-trade.js?v=3"></script>
+<script src="js/backtest-chart.js?v=74"></script>
+<script src="js/backtest-main.js?v=19"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

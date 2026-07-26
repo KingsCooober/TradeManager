@@ -15,7 +15,8 @@
  */
 
 // 全局状态（加 BT_ 前缀避免与主页 trades 冲突）
-var BT_initCapital = 100000;        // 初始资金（元）
+var BT_initCapital = 100000;        // 初始资金（元），可由用户调整
+var BT_cash = BT_initCapital;       // 当前现金余额（buy 扣、sell 加净 P&L）
 var BT_feeRate = 0.0003;            // 手续费率（万三）
 var BT_trades = [];                 // 当前标的的全部成交记录
 var BT_currentSymbol = null;        // 当前加载的标的
@@ -28,6 +29,28 @@ function BT_genId() {
   return 'bt_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
 }
 
+// 用户调整初始资金：仅修改初始资金，不重置已有交易和现金
+// 累计收益率 = (当前资金 - 初始资金) / 初始资金，初始资金改动会直接影响这个比率
+function BT_setInitCapital() {
+  var el = document.getElementById('btInitCapital');
+  if (!el) return;
+  var v = parseFloat(el.value);
+  if (!isFinite(v) || v <= 0) {
+    BT_toast('初始资金必须大于 0', 'warn');
+    el.value = BT_initCapital;
+    return;
+  }
+  BT_initCapital = v;
+  BT_renderStats();
+}
+
+// 重置资金（含现金），用于切标的时
+function BT_resetCapital() {
+  BT_cash = BT_initCapital;
+  BT_position = { volume: 0, cost: 0, realized: 0 };
+  BT_trades = [];
+}
+
 // 持久化键
 function BT_storageKey(symbol) {
   return 'bt_trades_' + (symbol || 'unknown');
@@ -37,11 +60,18 @@ function BT_storageKey(symbol) {
 function BT_loadTrades(symbol) {
   try {
     var raw = localStorage.getItem(BT_storageKey(symbol));
-    BT_trades = raw ? JSON.parse(raw) : [];
+    var trades = raw ? JSON.parse(raw) : [];
+    BT_trades = trades;
+    // 如果有持久化的 cash，恢复；否则重置为初始资金
+    var cashRaw = localStorage.getItem(BT_storageKey(symbol) + '_cash');
+    BT_cash = cashRaw != null ? parseFloat(cashRaw) : BT_initCapital;
+    if (!isFinite(BT_cash)) BT_cash = BT_initCapital;
   } catch (e) {
     BT_trades = [];
+    BT_cash = BT_initCapital;
   }
   BT_recomputePosition();
+  BT_recomputeCash();
 }
 
 // 保存到 localStorage
@@ -49,6 +79,7 @@ function BT_saveTrades() {
   if (!BT_currentSymbol) return;
   try {
     localStorage.setItem(BT_storageKey(BT_currentSymbol), JSON.stringify(BT_trades));
+    localStorage.setItem(BT_storageKey(BT_currentSymbol) + '_cash', String(BT_cash));
   } catch (e) {
     console.warn('[backtest] 保存交易记录失败:', e);
   }
@@ -58,10 +89,12 @@ function BT_saveTrades() {
 function BT_clearAllTrades() {
   BT_trades = [];
   BT_position = { volume: 0, cost: 0, realized: 0 };
+  BT_cash = BT_initCapital;   // 现金重置回初始资金
   BT_saveTrades();
   BT_renderTrades();
   BT_renderStats();
   BT_refreshChartMarkers();
+  if (typeof BT_refreshEquityCurve === 'function') BT_refreshEquityCurve();
 }
 
 // 重新计算当前持仓 + 已实现盈亏
@@ -88,6 +121,24 @@ function BT_recomputePosition() {
   }
 }
 
+// 重算现金余额（基于初始资金 + 全部交易的现金流，兜底防 cash 漂移）
+// 公式：cash = init - sum(buy_paid) + sum(sell_received)
+//   buy_paid = price*volume + fee
+//   sell_received = price*volume - fee
+function BT_recomputeCash() {
+  var cash = BT_initCapital;
+  for (var i = 0; i < BT_trades.length; i++) {
+    var t = BT_trades[i];
+    var fee = t.fee || 0;
+    if (t.action === 'buy') {
+      cash -= t.price * t.volume + fee;
+    } else if (t.action === 'sell') {
+      cash += t.price * t.volume - fee;
+    }
+  }
+  BT_cash = cash;
+}
+
 // 买入
 function BT_doBuy(date, price, volume) {
   if (!date || !price || !volume) {
@@ -99,6 +150,13 @@ function BT_doBuy(date, price, volume) {
     return;
   }
   var fee = price * volume * BT_feeRate;
+  var cost = price * volume + fee;
+  // 资金不足保护
+  if (cost > BT_cash) {
+    BT_toast('资金不足：需要 ¥' + cost.toFixed(0) + '，可用 ¥' + BT_cash.toFixed(0), 'error');
+    return;
+  }
+  BT_cash -= cost;   // 实时扣现金
   BT_trades.push({
     id: BT_genId(),
     date: date,
@@ -113,6 +171,7 @@ function BT_doBuy(date, price, volume) {
   BT_renderTrades();
   BT_renderStats();
   BT_refreshChartMarkers();
+  if (typeof BT_refreshEquityCurve === 'function') BT_refreshEquityCurve();
   BT_toast('买入 ' + volume + ' 股 @ ' + price.toFixed(2) + ' (' + date + ')', 'success');
 }
 
@@ -132,6 +191,7 @@ function BT_doSell(date, price, volume) {
   }
   var fee = price * volume * BT_feeRate;
   var pnl = (price - BT_position.cost) * volume - fee;
+  BT_cash += price * volume - fee;   // 实时加现金（净收入）
   BT_trades.push({
     id: BT_genId(),
     date: date,
@@ -147,6 +207,7 @@ function BT_doSell(date, price, volume) {
   BT_renderTrades();
   BT_renderStats();
   BT_refreshChartMarkers();
+  if (typeof BT_refreshEquityCurve === 'function') BT_refreshEquityCurve();
   BT_toast((pnl >= 0 ? '盈利 ' : '亏损 ') + pnl.toFixed(2) + ' @ ' + price.toFixed(2) + ' (' + date + ')', pnl >= 0 ? 'success' : 'error');
 }
 
@@ -217,14 +278,51 @@ function BT_computeStats(currentClosePrice) {
   }
   var profitFactor = avgLoss > 0 ? avgWin / avgLoss : (avgWin > 0 ? Infinity : 0);
 
+  // 最大连续亏损次数：扫描 closed 数组，连续亏损累加计数
+  var maxConsecLoss = 0;
+  var curConsecLoss = 0;
+  for (var ci = 0; ci < closed.length; ci++) {
+    if (closed[ci].pnl < 0) {
+      curConsecLoss++;
+      if (curConsecLoss > maxConsecLoss) maxConsecLoss = curConsecLoss;
+    } else {
+      curConsecLoss = 0;
+    }
+  }
+
+  // 最大回撤（基于"累计已实现 P&L"权益曲线）
+  // 简化版：曲线 = [初始资金, 初始+pnl1, 初始+pnl1+pnl2, ...]
+  // 只统计 sell 后的已实现盈亏——未平仓持仓的浮动盈亏已包含在当前总资金里
+  var peak = BT_initCapital;
+  var maxDrawdown = 0;
+  var cumPnl = 0;
+  for (var di = 0; di < closed.length; di++) {
+    cumPnl += closed[di].pnl;
+    var equity = BT_initCapital + cumPnl;
+    if (equity > peak) peak = equity;
+    if (peak > 0) {
+      var dd = (peak - equity) / peak * 100;
+      if (dd > maxDrawdown) maxDrawdown = dd;
+    }
+  }
+
   // 浮动盈亏（基于当前光标日的收盘价）
   var unrealized = 0;
   if (pos.volume > 0 && currentClosePrice && currentClosePrice > 0) {
     unrealized = (currentClosePrice - pos.cost) * pos.volume;
   }
 
-  // 总收益率 = (已实现 + 浮动) / 初始资金
-  var totalReturn = (BT_position.realized + unrealized) / BT_initCapital * 100;
+  // 持仓市值 = 持仓股数 × 当前收盘价
+  var positionValue = 0;
+  if (pos.volume > 0 && currentClosePrice && currentClosePrice > 0) {
+    positionValue = pos.volume * currentClosePrice;
+  }
+  // 当前总资金 = 现金余额 + 持仓市值
+  var currentCapital = BT_cash + positionValue;
+  // 累计收益率 = (当前资金 - 初始资金) / 初始资金
+  var totalReturn = BT_initCapital > 0 ? (currentCapital - BT_initCapital) / BT_initCapital * 100 : 0;
+  // 当前仓位 % = 持仓市值 / 当前总资金
+  var positionPct = currentCapital > 0 ? positionValue / currentCapital * 100 : 0;
 
   return {
     totalReturn: totalReturn,
@@ -237,7 +335,13 @@ function BT_computeStats(currentClosePrice) {
     tradeCount: BT_trades.length,
     closedCount: closed.length,
     position: pos.volume,
-    cost: pos.cost
+    cost: pos.cost,
+    currentCapital: currentCapital,
+    cash: BT_cash,
+    positionValue: positionValue,
+    positionPct: positionPct,
+    maxDrawdown: maxDrawdown,
+    maxConsecLoss: maxConsecLoss
   };
 }
 
@@ -293,8 +397,31 @@ function BT_renderStats() {
   function setText(id, txt) { var el = document.getElementById(id); if (el) el.textContent = txt; }
   function setClass(id, cls) { var el = document.getElementById(id); if (el) el.className = 'bt-stat-value ' + cls; }
 
+  // 初始资金
+  setText('statInitCapital', '¥' + BT_initCapital.toLocaleString());
+
+  // 累计收益率
+  if (BT_trades.length === 0) {
+    setText('statTotalReturn', '0.00%');
+  } else {
+    setText('statTotalReturn', (stats.totalReturn >= 0 ? '+' : '') + stats.totalReturn.toFixed(2) + '%');
+    setClass('statTotalReturn', stats.totalReturn >= 0 ? 'up' : 'down');
+  }
+
+  // 当前仓位
+  if (stats.position === 0) {
+    setText('statPosition', '空仓');
+  } else {
+    setText('statPosition', stats.positionPct.toFixed(1) + '%  (' + stats.position + '股@¥' + stats.cost.toFixed(2) + ')');
+  }
+
+  // 当前资金 = 现金 + 持仓市值
+  setText('statCurrentCapital', '¥' + stats.currentCapital.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ','));
+
+  // 胜率
   setText('statWinRate', stats.closedCount > 0 ? stats.winRate.toFixed(1) + '%' + ' (' + stats.closedCount + ')' : '--');
 
+  // 盈亏比
   if (stats.profitFactor === Infinity) {
     setText('statProfitFactor', '∞');
   } else if (stats.profitFactor > 0) {
@@ -303,7 +430,16 @@ function BT_renderStats() {
     setText('statProfitFactor', '--');
   }
 
+  // 交易次数
   setText('statTradeCount', BT_trades.length + ' 笔');
+
+  // 最大回撤（>10% 高亮红色提示风险）
+  setText('statMaxDrawdown', stats.maxDrawdown > 0 ? stats.maxDrawdown.toFixed(2) + '%' : '0.00%');
+  setClass('statMaxDrawdown', stats.maxDrawdown > 10 ? 'down' : '');
+
+  // 最大连续亏损（≥3 次高亮提示）
+  setText('statMaxConsecLoss', stats.maxConsecLoss + ' 次');
+  setClass('statMaxConsecLoss', stats.maxConsecLoss >= 3 ? 'down' : '');
 }
 
 // 简易 toast 提示

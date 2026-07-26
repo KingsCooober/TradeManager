@@ -938,13 +938,13 @@ app.get('/api/market/kline/:code', auth.authMiddleware, async (req, res) => {
 });
 
 // 单只个股 K线（不限 A 股个股，symbol=sh600000 / sz000001 等）
-// 入参：symbol = shXXXXXX / szXXXXXX，count = 30~1500（默认 1200，约 5 年）
+// 入参：symbol = shXXXXXX / szXXXXXX，count = 30~2500（默认 1200，约 5 年；2500 ≈ 10 年）
 app.get('/api/market/kline-stock/:symbol', auth.authMiddleware, async (req, res) => {
   const symbol = req.params.symbol.toLowerCase();
   if (!/^(sh|sz)\d{6}$/.test(symbol)) {
     return res.status(400).json({ error: 'symbol 格式错误，应为 shXXXXXX 或 szXXXXXX' });
   }
-  const count = Math.min(1500, Math.max(30, parseInt(req.query.count) || 1200));
+  const count = Math.min(2500, Math.max(30, parseInt(req.query.count) || 1200));   // 10 年日 K线 = ~2500 个交易日
   try {
     const data = await market.getKLineSnapshotForSymbol(symbol, count);
     res.json(data);
