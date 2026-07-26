@@ -282,10 +282,10 @@ function BT_getBaseOption() {
       label: { backgroundColor: 'transparent', color: 'transparent', borderWidth: 0 }
     },
     grid: [
-      { left: 60, right: 30, top: 18,   height: 360 },   // K线 360px
-      { left: 60, right: 30, top: 383,  height: 90 },    // 成交量 90px
-      { left: 60, right: 30, top: 478,  height: 90 },    // MACD 90px
-      { left: 60, right: 30, top: 573,  height: 120 }    // 资金曲线 120px
+      { left: 60, right: 30, top: 18,   height: 300 },   // K线 300px（下调 60，把空间让给 MACD）
+      { left: 60, right: 30, top: 323,  height: 80 },    // 成交量 80px
+      { left: 60, right: 30, top: 408,  height: 150 },   // MACD 150px（上调，之前 90 被 ECharts 压扁成 ~50px）
+      { left: 60, right: 30, top: 563,  height: 120 }    // 资金曲线 120px
     ],
     xAxis: [
       { type: 'category', data: [], gridIndex: 0, scale: true, boundaryGap: false,
@@ -875,9 +875,9 @@ function BT_updateVisibleGrids() {
   var showEquity = BT_showFlags.equity;
 
   // 固定像素高度（与 #btChart { height: 730px } 配套：18+360+5+90+5+90+5+120+18+16 = 727）
-  var KLINE_PX  = 360;   // K线主图
-  var VOL_PX    = 90;    // 成交量
-  var MACD_PX   = 90;    // MACD
+  var KLINE_PX  = 300;   // K线主图（下调 60，把空间让给 MACD）
+  var VOL_PX    = 80;    // 成交量
+  var MACD_PX   = 150;   // MACD（上调到 150px，之前 90 在视觉上被 ECharts 压扁到 ~50px，看不清）
   var EQUITY_PX = 120;   // 资金曲线
   var GAP = 5;           // 子图间 gap
   var TOP_PX = 18;       // 顶部 18px 留白（容 Y轴 label）
