@@ -11,6 +11,11 @@
 var BT_LS_PREFIX = 'bt_state_';
 function BT_lsKey(k) { return BT_LS_PREFIX + k; }
 
+// 全局：当前正在回测的标的代码（sh600000 / sz000001 等）
+var BT_currentSymbol = null;
+// 全局：当前正在回测的标的名称（如「浦发银行」，由后端在 K 线接口中一起返回）
+var BT_currentSymbolName = null;
+
 // ===== 持久化：标的/周期/MA/缩放/光标位置 =====
 function BT_saveState() {
   try {
@@ -38,6 +43,13 @@ function BT_saveState() {
       savedAt:      Date.now()
     };
     localStorage.setItem(BT_lsKey('form'), JSON.stringify(state));
+
+    // 同步到 DataStore（跨设备同步，fire-and-forget）
+    if (typeof DataStore !== 'undefined') {
+      DataStore.collection('backtest_form').save(
+        Object.assign({ id: 'current' }, state)
+      );
+    }
   } catch (e) { /* ignore quota */ }
 }
 
@@ -51,7 +63,16 @@ function BT_loadState() {
 
 // 入口
 function BT_init() {
-  // 1) 恢复表单状态（标的/周期/MA/缩放）
+  // 0) 初始化 DataStore（异步，不阻塞页面渲染）
+  if (typeof BT_initStore === 'function') {
+    BT_initStore().then(function() {
+      // DataStore ready → 从服务器拉取数据 + 迁移 localStorage 旧数据
+      BT_migrateHistoryFromLocalStorage();
+      BT_renderHistory();  // 从 DataStore 重新渲染历史记录
+    });
+  }
+
+  // 1) 恢复表单状态（标的/周期/MA/缩放）— localStorage 即时恢复
   var saved = BT_loadState();
   if (saved) {
     if (saved.symbol)      document.getElementById('btSymbol').value = saved.symbol;
@@ -245,11 +266,13 @@ async function BT_loadData(silent) {
       throw new Error('HTTP ' + res.status + ': ' + errText);
     }
     var data = await res.json();
+    // 缓存当前标的名称（来自后端 kline-stock 接口的 name 字段）
+    BT_currentSymbolName = data.name || null;
 
     // 切换标的 → 重新加载交易记录
     if (BT_currentSymbol !== symbol) {
       BT_currentSymbol = symbol;
-      BT_loadTrades(symbol);
+      await BT_loadTrades(symbol);
     }
 
     BT_renderKLine(data);
@@ -483,6 +506,7 @@ function BT_finishBacktest() {
   var summary = {
     id:             'bt_' + Date.now() + '_' + Math.floor(Math.random() * 10000),
     symbol:         BT_currentSymbol,
+    name:           BT_currentSymbolName || null,   // ★ 标的名称（浦发银行等）
     finishedAt:     new Date().toISOString(),
     // 资金快照
     initCapital:    +BT_initCapital.toFixed(2),
@@ -507,10 +531,17 @@ function BT_finishBacktest() {
     trades:         BT_trades.slice()
   };
   try {
+    // 保存到 localStorage（向后兼容）
     var key = BT_lsKey('history');
     var list = JSON.parse(localStorage.getItem(key) || '[]');
     list.unshift(summary);  // 最新的在前
     localStorage.setItem(key, JSON.stringify(list));
+
+    // 保存到 DataStore（跨设备同步）
+    if (BT_historyCollection) {
+      BT_historyCollection.save(summary);
+    }
+
     BT_toast('🏁 已完成 ' + BT_currentSymbol + ' 的回测（' + summary.tradeCount + ' 笔，累计收益 ' +
       (summary.totalReturn >= 0 ? '+' : '') + summary.totalReturn + '%，已保存到历史记录）', 'success');
     // 立即刷新历史记录表
@@ -567,14 +598,41 @@ function BT_computeRiskFromTrades(trades, initCapital) {
   return { maxDrawdown: maxDrawdown, maxConsecLoss: maxConsecLoss };
 }
 
-// 历史回测记录：分页渲染
-function BT_renderHistory() {
+// 从 localStorage 迁移历史记录到 DataStore
+async function BT_migrateHistoryFromLocalStorage() {
+  if (!BT_historyCollection) return;
+  try {
+    var raw = localStorage.getItem(BT_lsKey('history'));
+    if (!raw) return;
+    var list = JSON.parse(raw);
+    if (!Array.isArray(list) || list.length === 0) return;
+    // 检查是否已迁移（DataStore 里已有数据则跳过）
+    var existing = await BT_historyCollection.getAll();
+    if (existing.length > 0) return;
+    // 给每条记录确保有 id
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].id) list[i].id = 'bt_hist_' + Date.now() + '_' + i;
+    }
+    await BT_historyCollection.saveBatch(list);
+    console.log('[backtest] 已从 localStorage 迁移 ' + list.length + ' 条历史记录到 DataStore');
+  } catch (e) {
+    console.warn('[backtest] 迁移历史记录失败:', e);
+  }
+}
+
+// 历史回测记录：从 DataStore 加载并渲染
+async function BT_renderHistory() {
   var box = document.getElementById('btHistoryBody');
   if (!box) return;
   var list = [];
-  try {
-    list = JSON.parse(localStorage.getItem(BT_lsKey('history')) || '[]');
-  } catch (e) { list = []; }
+  if (BT_historyCollection) {
+    list = await BT_historyCollection.getAll();
+    list.sort(function(a, b) {
+      return (b.finishedAt || '').localeCompare(a.finishedAt || '');
+    });
+  } else {
+    try { list = JSON.parse(localStorage.getItem(BT_lsKey('history')) || '[]'); } catch (e) { list = []; }
+  }
   if (!list.length) {
     box.innerHTML = '<tr><td colspan="12" class="bt-empty">还没有历史回测记录，完成一轮回测后会自动保存到这里。</td></tr>';
     return;
@@ -588,6 +646,12 @@ function BT_renderHistory() {
     var winRate = s.closedCount > 0 ? s.winRate + '% (' + s.closedCount + ')' : '--';
     var finished = (s.finishedAt || '').replace('T', ' ').substring(0, 16);
     var initCap = '¥' + (s.initCapital || 0).toLocaleString();
+    // 标的列：优先显示名称（浦发银行），下方附代码（sh600000）。无名称时只显示代码
+    var symbolHtml = s.name
+      ? '<div style="font-weight:600;line-height:1.2;">' + BT_escapeHtml(s.name) + '</div>' +
+        '<div style="font-size:11px;color:var(--text-secondary,#999);line-height:1.2;">' +
+          BT_escapeHtml(s.symbol) + '</div>'
+      : '<b>' + BT_escapeHtml(s.symbol) + '</b>';
     // 风险指标：老数据兜底（如果 summary 里没存，从 trades 数组重算）
     var dd, ddCls, mcl, mclCls;
     if (s.maxDrawdown != null) {
@@ -614,9 +678,9 @@ function BT_renderHistory() {
     }
     var sid = s.id || ('idx_' + i);
     return '<tr>' +
-      '<td>' + (i + 1) + '</td>' +
-      '<td><b>' + s.symbol + '</b></td>' +
-      '<td style="font-size: 12px; color: var(--text-secondary, #999);">' + finished + '</td>' +
+      '<td style="text-align: center;">' + (i + 1) + '</td>' +
+      '<td>' + symbolHtml + '</td>' +
+      '<td style="font-size: 12px; color: var(--text-secondary, #999); text-align: center;">' + finished + '</td>' +
       '<td style="text-align: right;">' + initCap + '</td>' +
       '<td style="text-align: right;">' + s.tradeCount + '</td>' +
       '<td style="text-align: right;">' + winRate + '</td>' +
@@ -634,13 +698,30 @@ function BT_renderHistory() {
   box.innerHTML = rows;
 }
 
+// 简单的 HTML 转义（防止名称里的 < > & 破坏布局）
+function BT_escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // 查看历史回测详情（弹窗显示资金流水 + 交易明细）
-function BT_viewHistoryRecord(id) {
-  var list = [];
-  try {
-    list = JSON.parse(localStorage.getItem(BT_lsKey('history')) || '[]');
-  } catch (e) { list = []; }
-  var rec = list.find(function(s) { return s.id === id; });
+async function BT_viewHistoryRecord(id) {
+  var rec = null;
+  if (BT_historyCollection) {
+    rec = await BT_historyCollection.get(id);
+  }
+  if (!rec) {
+    // 降级：从 localStorage 查
+    try {
+      var list = JSON.parse(localStorage.getItem(BT_lsKey('history')) || '[]');
+      rec = list.find(function(s) { return s.id === id; });
+    } catch (e) {}
+  }
   if (!rec) { BT_toast('记录不存在', 'error'); return; }
   var lines = [];
   // 老数据兜底：详情弹窗里也用同一个重算逻辑
@@ -689,27 +770,31 @@ function BT_viewHistoryRecord(id) {
 }
 
 // 删除单条历史记录
-function BT_deleteHistoryRecord(id) {
+async function BT_deleteHistoryRecord(id) {
   if (!confirm('确定删除这条回测记录吗？')) return;
+  // 从 DataStore 删除
+  if (BT_historyCollection) {
+    await BT_historyCollection.delete(id);
+  }
+  // 同时从 localStorage 删除（向后兼容）
   try {
     var list = JSON.parse(localStorage.getItem(BT_lsKey('history')) || '[]');
     list = list.filter(function(s) { return s.id !== id; });
     localStorage.setItem(BT_lsKey('history'), JSON.stringify(list));
-    BT_renderHistory();
-    BT_toast('已删除', 'success');
-  } catch (e) {
-    BT_toast('删除失败: ' + e.message, 'error');
-  }
+  } catch (e) {}
+  BT_renderHistory();
+  BT_toast('已删除', 'success');
 }
 
 // 清空所有历史记录
-function BT_clearAllHistory() {
+async function BT_clearAllHistory() {
   if (!confirm('确定清空所有历史回测记录吗？此操作不可恢复！')) return;
-  try {
-    localStorage.removeItem(BT_lsKey('history'));
-    BT_renderHistory();
-    BT_toast('已清空所有历史记录', 'success');
-  } catch (e) {
-    BT_toast('清空失败: ' + e.message, 'error');
+  // 从 DataStore 清空
+  if (BT_historyCollection) {
+    await BT_historyCollection.clear();
   }
+  // 同时清空 localStorage
+  try { localStorage.removeItem(BT_lsKey('history')); } catch (e) {}
+  BT_renderHistory();
+  BT_toast('已清空所有历史记录', 'success');
 }

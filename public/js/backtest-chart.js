@@ -874,7 +874,7 @@ function BT_updateVisibleGrids() {
   var showMacd   = BT_showFlags.macd;
   var showEquity = BT_showFlags.equity;
 
-  // 固定像素高度（与 #btChart { height: 730px } 配套：18+360+5+90+5+90+5+120+18+16 = 727）
+  // 固定像素高度（与 #btChart { height: 720px } 配套：18+300+5+80+5+150+5+120+18+16 = 717）
   var KLINE_PX  = 300;   // K线主图（下调 60，把空间让给 MACD）
   var VOL_PX    = 80;    // 成交量
   var MACD_PX   = 150;   // MACD（上调到 150px，之前 90 在视觉上被 ECharts 压扁到 ~50px，看不清）
@@ -882,16 +882,23 @@ function BT_updateVisibleGrids() {
   var GAP = 5;           // 子图间 gap
   var TOP_PX = 18;       // 顶部 18px 留白（容 Y轴 label）
 
+  // 关键：当某个 subplot 隐藏时，下方 grid 要顶上来填空白
+  // 之前 height: 0 不让 grid 下移，量+资金之间留了 ~150px 空白 → 看着像"丢了一块"
   var mainTop = TOP_PX;
-  var volTop = mainTop + KLINE_PX + GAP;
-  var macdTop = volTop + (showVol ? VOL_PX : 0) + GAP;
+  var volTop  = mainTop + KLINE_PX + GAP;
+  var macdTop = volTop  + (showVol ? VOL_PX : 0) + GAP;
   var equityTop = macdTop + (showMacd ? MACD_PX : 0) + GAP;
 
+  // 隐藏的 grid：top 直接等于上方 grid 的 bottom（不留 GAP 避免视觉断层），height=0
+  var volGrid    = showVol    ? { left: 60, right: 30, top: volTop,    height: VOL_PX }    : { top: mainTop + KLINE_PX,    height: 0 };
+  var macdGrid   = showMacd   ? { left: 60, right: 30, top: macdTop,   height: MACD_PX }   : { top: showVol ? (volTop + VOL_PX) : (mainTop + KLINE_PX), height: 0 };
+  var equityGrid = showEquity ? { left: 60, right: 30, top: equityTop, height: EQUITY_PX } : { top: macdTop + (showMacd ? MACD_PX : 0), height: 0 };
+
   var grids = [
-    { left: 60, right: 30, top: mainTop,    height: KLINE_PX },
-    { left: 60, right: 30, top: volTop,      height: showVol ? VOL_PX : 0 },
-    { left: 60, right: 30, top: macdTop,     height: showMacd ? MACD_PX : 0 },
-    { left: 60, right: 30, top: equityTop,   height: showEquity ? EQUITY_PX : 0 }
+    { left: 60, right: 30, top: mainTop, height: KLINE_PX },
+    volGrid,
+    macdGrid,
+    equityGrid
   ];
   BT_chart.setOption({ grid: grids });
 }

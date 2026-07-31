@@ -184,6 +184,8 @@ async function register(username, password) {
     localStorage.setItem('sync_user', JSON.stringify(currentUser));
     // P0-1: 保存服务端签发的 JWT token
     if (data.token) setToken(data.token);
+    // 注册成功后通知 DataStore
+    if (typeof DataStore !== 'undefined') DataStore.onLogin();
     return data;
   } catch (err) {
     console.error('注册失败:', err);
@@ -231,6 +233,8 @@ async function login(username, password) {
     localStorage.setItem('sync_user', JSON.stringify(currentUser));
     // P0-1: 保存服务端签发的 JWT token
     if (data.token) setToken(data.token);
+    // 登录成功后通知 DataStore 拉取用户数据
+    if (typeof DataStore !== 'undefined') DataStore.onLogin();
     return data;
   } catch (err) {
     console.error('登录失败:', err);
@@ -243,6 +247,8 @@ function logout() {
   localStorage.removeItem('sync_user');
   // P0-1: 退出登录时清除 token
   clearToken();
+  // 通知 DataStore 停止同步（保留本地缓存）
+  if (typeof DataStore !== 'undefined') DataStore.onLogout();
   stopAutoSync();
 }
 
@@ -810,10 +816,17 @@ function initSync() {
     startAutoSync();
   }
 
+  // 页面加载时如果已登录，通知 DataStore 拉取用户数据
+  if (currentUser && typeof DataStore !== 'undefined') {
+    DataStore.onLogin();
+  }
+
   // P2-实时同步：窗口重新获得焦点时拉取最新数据
   // 多设备场景：A 编辑后切到 B 标签页，无需等 5s 轮询即可看到
   window.addEventListener('focus', function() {
     if (!getCurrentUser() || _syncInFlight) return;
+    // DataStore 也同步拉取
+    if (typeof DataStore !== 'undefined') DataStore.syncAll();
     if (typeof hasUnsyncedChanges === 'function' && hasUnsyncedChanges()) {
       console.log('[sync] focus 拉取跳过：本地有未同步变更');
       return;

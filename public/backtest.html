@@ -398,7 +398,7 @@
     </div>
     <div class="bt-group">
       <label>初始资金:</label>
-      <input type="number" id="btInitCapital" value="100000" min="1000" step="1000" style="width: 110px;" onchange="BT_setInitCapital()">
+      <input type="number" id="btInitCapital" value="1000000" min="1000" step="1000" style="width: 110px;" onchange="BT_setInitCapital()">
     </div>
     <div class="bt-actions">
       <button class="btn btn-primary" id="btnLoad" onclick="BT_loadData()">📥 加载 K 线</button>
@@ -498,7 +498,7 @@
 
   <!-- 核心指标卡：初始资金 + 累计收益率 + 当前仓位 + 胜率 + 盈亏比 + 交易次数 + 风险指标 -->
   <div class="bt-stats" id="btStats">
-    <div class="bt-stat"><div class="bt-stat-label">初始资金</div><div class="bt-stat-value" id="statInitCapital">¥100,000</div></div>
+    <div class="bt-stat"><div class="bt-stat-label">初始资金</div><div class="bt-stat-value" id="statInitCapital">¥1,000,000</div></div>
     <div class="bt-stat"><div class="bt-stat-label">累计收益率</div><div class="bt-stat-value" id="statTotalReturn">--</div></div>
     <div class="bt-stat"><div class="bt-stat-label">当前仓位</div><div class="bt-stat-value" id="statPosition">--</div></div>
     <div class="bt-stat"><div class="bt-stat-label">当前资金</div><div class="bt-stat-value" id="statCurrentCapital">--</div></div>
@@ -542,9 +542,9 @@
     <table>
       <thead>
         <tr>
-          <th style="width: 50px;">#</th>
+          <th style="width: 50px; text-align: center;">#</th>
           <th>标的</th>
-          <th>完成时间</th>
+          <th style="text-align: center;">完成时间</th>
           <th style="text-align: right;">初始资金</th>
           <th style="text-align: right;">交易数</th>
           <th style="text-align: right;">胜率</th>
@@ -553,7 +553,7 @@
           <th style="text-align: right;">已实现盈亏</th>
           <th style="text-align: right;">最大回撤</th>
           <th style="text-align: right;">最大连亏</th>
-          <th style="width: 80px;">操作</th>
+          <th style="width: 80px; text-align: center;">操作</th>
         </tr>
       </thead>
       <tbody id="btHistoryBody"></tbody>
@@ -571,12 +571,13 @@
 <script src="js/utils.js?v=7"></script>
 <script src="js/header.js?v=3"></script>
 <script>renderAppHeader('backtest');</script>
-<script src="js/sync.js?v=9"></script>
+<script src="js/sync.js?v=10"></script>
+<script src="js/store.js?v=1"></script>
 
-<!-- 回测专用模块（顺序：图表 → 交易 → 入口） -->
-<script src="js/backtest-trade.js?v=3"></script>
-<script src="js/backtest-chart.js?v=75"></script>
-<script src="js/backtest-main.js?v=19"></script>
+<!-- 回测专用模块（顺序：交易 → 图表 → 入口） -->
+<script src="js/backtest-trade.js?v=5"></script>
+<script src="js/backtest-chart.js?v=76"></script>
+<script src="js/backtest-main.js?v=21"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

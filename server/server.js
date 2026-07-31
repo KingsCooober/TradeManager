@@ -223,6 +223,20 @@ db.serialize(() => {
     source TEXT
   )`);
   db.run('CREATE INDEX IF NOT EXISTS idx_market_history_date ON market_history(date DESC)');
+
+  // ★ 通用数据表：所有新功能的数据统一存这里，无需为每个功能建表
+  // 设计：按 (user_id, collection, item_id) 三元组定位，data_json 存任意 JSON
+  // 使用场景：回测交易记录、回测历史、未来新增的所有用户数据
+  db.run(`CREATE TABLE IF NOT EXISTS user_data (
+    user_id TEXT NOT NULL,
+    collection TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, collection, item_id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_user_data_user_collection ON user_data(user_id, collection)');
   console.log('关键索引已就绪');
 });
 
@@ -952,6 +966,98 @@ app.get('/api/market/kline-stock/:symbol', auth.authMiddleware, async (req, res)
     console.error('[market] getKLineSnapshotForSymbol 失败:', e.message);
     res.status(500).json({ error: 'K线获取失败: ' + e.message });
   }
+});
+
+// ===== 通用数据 API（所有新功能的统一存储接口）=====
+// 设计理念：前端只需 DataStore.collection('xxx')，后端自动处理存储与同步
+// userId 从 JWT token 中获取，无需在 URL 中传递
+
+// 获取某 collection 的全部数据
+app.get('/api/data/:collection', auth.authMiddleware, (req, res) => {
+  const userId = req.user.userId;
+  const collection = req.params.collection;
+  db.all(
+    'SELECT item_id, data_json, updated_at FROM user_data WHERE user_id = ? AND collection = ? ORDER BY updated_at DESC',
+    [userId, collection],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const items = (rows || []).map(r => {
+        try { return { id: r.item_id, data: JSON.parse(r.data_json), updatedAt: r.updated_at }; }
+        catch (e) { return null; }
+      }).filter(Boolean);
+      res.json({ collection, items });
+    }
+  );
+});
+
+// 保存/更新单条数据
+app.post('/api/data/:collection', auth.authMiddleware, (req, res) => {
+  const userId = req.user.userId;
+  const collection = req.params.collection;
+  const { id, data } = req.body;
+  if (!id || !data) return res.status(400).json({ error: '缺少 id 或 data' });
+  db.run(
+    `INSERT INTO user_data (user_id, collection, item_id, data_json, updated_at)
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(user_id, collection, item_id) DO UPDATE SET
+       data_json = excluded.data_json, updated_at = CURRENT_TIMESTAMP`,
+    [userId, collection, String(id), JSON.stringify(data)],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id, message: '已保存' });
+    }
+  );
+});
+
+// 批量保存（减少请求次数，适用于初次同步）
+app.post('/api/data/:collection/batch', auth.authMiddleware, (req, res) => {
+  const userId = req.user.userId;
+  const collection = req.params.collection;
+  const { items } = req.body;
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'items 必须是数组' });
+  db.serialize(() => {
+    const stmt = db.prepare(
+      `INSERT INTO user_data (user_id, collection, item_id, data_json, updated_at)
+       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(user_id, collection, item_id) DO UPDATE SET
+         data_json = excluded.data_json, updated_at = CURRENT_TIMESTAMP`
+    );
+    items.forEach(item => {
+      if (item.id && item.data) {
+        stmt.run([userId, collection, String(item.id), JSON.stringify(item.data)]);
+      }
+    });
+    stmt.finalize();
+    res.json({ message: '批量保存完成', count: items.length });
+  });
+});
+
+// 删除单条数据
+app.delete('/api/data/:collection/:itemId', auth.authMiddleware, (req, res) => {
+  const userId = req.user.userId;
+  const { collection, itemId } = req.params;
+  db.run(
+    'DELETE FROM user_data WHERE user_id = ? AND collection = ? AND item_id = ?',
+    [userId, collection, itemId],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ message: '已删除' });
+    }
+  );
+});
+
+// 清空某 collection 的全部数据
+app.delete('/api/data/:collection', auth.authMiddleware, (req, res) => {
+  const userId = req.user.userId;
+  const collection = req.params.collection;
+  db.run(
+    'DELETE FROM user_data WHERE user_id = ? AND collection = ?',
+    [userId, collection],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ message: '已清空', affected: this.changes });
+    }
+  );
 });
 
 // 启动服务器

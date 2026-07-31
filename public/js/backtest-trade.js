@@ -15,7 +15,7 @@
  */
 
 // 全局状态（加 BT_ 前缀避免与主页 trades 冲突）
-var BT_initCapital = 100000;        // 初始资金（元），可由用户调整
+var BT_initCapital = 1000000;       // 初始资金（元），默认 100 万，可由用户调整
 var BT_cash = BT_initCapital;       // 当前现金余额（buy 扣、sell 加净 P&L）
 var BT_feeRate = 0.0003;            // 手续费率（万三）
 var BT_trades = [];                 // 当前标的的全部成交记录
@@ -51,50 +51,133 @@ function BT_resetCapital() {
   BT_trades = [];
 }
 
-// 持久化键
+// ===== DataStore 集合（统一数据层，替代 localStorage）=====
+var BT_tradesCollection = null;   // DataStore.collection('backtest_trades')
+var BT_historyCollection = null;  // DataStore.collection('backtest_history')
+
+// 旧 localStorage 键（仅用于迁移）
 function BT_storageKey(symbol) {
   return 'bt_trades_' + (symbol || 'unknown');
 }
 
-// 加载某标的的历史成交记录
-function BT_loadTrades(symbol) {
-  try {
-    var raw = localStorage.getItem(BT_storageKey(symbol));
-    var trades = raw ? JSON.parse(raw) : [];
-    BT_trades = trades;
-    // 如果有持久化的 cash，恢复；否则重置为初始资金
-    var cashRaw = localStorage.getItem(BT_storageKey(symbol) + '_cash');
-    BT_cash = cashRaw != null ? parseFloat(cashRaw) : BT_initCapital;
-    if (!isFinite(BT_cash)) BT_cash = BT_initCapital;
-  } catch (e) {
-    BT_trades = [];
-    BT_cash = BT_initCapital;
+// 初始化 DataStore（在 BT_init 中调用）
+async function BT_initStore() {
+  if (typeof DataStore === 'undefined') {
+    console.warn('[backtest] DataStore 未加载，降级到 localStorage');
+    return;
   }
+  await DataStore.init();
+  BT_tradesCollection = DataStore.collection('backtest_trades');
+  BT_historyCollection = DataStore.collection('backtest_history');
+
+  // 监听交易变化（服务器拉取新数据时自动刷新 UI）
+  BT_tradesCollection.onChange(function() {
+    if (BT_currentSymbol) {
+      BT_loadTradesFromStore(BT_currentSymbol).then(function() {
+        if (typeof BT_renderTrades === 'function') BT_renderTrades();
+        if (typeof BT_renderStats === 'function') BT_renderStats();
+        if (typeof BT_refreshChartMarkers === 'function') BT_refreshChartMarkers();
+      });
+    }
+  });
+}
+
+// 从 DataStore 加载某标的的交易记录
+async function BT_loadTradesFromStore(symbol) {
+  if (!BT_tradesCollection) return;
+  var allTrades = await BT_tradesCollection.query(function(t) { return t.symbol === symbol; });
+  // 按日期排序（同日按 id 排序保持插入顺序）
+  allTrades.sort(function(a, b) {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return (a.id || '').localeCompare(b.id || '');
+  });
+  BT_trades = allTrades;
   BT_recomputePosition();
   BT_recomputeCash();
 }
 
-// 保存到 localStorage
-function BT_saveTrades() {
-  if (!BT_currentSymbol) return;
+// 加载某标的的历史成交记录（兼容 DataStore + localStorage 迁移）
+async function BT_loadTrades(symbol) {
+  if (BT_tradesCollection) {
+    await BT_loadTradesFromStore(symbol);
+    // 迁移：如果 DataStore 里没有数据但 localStorage 有，自动迁移
+    if (BT_trades.length === 0) {
+      await BT_migrateTradesFromLocalStorage(symbol);
+    }
+  } else {
+    // 降级：DataStore 未加载时用 localStorage
+    BT_loadTradesFromLocalStorage(symbol);
+  }
+  // 切换标的/首次加载后重算资金曲线
+  if (typeof BT_refreshEquityCurve === 'function') BT_refreshEquityCurve();
+}
+
+// localStorage 降级加载
+function BT_loadTradesFromLocalStorage(symbol) {
   try {
-    localStorage.setItem(BT_storageKey(BT_currentSymbol), JSON.stringify(BT_trades));
-    localStorage.setItem(BT_storageKey(BT_currentSymbol) + '_cash', String(BT_cash));
+    var raw = localStorage.getItem(BT_storageKey(symbol));
+    BT_trades = raw ? JSON.parse(raw) : [];
+    BT_recomputePosition();
+    BT_recomputeCash();
   } catch (e) {
-    console.warn('[backtest] 保存交易记录失败:', e);
+    BT_trades = [];
+    BT_cash = BT_initCapital;
+    BT_recomputePosition();
   }
 }
 
+// 从 localStorage 迁移交易记录到 DataStore
+async function BT_migrateTradesFromLocalStorage(symbol) {
+  try {
+    var raw = localStorage.getItem(BT_storageKey(symbol));
+    if (!raw) return;
+    var oldTrades = JSON.parse(raw);
+    if (!Array.isArray(oldTrades) || oldTrades.length === 0) return;
+    // 给每条记录加上 symbol 字段
+    for (var i = 0; i < oldTrades.length; i++) {
+      oldTrades[i].symbol = symbol;
+    }
+    await BT_tradesCollection.saveBatch(oldTrades);
+    BT_trades = oldTrades;
+    BT_recomputePosition();
+    BT_recomputeCash();
+    console.log('[backtest] 已从 localStorage 迁移 ' + oldTrades.length + ' 笔交易到 DataStore');
+  } catch (e) {
+    console.warn('[backtest] 迁移交易记录失败:', e);
+  }
+}
+
+// 保存到 DataStore（增量：只保存最后一笔交易）
+async function BT_saveTrades() {
+  if (!BT_currentSymbol || !BT_tradesCollection) return;
+  if (BT_trades.length === 0) return;
+  var lastTrade = BT_trades[BT_trades.length - 1];
+  lastTrade.symbol = BT_currentSymbol;
+  await BT_tradesCollection.save(lastTrade);
+}
+
+// 从 DataStore 删除单笔交易
+async function BT_deleteTradeFromStore(tradeId) {
+  if (!BT_tradesCollection) return;
+  await BT_tradesCollection.delete(tradeId);
+}
+
 // 清空当前标的的交易记录
-function BT_clearAllTrades() {
+async function BT_clearAllTrades() {
   BT_trades = [];
   BT_position = { volume: 0, cost: 0, realized: 0 };
-  BT_cash = BT_initCapital;   // 现金重置回初始资金
-  BT_saveTrades();
+  BT_cash = BT_initCapital;
+  // 从 DataStore 删除当前 symbol 的所有交易
+  if (BT_tradesCollection && BT_currentSymbol) {
+    var symbolTrades = await BT_tradesCollection.query(function(t) { return t.symbol === BT_currentSymbol; });
+    for (var i = 0; i < symbolTrades.length; i++) {
+      await BT_tradesCollection.delete(symbolTrades[i].id);
+    }
+  }
   BT_renderTrades();
   BT_renderStats();
   BT_refreshChartMarkers();
-  if (typeof BT_refreshEquityCurve === 'function') BT_refreshEquityCurve();
+  BT_refreshEquityCurve();
 }
 
 // 重新计算当前持仓 + 已实现盈亏
@@ -171,7 +254,7 @@ function BT_doBuy(date, price, volume) {
   BT_renderTrades();
   BT_renderStats();
   BT_refreshChartMarkers();
-  if (typeof BT_refreshEquityCurve === 'function') BT_refreshEquityCurve();
+  BT_refreshEquityCurve();
   BT_toast('买入 ' + volume + ' 股 @ ' + price.toFixed(2) + ' (' + date + ')', 'success');
 }
 
@@ -207,7 +290,7 @@ function BT_doSell(date, price, volume) {
   BT_renderTrades();
   BT_renderStats();
   BT_refreshChartMarkers();
-  if (typeof BT_refreshEquityCurve === 'function') BT_refreshEquityCurve();
+  BT_refreshEquityCurve();
   BT_toast((pnl >= 0 ? '盈利 ' : '亏损 ') + pnl.toFixed(2) + ' @ ' + price.toFixed(2) + ' (' + date + ')', pnl >= 0 ? 'success' : 'error');
 }
 
@@ -233,12 +316,17 @@ function BT_deleteLastTrade() {
   }
   if (!confirm('确定删除最后一笔交易（' + BT_trades[BT_trades.length - 1].date + ' ' +
     (BT_trades[BT_trades.length - 1].action === 'buy' ? '买入' : '卖出') + '）？')) return;
-  BT_trades.pop();
+  var removed = BT_trades.pop();
   BT_recomputePosition();
-  BT_saveTrades();
+  BT_recomputeCash();
+  // 从 DataStore 删除
+  if (removed && removed.id) {
+    BT_deleteTradeFromStore(removed.id);
+  }
   BT_renderTrades();
   BT_renderStats();
   BT_refreshChartMarkers();
+  BT_refreshEquityCurve();
   BT_toast('已撤销最后一笔', 'success');
 }
 

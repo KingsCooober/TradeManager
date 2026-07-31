@@ -100,6 +100,7 @@ async function fetchQuotes(symbols) {
     const fields = m[2].split('~');
     if (fields.length < 40) continue;
     result[symbol] = {
+      name:         fields[1] || null,    // ★ 股票/指数名称
       price:        parseFloat(fields[3])  || null,
       prevClose:    parseFloat(fields[4])  || null,
       open:         parseFloat(fields[5])  || null,
@@ -335,7 +336,7 @@ async function fetchKLine(symbol, count = 30, period = 'day') {
     const startDate = startYear + '-01-01';
     const endDate = today.toISOString().slice(0, 10);
 
-    const data = await fetchKLineFromBaostock(symbol, startDate, endDate, 'd', '3');
+    const data = await fetchKLineFromBaostock(symbol, startDate, endDate, 'd', '2');  // '2' = 前复权，与腾讯 qfq 通道保持一致
     if (data.length > 0) {
       // 截取最后 count 根
       const sliced = data.slice(-count);
@@ -593,10 +594,19 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200) {
   const cached = getCache(cacheKey);
   if (cached) return Object.assign({ key: null, cached: true }, cached);
 
-  const data = await buildKLineSnapshot(symbol, null, count);
-  data.key = null;
-  setCache(cacheKey, data);
-  return data;
+  // 拉一次实时行情顺便取名称（与 K 线并联，减少总延迟）
+  const namePromise = fetchQuotes([symbol]).then(function(q) {
+    return (q[symbol] && q[symbol].name) || null;
+  }).catch(function() { return null; });
+
+  const [name, klineData] = await Promise.all([
+    namePromise,
+    buildKLineSnapshot(symbol, null, count)
+  ]);
+  klineData.name = name || klineData.name || null;
+  klineData.key = null;
+  setCache(cacheKey, klineData);
+  return klineData;
 }
 
 // 入口：单只指数的完整行情
