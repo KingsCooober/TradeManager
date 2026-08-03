@@ -16,6 +16,7 @@
 
 const https = require('https');
 const marketQuote = require('./market-quote');
+const marketHistory = require('./market-history');
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 分钟
 const cache = new Map();
@@ -88,6 +89,7 @@ async function fetchNorthbound() {
 }
 
 // 2) 融资融券（取最近 2 日用于算环比）
+// 返回 null 表示接口尚未发布今天的数据（例如 19:00 前调用），调用方应跳过写入
 async function fetchMargin() {
   const url = 'https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPTA_RZRQ_LSHJ&columns=ALL&pageSize=5&sortColumns=dim_date&sortTypes=-1';
   const buf = await httpsGet(url);
@@ -97,6 +99,16 @@ async function fetchMargin() {
     throw new Error('融资融券接口无数据');
   }
   const rows = json.result.data;
+  // ★ 关键：东财接口不一定每天 19:00 前就发布当天数据。
+  //   如果 rows[0] 不是数据库写入目标日期（getLastTradingDate 会把周末回退到周五），
+  //   则跳过，避免把"rows[0] 的数据"误当成"目标日期"写进数据库。
+  //   修复前用的是物理今天（new Date），导致周末调用时即使东财已发布周五数据，
+  //   todayStr=周六 仍 ≠ latestDateStr=周五 → 错判 null → 覆盖周五那行为 0。
+  const latestDateStr = String(rows[0].DIM_DATE).slice(0, 10);
+  const todayStr = marketHistory.getLastTradingDate();
+  if (latestDateStr !== todayStr) {
+    return null;  // 接口未发布目标写入日期的数据
+  }
   const today = rows[0];
   const yesterday = rows[1] || today;
   const num = (v) => typeof v === 'string' ? parseFloat(v) : (typeof v === 'number' ? v : 0);
@@ -158,16 +170,42 @@ function scoreFund(northNetInflow, marginChangePct, totalAmountWan) {
 //   （沪市: sh000001 / 深市: sz399001，单位：万元）
 // 不再需要 totalAmountWan 入参 —— 由后端统一从行情接口获取
 async function getFundSnapshot() {
+  // ★ 非交易日（周末/节假日）短路：直接返回空快照，不调任何接口、不写库
+  //   避免北向/两融/成交额 在非交易日返回 0 或前一日数据污染前端
+  const isTradingDay = (function () {
+    // 测试钩子：环境变量 FORCE_NON_TRADING_DAY=1 可强制走非交易日分支
+    if (process.env.FORCE_NON_TRADING_DAY === '1') return false;
+    const d = new Date().getDay();
+    return d !== 0 && d !== 6;  // 0=周日, 6=周六
+  })();
+  if (!isTradingDay) {
+    return {
+      _nonTradingDay: true,
+      date: marketHistory.getLastTradingDate(),
+      message: '非交易日（周末/节假日）',
+      north: { error: 'non_trading_day', netInflow: 0, hk2sh: 0, hk2sz: 0 },
+      margin: { error: 'non_trading_day', rzye: 0, rzjme: 0, rqye: 0, rzrqye: 0, prev: { rzye: 0, rzrqye: 0 } },
+      amount: { error: 'non_trading_day', totalWan: 0, shWan: 0, szWan: 0, totalYi: 0, shYi: 0, szYi: 0 },
+      score: { total: 0, northScore: 0, marginScore: 0, amountScore: 0, details: { northYi: 0, marginChangePct: 0, totalYi: 0 } }
+    };
+  }
+
   const cacheKey = 'fund:snapshot';
   const cached = getCache(cacheKey);
   if (cached) return Object.assign({ cached: true }, cached);
 
   // 并发获取：北向资金 + 融资融券 + 沪深两市总成交额
-  const [north, margin, marketAmount] = await Promise.all([
+  let [north, margin, marketAmount] = await Promise.all([
     fetchNorthbound().catch(e => ({ error: e.message, netInflow: 0 })),
     fetchMargin().catch(e => ({ error: e.message, rzye: 0, rzjme: 0, rqye: 0, rzrqye: 0, prev: { rzye: 0, rzrqye: 0 } })),
     marketQuote.fetchMarketTotalAmount().catch(e => ({ error: e.message, totalWan: 0, shWan: 0, szWan: 0 }))
   ]);
+
+  // ★ 如果 fetchMargin 返回 null（接口未发布当日数据），统一格式化为 error 占位
+  //   防止下方 margin.rzye / margin.prev 访问 null 导致崩溃
+  if (margin === null) {
+    margin = { error: 'margin_not_published', rzye: 0, rzjme: 0, rqye: 0, rzrqye: 0, prev: { rzye: 0, rzrqye: 0 } };
+  }
 
   // 计算融资余额环比 %
   let marginChangePct = 0;

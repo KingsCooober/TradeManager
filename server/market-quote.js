@@ -118,6 +118,75 @@ async function fetchQuotes(symbols) {
   return result;
 }
 
+// 新浪行情 fallback（腾讯返回 missing 时使用）
+//   入参：symbols = ['sh600000', 'sz000001', ...]
+//   出参：{ 'sh600000': '浦发银行', ... }（找不到的 key 不会出现）
+//   注意：自动探测 sh/sz 前缀（部分老数据 prefix 可能写反，比如 sh301377 实际是 sz）
+//   原因：东方财富/新浪 / 腾讯对同一支股只接受 1 个正确 prefix
+async function fetchNamesFromSina(symbols) {
+  // 第一遍：用原始 prefix 查
+  const originalList = symbols.map(s => s.toLowerCase()).filter(s => /^(sh|sz)\d{6}$/.test(s));
+  if (!originalList.length) return {};
+  const result = await sinaQuery(originalList);
+  // 第二遍：remaining 试反向 prefix
+  const remaining = originalList.filter(s => !result[s]);
+  if (remaining.length) {
+    const flipped = remaining.map(s => (s.startsWith('sh') ? 'sz' : 'sh') + s.slice(2));
+    const result2 = await sinaQuery(flipped);
+    // 用原始 key 索引回去
+    for (let i = 0; i < remaining.length; i++) {
+      if (result2[flipped[i]]) result[remaining[i]] = result2[flipped[i]];
+    }
+  }
+  return result;
+}
+
+async function sinaQuery(syms) {
+  const out = {};
+  if (!syms.length) return out;
+  // 新浪格式：var hq_str_sh600000=...
+  const url = 'https://hq.sinajs.cn/list=' + syms.join(',');
+  return new Promise(function(resolve) {
+    const req = https.get(url, {
+      timeout: 8000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://finance.sina.com.cn/'
+      }
+    }, function(res) {
+      // 新浪返回 GBK，需要转 UTF-8
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', function() {
+        try {
+          const buf = Buffer.concat(chunks);
+          // 新浪返回 GBK 编码。Node 18+ 自带 TextDecoder('gb18030')
+          //   解码后用 utf8 正则匹配
+          let text = '';
+          try {
+            text = new TextDecoder('gb18030').decode(buf);
+          } catch (e) {
+            // 极端情况下没有 TextDecoder，回退 utf8（数据会乱码但也能拿到 key）
+            text = buf.toString('utf8');
+          }
+          // 正则：hq_str_sh600000="浦发银行,..."   → 排除 "，因为数据里不会有 "
+          const re = /hq_str_(\w{2}\d{6})="([^"]+)"/g;
+          let m;
+          while ((m = re.exec(text)) !== null) {
+            const name = m[2].split(',')[0].trim();  // 名称在第一个逗号前
+            if (name) out[m[1]] = name;
+          }
+        } catch (e) {
+          console.warn('[sina] 解析失败:', e.message);
+        }
+        resolve(out);
+      });
+    });
+    req.on('error', function(e) { console.warn('[sina] 请求失败:', e.message); resolve({}); });
+    req.on('timeout', function() { req.destroy(); resolve({}); });
+  });
+}
+
 // 2) 日 K 线（用于计算 N 日均价）
 // 字段：[日期, 开, 收, 高, 低, 成交额, [成交量?], 振幅, 涨跌幅, 换手率]
 // 全局串行锁：避免对 push2his.eastmoney.com 短时间并发请求触发 WAF/限流
@@ -712,6 +781,7 @@ module.exports = {
   fetchMarketTotalAmount,
   fetchKLine,
   fetchQuotes,
+  fetchNamesFromSina,
   getKLineSnapshot,
   getKLineSnapshotForSymbol,
   INDEX_MAP

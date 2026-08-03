@@ -898,10 +898,73 @@ app.get('/api/market/indices', auth.authMiddleware, async (req, res) => {
 
 // 资金面：北向资金 + 融资融券 + 沪深两市总成交额（沪市sh000001 + 深市sz399001）+ 评分
 // 沪深两市总成交额由后端内部从行情接口自动获取（前端无需再传 totalAmountWan）
+// 入参：date - 可选，YYYY-MM-DD；不传则拉今天实时数据
+//   传 date 时：从 market_history 表里查该日数据，避免"今天是非交易日"时所有日期都显示 0
 app.get('/api/market/fund', auth.authMiddleware, async (req, res) => {
   try {
+    const queryDate = req.query.date;  // YYYY-MM-DD 或 undefined
+    if (queryDate) {
+      // 查历史快照
+      const row = await marketHistory.getRowByDate(queryDate);
+      if (!row) {
+        return res.json({
+          date: queryDate,
+          _noData: true,
+          message: '该日期无数据',
+          north: { error: 'no_data', netInflow: 0, hk2sh: 0, hk2sz: 0 },
+          margin: { error: 'no_data', rzye: 0, rzjme: 0, rqye: 0, rzrqye: 0, changePct: 0, prev: { rzye: 0, rzrqye: 0 } },
+          amount: { error: 'no_data', totalWan: 0, shWan: 0, szWan: 0, totalYi: 0, shYi: 0, szYi: 0 },
+          score: { total: 0, northScore: 0, marginScore: 0, amountScore: 0, details: { northYi: 0, marginChangePct: 0, totalYi: 0 } }
+        });
+      }
+      // 转换成与实时接口一致的结构
+      const northYi = (row.north_net_yi != null) ? row.north_net_yi : 0;
+      const totalYi = (row.amount_total_yi != null) ? row.amount_total_yi : 0;
+      const marginChangePct = (row.margin_change_pct != null) ? row.margin_change_pct : 0;
+      // 资金面评分（与 market-fund.js 中 getFundSnapshot 的算法保持一致：每项满分 6.67，共 20 分）
+      const northScore = Math.min(6.67, Math.max(0, northYi >= 0 ? Math.log10(1 + northYi) * 4 : -Math.log10(1 + Math.abs(northYi)) * 4));
+      const marginScore = Math.max(0, Math.min(6.67, 3.34 + marginChangePct * 1.5));
+      const amountScore = Math.max(0, Math.min(6.67, (totalYi / 3000) * 6.67));
+      const total = Math.round((northScore + marginScore + amountScore) * 10) / 10;
+      return res.json({
+        date: row.date,
+        _fromHistory: true,
+        north: {
+          netInflow: Math.round(northYi * 1e8),
+          hk2sh: 0, hk2sz: 0,
+          netInflowYi: northYi
+        },
+        margin: {
+          rzye: row.rzye || 0,
+          rzjme: 0,
+          rqye: (row.rzrqye || 0) - (row.rzye || 0),
+          rzrqye: row.rzrqye || 0,
+          changePct: marginChangePct,
+          prev: { rzye: 0, rzrqye: 0 }
+        },
+        amount: {
+          totalWan: Math.round(totalYi * 10000),
+          shWan: Math.round((row.amount_sh_yi || 0) * 10000),
+          szWan: Math.round((row.amount_sz_yi || 0) * 10000),
+          totalYi: totalYi,
+          shYi: row.amount_sh_yi || 0,
+          szYi: row.amount_sz_yi || 0
+        },
+        score: {
+          total: total,
+          northScore: Math.round(northScore * 10) / 10,
+          marginScore: Math.round(marginScore * 10) / 10,
+          amountScore: Math.round(amountScore * 10) / 10,
+          breakdown: '北向:' + Math.round(northScore * 10) / 10 + ' 融资:' + Math.round(marginScore * 10) / 10 + ' 成交:' + Math.round(amountScore * 10) / 10,
+          details: { northYi: northYi, marginChangePct: marginChangePct, totalYi: totalYi }
+        }
+      });
+    }
+    // 不传 date：拉今天实时数据（保持原行为）
     const data = await marketFund.getFundSnapshot();
-    // 顺手记录今日资金面（异步、不影响响应速度）
+    if (data._nonTradingDay) {
+      return res.json(data);
+    }
     marketHistory.recordFundSnapshot(data).catch(e => console.warn('记录资金面失败:', e.message));
     res.json(data);
   } catch (e) {
@@ -912,10 +975,56 @@ app.get('/api/market/fund', auth.authMiddleware, async (req, res) => {
 
 // 情绪面：沪深两市涨跌停统计 + 上涨/下跌家数 + 评分（0-20 分）
 // 数据源：东方财富 push2.eastmoney.com/api/qt/idxstat/get（沪市secid=1.000001 / 深市secid=0.399001）
+// 入参：date - 可选，YYYY-MM-DD；不传则拉今天实时数据
 app.get('/api/market/sentiment', auth.authMiddleware, async (req, res) => {
   try {
+    const queryDate = req.query.date;
+    if (queryDate) {
+      // 查历史快照
+      const row = await marketHistory.getRowByDate(queryDate);
+      if (!row) {
+        return res.json({
+          date: queryDate,
+          _noData: true,
+          message: '该日期无数据',
+          zt_count: 0, dt_count: 0, zt_dt_diff: 0,
+          up_count: 0, down_count: 0, flat_count: 0, sample_size: 0,
+          merged: { zt: 0, dt: 0, up: 0, down: 0, flat: 0 },
+          score: { total: 0, sentimentScore: 0, upPctScore: 0, ztAbsScore: 0, details: {} }
+        });
+      }
+      const zt = row.zt_count || 0;
+      const dt = row.dt_count || 0;
+      const up = row.up_count || 0;
+      const down = row.down_count || 0;
+      const flat = row.flat_count || 0;
+      const sample = row.sample_size || 0;
+      // 情绪面评分（与 market-sentiment.js 一致）
+      const upPct = sample > 0 ? up / sample : 0;
+      const upPctScore = upPct > 0.5 ? 10 : upPct > 0.3 ? 5 : 0;
+      const ztAbsScore = zt > 60 ? 10 : zt > 30 ? 5 : 0;
+      const total = upPctScore + ztAbsScore;
+      return res.json({
+        date: row.date,
+        _fromHistory: true,
+        zt_count: zt, dt_count: dt, zt_dt_diff: row.zt_dt_diff || (zt - dt),
+        up_count: up, down_count: down, flat_count: flat, sample_size: sample,
+        merged: { zt: zt, dt: dt, up: up, down: down, flat: flat },
+        score: {
+          total: total,
+          sentimentScore: total,
+          upPctScore: upPctScore,
+          ztAbsScore: ztAbsScore,
+          breakdown: '上涨占比:' + upPctScore + ' 涨停数:' + ztAbsScore,
+          details: { upPct: upPct, zt: zt }
+        }
+      });
+    }
+    // 不传 date：拉实时
     const data = await marketSentiment.getSentimentSnapshot();
-    // 顺手记录今日情绪面
+    if (data._nonTradingDay) {
+      return res.json(data);
+    }
     marketHistory.recordSentimentSnapshot(data).catch(e => console.warn('记录情绪面失败:', e.message));
     res.json(data);
   } catch (e) {
@@ -965,6 +1074,40 @@ app.get('/api/market/kline-stock/:symbol', auth.authMiddleware, async (req, res)
   } catch (e) {
     console.error('[market] getKLineSnapshotForSymbol 失败:', e.message);
     res.status(500).json({ error: 'K线获取失败: ' + e.message });
+  }
+});
+
+// 批量查股票名称（轻量接口，不返回 K 线）
+// 入参：?symbols=sh600000,sz000001   （最多 50 个，逗号分隔）
+// 出参：{ names: { 'sh600000': '浦发银行', 'sz000001': '平安银行' }, missing: [...] }
+app.get('/api/market/stock-names', auth.authMiddleware, async (req, res) => {
+  const raw = (req.query.symbols || '').toString().trim();
+  if (!raw) return res.status(400).json({ error: 'symbols 参数必填' });
+  const symbols = raw.split(',').map(s => s.trim().toLowerCase()).filter(s => /^(sh|sz)\d{6}$/.test(s)).slice(0, 50);
+  if (!symbols.length) return res.status(400).json({ error: 'symbols 格式错误，应为 shXXXXXX 或 szXXXXXX' });
+  try {
+    // 数据源优先级：腾讯 → 新浪（fallback）
+    //   腾讯 qt.gtimg.cn 对部分股返回 missing（如 prefix 写反的股）
+    //   新浪 hq.sinajs.cn 会自动探测 prefix，命中率更高
+    let quotes = await market.fetchQuotes(symbols);
+    const names = {};
+    const missing = [];
+    for (const sym of symbols) {
+      if (quotes[sym] && quotes[sym].name) names[sym] = quotes[sym].name;
+      else missing.push(sym);
+    }
+    if (missing.length > 0) {
+      // 用新浪查 remaining（自动探测 prefix）
+      const sinaNames = await market.fetchNamesFromSina(missing);
+      for (const sym of missing) {
+        if (sinaNames[sym]) names[sym] = sinaNames[sym];
+      }
+    }
+    const finalMissing = symbols.filter(sym => !names[sym]);
+    res.json({ names, missing: finalMissing });
+  } catch (e) {
+    console.error('[market] stock-names 失败:', e.message);
+    res.status(500).json({ error: '查名失败: ' + e.message });
   }
 });
 

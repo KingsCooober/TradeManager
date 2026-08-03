@@ -148,6 +148,20 @@ function scoreSentiment(stats) {
 
 // 主入口：拉取全市场数据并计算评分
 async function getSentimentSnapshot() {
+  // ★ 非交易日短路：和资金面一致的处理
+  const day = new Date().getDay();
+  // 测试钩子：与 fund 一致，方便统一验证
+  const isNonTrading = (process.env.FORCE_NON_TRADING_DAY === '1') || (day === 0 || day === 6);
+  if (isNonTrading) {
+    return {
+      _nonTradingDay: true,
+      date: require('./market-history').getLastTradingDate(),
+      message: '非交易日（周末/节假日）',
+      zt_count: 0, dt_count: 0, zt_dt_diff: 0,
+      up_count: 0, down_count: 0, flat_count: 0, sample_size: 0,
+      score: { total: 0, sentimentScore: 0, upPctScore: 0, ztAbsScore: 0, details: {} }
+    };
+  }
   const cacheKey = 'sentiment:snapshot';
   const cached = getCache(cacheKey);
   if (cached) return Object.assign({ cached: true }, cached);

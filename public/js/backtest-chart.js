@@ -17,6 +17,9 @@ var BT_renderCustomTooltip = null;  // 自定义 DOM tooltip 渲染函数（由 
 var BT_klineData = null;        // 当前 K 线完整数据 {dates, ohlc, volumes, ma5/10/20, macd, count, ...}
 var BT_maPeriods = [5, 10, 20, 60];  // MA 周期（从输入框实时读取）
 var BT_showFlags = { ma: true, macd: true, vol: true, equity: true };  // 显示开关
+// 固定显示窗口：默认只显示最近 60 根 K线（让单根 K线 视觉宽度固定）
+// 数据少于 60 根时显示全部；可在 BT_KLINE_WINDOW 修改
+var BT_KLINE_WINDOW = 60;
 var BT_currentIdx = null;       // 光标所在的 K 线索引（也存 localStorage）
 var BT_visibleBars = 250;       // 固定显示的 K 线根数（缩放比例）
 var BT_zoomLocked = false;      // 比例锁定：true 时 setCursor 不调整 dataZoom
@@ -76,7 +79,7 @@ function BT_calcZoomRange(idx, mode) {
 // 颜色（与项目内其他图表保持一致）
 var BT_COLOR_UP   = '#ef476f';  // A 股红涨
 var BT_COLOR_DOWN = '#2d9f7f';  // A 股绿跌
-var BT_MA_COLORS  = ['#ffd166', '#5c7cfa', '#7209b7', '#ff8c42'];  // MA1~MA4
+var BT_MA_COLORS  = ['#000000', '#FACC15', '#374151', '#94A3B8'];  // MA1~MA4：黑 / 亮黄 / 深灰 / 浅灰
 
 // 初始化图表实例
 function BT_initChart() {
@@ -282,10 +285,10 @@ function BT_getBaseOption() {
       label: { backgroundColor: 'transparent', color: 'transparent', borderWidth: 0 }
     },
     grid: [
-      { left: 60, right: 30, top: 18,   height: 300 },   // K线 300px（下调 60，把空间让给 MACD）
-      { left: 60, right: 30, top: 323,  height: 80 },    // 成交量 80px
-      { left: 60, right: 30, top: 408,  height: 150 },   // MACD 150px（上调，之前 90 被 ECharts 压扁成 ~50px）
-      { left: 60, right: 30, top: 563,  height: 120 }    // 资金曲线 120px
+      { left: 60, right: 30, top: 18,   height: 500 },   // K线 500px（+200px，按用户要求）
+      { left: 60, right: 30, top: 523,  height: 100 },   // 成交量 100px
+      { left: 60, right: 30, top: 628,  height: 150 },   // MACD 150px
+      { left: 60, right: 30, top: 783,  height: 150 }    // 资金曲线 150px
     ],
     xAxis: [
       { type: 'category', data: [], gridIndex: 0, scale: true, boundaryGap: false,
@@ -317,6 +320,12 @@ function BT_getBaseOption() {
         splitLine: { show: false } },
       { gridIndex: 3, scale: true, splitNumber: 3,
         position: 'left',
+        // 资金曲线 0轴从初始资金开始：通过 min 函数保证 Y 轴下界 ≤ 初始资金，下方留少量空隙
+        min: function(value) {
+          var initCap = (typeof BT_initCapital === 'number' && BT_initCapital > 0) ? BT_initCapital : 100000;
+          var dataMin = (value && typeof value.min === 'number') ? value.min : initCap;
+          return Math.min(dataMin, initCap) * 0.95;
+        },
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
         axisLabel: { color: isDark ? '#aaa' : '#666', fontSize: 10,
                      formatter: function(v) { return v >= 10000 ? (v/10000).toFixed(1) + '万' : v.toFixed(0); } },
@@ -341,6 +350,8 @@ function BT_getBaseOption() {
         handle:     { show: false },     // 隐藏两端把手 → 无法改变窗口宽度
         moveHandle: { show: true,        // 显示中间可移动把手 → 可拖动平移窗口
                       style: { color: 'rgba(100,100,100,0.25)', borderColor: '#888', borderWidth: 1 } },
+        // 固定显示窗口：默认只显示最近 60 根 K线（单根 K线 视觉宽度固定）
+        // start 会在 BT_renderKLineChart 中根据数据长度动态计算
         start: 0, end: 100,
         showDetail: false,
         showDataShadow: false,
@@ -645,24 +656,19 @@ function BT_renderKLine(data) {
   var ohlc  = data.ohlc;
   var vols  = data.volumes;
 
-  // 计算 4 条 MA
+  // 计算 N 条 MA（数量由 BT_maPeriods 决定，支持 1-6 条）
   var closes = ohlc.map(function(o) { return o[1]; });
   var maLines = [];
-  for (var i = 0; i < 4; i++) {
-    if (i < BT_maPeriods.length) {
-      maLines.push({
-        name: 'MA' + BT_maPeriods[i],
-        type: 'line',
-        data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
-        smooth: true,
-        lineStyle: { width: 1, color: BT_MA_COLORS[i] },
-        showSymbol: false,
-        z: 5
-      });
-    } else {
-      // 空 slot：保证 series index 稳定（清空的 MA 不画线，但保留位置）
-      maLines.push({ name: '__MA_empty_' + i, type: 'line', data: [], showSymbol: false, z: 5 });
-    }
+  for (var i = 0; i < BT_maPeriods.length; i++) {
+    maLines.push({
+      name: 'MA' + BT_maPeriods[i],
+      type: 'line',
+      data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
+      smooth: true,
+      lineStyle: { width: 1.5, color: BT_MA_COLORS[i] },
+      showSymbol: false,
+      z: 5
+    });
   }
 
   // K 线 + 量 + MACD
@@ -799,10 +805,11 @@ function BT_renderKLine(data) {
   ];
 
   // 资金曲线：按时间模拟所有交易，得出每日总资金（现金 + 持仓市值）
-  // 视觉：紫色 line + 渐变 area + 初始资金水平线
+  // 视觉：紫色 line + 渐变 area + 初始资金水平线 + 0轴从初始资金开始
   var equityArr = BT_buildEquityCurve(ohlc, dates, BT_trades);
   data._equity = equityArr;   // 存到 data 供 tooltip 读取
   var initCap = (typeof BT_initCapital === 'number' && BT_initCapital > 0) ? BT_initCapital : 100000;
+
   var equitySeries = {
     name: '资金',
     type: 'line',
@@ -874,11 +881,11 @@ function BT_updateVisibleGrids() {
   var showMacd   = BT_showFlags.macd;
   var showEquity = BT_showFlags.equity;
 
-  // 固定像素高度（与 #btChart { height: 720px } 配套：18+300+5+80+5+150+5+120+18+16 = 717）
-  var KLINE_PX  = 300;   // K线主图（下调 60，把空间让给 MACD）
-  var VOL_PX    = 80;    // 成交量
-  var MACD_PX   = 150;   // MACD（上调到 150px，之前 90 在视觉上被 ECharts 压扁到 ~50px，看不清）
-  var EQUITY_PX = 120;   // 资金曲线
+  // 固定像素高度（与 #btChart { height: 970px } 配套：18+500+5+100+5+150+5+150+18+16 = 967）
+  var KLINE_PX  = 500;   // K线主图（+200px）
+  var VOL_PX    = 100;   // 成交量
+  var MACD_PX   = 150;   // MACD
+  var EQUITY_PX = 150;   // 资金曲线
   var GAP = 5;           // 子图间 gap
   var TOP_PX = 18;       // 顶部 18px 留白（容 Y轴 label）
 
@@ -1203,7 +1210,7 @@ function BT_updateMAPeriods() {
     var raw = inputs[i] && inputs[i].value && String(inputs[i].value).trim();
     if (!raw) continue;   // 空字符串 → 跳过（清空该 slot）
     var v = parseInt(raw);
-    if (v && v > 0 && v <= 250) newPeriods.push(v);
+    if (v && v > 0 && v <= 400) newPeriods.push(v);
   }
   if (newPeriods.length === 0) {
     BT_toast('至少需要 1 条均线', 'warn');
@@ -1232,24 +1239,24 @@ function BT_renderMAOnly() {
   var allSeries = [
     { name: 'K线', type: 'candlestick' }   // 占位：与旧 K线 series 按 index 合并，保留 data/itemStyle/markPoint
   ];
-  for (var i = 0; i < 4; i++) {
-    if (i < BT_maPeriods.length) {
-      allSeries.push({
-        name: 'MA' + BT_maPeriods[i],
-        type: 'line',
-        data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
-        smooth: true,
-        lineStyle: { width: 1, color: BT_MA_COLORS[i] },
-        showSymbol: false,
-        z: 5
-      });
-    } else {
-      // 空 slot：data 为空数组 → 该 MA 不显示
-      allSeries.push({ name: '__MA_empty_' + i, type: 'line', data: [], showSymbol: false, z: 5 });
-    }
+  for (var i = 0; i < BT_maPeriods.length; i++) {
+    allSeries.push({
+      name: 'MA' + BT_maPeriods[i],
+      type: 'line',
+      data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
+      smooth: true,
+      lineStyle: { width: 1.5, color: BT_MA_COLORS[i] },
+      showSymbol: false,
+      z: 5
+    });
   }
   // 按 series index 合并（merge 模式默认），不重置 K线/量/MACD
   BT_chart.setOption({ series: allSeries });
+  // ★ 同时刷新指数图：MA 周期变化时指数图也要按新周期重画
+  if (typeof BT_indexData === 'undefined' || !BT_indexData) return;
+  if (BT_indexChart && typeof BT_renderIndexChart === 'function') {
+    BT_renderIndexChart(BT_indexData, document.getElementById('indexTitle') ? document.getElementById('indexTitle').textContent.replace(/^📈\s*/, '') : '');
+  }
 }
 
 // 切换显示开关
@@ -1268,6 +1275,40 @@ function BT_toggleShowVol() {
 function BT_toggleShowEquity() {
   BT_showFlags.equity = document.getElementById('showEquity').checked;
   BT_updateVisibleGrids();
+}
+
+// 显示/隐藏大盘指数走势图（上方窗口）
+// 关闭时：wrapper 隐藏，主图 K 线自动占满空间；同时取消指数数据请求（避免无意义拉数据）
+// 开启时：wrapper 显示，重新拉指数 + 触发 ECharts resize
+function BT_toggleShowIndex() {
+  var checkbox = document.getElementById('showIndex');
+  if (!checkbox) return;
+  var enabled = checkbox.checked;
+  var section = document.getElementById('btIndexSection');
+  if (section) {
+    section.style.display = enabled ? '' : 'none';
+  }
+  // 隐藏/显示后 ECharts 容器尺寸变化，需要 resize
+  if (BT_chart) {
+    setTimeout(function() { BT_chart.resize(); }, 50);
+  }
+  if (BT_indexChart) {
+    if (enabled) {
+      // 开启：若未初始化则先初始化 ECharts
+      if (typeof BT_initIndexChart === 'function' && !BT_indexChart) {
+        BT_initIndexChart();
+      }
+      // 重新拉指数数据
+      if (typeof BT_loadIndex === 'function') BT_loadIndex(/*silent*/ true);
+    }
+    setTimeout(function() { BT_indexChart.resize(); }, 50);
+  } else if (enabled) {
+    // BT_indexChart 还不存在（页面打开时 showIndex=false 跳过了初始化）
+    if (typeof BT_initIndexChart === 'function') {
+      BT_initIndexChart();
+      if (typeof BT_loadIndex === 'function') BT_loadIndex(/*silent*/ true);
+    }
+  }
 }
 
 // 窗口尺寸变化时重排
@@ -1710,22 +1751,18 @@ function BT_renderIndexChart(data, indexName) {
   var vols = data.volumes || [];
   if (dates.length === 0) return;
 
-  // MA 4 条（与主图一致，从 BT_maPeriods 读）
+  // MA N 条（与主图一致，从 BT_maPeriods 读）
   var maLines = [];
-  for (var i = 0; i < 4; i++) {
-    if (i < BT_maPeriods.length) {
-      maLines.push({
-        name: 'MA' + BT_maPeriods[i],
-        type: 'line',
-        data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
-        smooth: true,
-        showSymbol: false,
-        lineStyle: { width: 1, color: BT_MA_COLORS[i] },
-        z: 5
-      });
-    } else {
-      maLines.push({ name: '__MA_empty_' + i, type: 'line', data: [], showSymbol: false, z: 5 });
-    }
+  for (var i = 0; i < BT_maPeriods.length; i++) {
+    maLines.push({
+      name: 'MA' + BT_maPeriods[i],
+      type: 'line',
+      data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
+      smooth: true,
+      showSymbol: false,
+      lineStyle: { width: 1.5, color: BT_MA_COLORS[i] },
+      z: 5
+    });
   }
 
   // 成交量柱（按涨跌着色：红涨绿跌）
@@ -1745,42 +1782,32 @@ function BT_renderIndexChart(data, indexName) {
     return { value: v, itemStyle: { color: v >= 0 ? BT_COLOR_UP : BT_COLOR_DOWN } };
   });
 
+  // ★ 显式构造 series 数组（不能用 ES6 spread：ECharts setOption 不支持）
+  //   顺序：K线 → MA×N → 成交 → DIF/DEA/MACD柱
+  var seriesArr = [
+    // K线（grid 0）
+    {
+      name: 'K线', type: 'candlestick', data: ohlc,
+      xAxisIndex: 0, yAxisIndex: 0,
+      itemStyle: {
+        color: BT_COLOR_UP, color0: BT_COLOR_DOWN,
+        borderColor: BT_COLOR_UP, borderColor0: BT_COLOR_DOWN
+      },
+      z: 2
+    }
+  ];
+  // MA × N（grid 0，数量由 BT_maPeriods 决定，支持 1-6 条）
+  for (var _m = 0; _m < maLines.length; _m++) seriesArr.push(maLines[_m]);
+  // 成交量（grid 1）
+  seriesArr.push({ name: '成交', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volData, z: 1 });
+  // MACD（grid 2：DIF/DEA 折线 + MACD 柱）
+  seriesArr.push({ name: 'DIF',  type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macdData.dif || [], smooth: true, showSymbol: false, lineStyle: { width: 1, color: '#ffd166' }, z: 3 });
+  seriesArr.push({ name: 'DEA',  type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macdData.dea || [], smooth: true, showSymbol: false, lineStyle: { width: 1, color: '#5c7cfa' }, z: 3 });
+  seriesArr.push({ name: 'MACD', type: 'bar',  xAxisIndex: 2, yAxisIndex: 2, data: macdBarData, z: 1 });
+
   BT_indexChart.setOption({
     xAxis: [{ data: dates }, { data: dates }, { data: dates }, { data: dates }],
-    series: [
-      // K线（grid 0）
-      {
-        name: 'K线', type: 'candlestick', data: ohlc,
-        xAxisIndex: 0, yAxisIndex: 0,
-        itemStyle: {
-          color: BT_COLOR_UP, color0: BT_COLOR_DOWN,
-          borderColor: BT_COLOR_UP, borderColor0: BT_COLOR_DOWN
-        },
-        z: 2
-      },
-      // MA × 4（grid 0）
-      maLines[0], maLines[1], maLines[2], maLines[3],
-      // 成交量（grid 1）
-      {
-        name: '成交', type: 'bar', xAxisIndex: 1, yAxisIndex: 1,
-        data: volData, z: 1
-      },
-      // MACD（grid 2：DIF/DEA 折线 + MACD 柱）
-      {
-        name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2,
-        data: macdData.dif || [], smooth: true, showSymbol: false,
-        lineStyle: { width: 1, color: '#ffd166' }, z: 3
-      },
-      {
-        name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2,
-        data: macdData.dea || [], smooth: true, showSymbol: false,
-        lineStyle: { width: 1, color: '#5c7cfa' }, z: 3
-      },
-      {
-        name: 'MACD', type: 'bar', xAxisIndex: 2, yAxisIndex: 2,
-        data: macdBarData, z: 1
-      }
-    ]
+    series: seriesArr
   });
 
   // 顶部标题

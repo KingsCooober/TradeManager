@@ -1487,7 +1487,8 @@
 }
 @media (min-width: 1024px) {
   .dr-history-grid {
-    grid-template-columns: 1fr 1fr 1fr;
+    /* 2x2 四宫格：桌面端两个图并排一行，移动端 1 列垂直堆叠 */
+    grid-template-columns: 1fr 1fr;
   }
 }
 .dr-history-chart-wrap {

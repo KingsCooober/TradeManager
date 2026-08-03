@@ -57,7 +57,7 @@
   padding: 8px;
   margin-bottom: 12px;
 }
-#btChart { width: 100%; height: 720px; min-width: 0; }  /* K线 300 + 量 80 + MACD 150 + 资金 120 + slider = 720px */
+#btChart { width: 100%; height: 970px; min-width: 0; }  /* K线 500 + 量 100 + MACD 150 + 资金 150 + slider = 970px */
 
 /* 大盘指数窗口 */
 .bt-index-body {
@@ -362,10 +362,10 @@
     </div>
     <div class="bt-group">
       <label>均线:</label>
-      <input type="number" class="ma-input" id="ma1" value="5"  min="1" max="250" title="MA 周期 1">
-      <input type="number" class="ma-input" id="ma2" value="10" min="1" max="250" title="MA 周期 2">
-      <input type="number" class="ma-input" id="ma3" value="20" min="1" max="250" title="MA 周期 3">
-      <input type="number" class="ma-input" id="ma4" value="60" min="1" max="250" title="MA 周期 4">
+      <input type="number" class="ma-input" id="ma1" value="5"  min="1" max="400" title="MA 周期 1">
+      <input type="number" class="ma-input" id="ma2" value="10" min="1" max="400" title="MA 周期 2">
+      <input type="number" class="ma-input" id="ma3" value="20" min="1" max="400" title="MA 周期 3">
+      <input type="number" class="ma-input" id="ma4" value="60" min="1" max="400" title="MA 周期 4">
     </div>
     <div class="bt-group">
       <label>显示:</label>
@@ -395,6 +395,7 @@
       <label><input type="checkbox" id="showMACD" checked> MACD</label>
       <label><input type="checkbox" id="showVol" checked> 量</label>
       <label><input type="checkbox" id="showEquity" checked> 资金</label>
+      <label><input type="checkbox" id="showIndex" checked> 指数</label>
     </div>
     <div class="bt-group">
       <label>初始资金:</label>
@@ -409,7 +410,7 @@
 
   <!-- 大盘指数走势图（上方窗口，与主图同步缩放）-->
   <!-- 与主图共用 .bt-chart-wrap 布局：左侧 K线 + 右侧 180px 指数数据栏（跟主图完全对称）-->
-  <div class="bt-chart-wrap" style="margin-bottom: 8px;">
+  <div class="bt-chart-wrap bt-index-section" id="btIndexSection" style="margin-bottom: 8px;">
     <div class="bt-index-body">
       <div class="bt-index-head">
         <span class="bt-index-title" id="indexTitle">📈 上证指数</span>
@@ -576,8 +577,8 @@
 
 <!-- 回测专用模块（顺序：交易 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=5"></script>
-<script src="js/backtest-chart.js?v=76"></script>
-<script src="js/backtest-main.js?v=21"></script>
+<script src="js/backtest-chart.js?v=77"></script>
+<script src="js/backtest-main.js?v=22"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

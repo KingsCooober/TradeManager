@@ -39,6 +39,7 @@ function BT_saveState() {
       ma2: ma2 && ma2.value,
       ma3: ma3 && ma3.value,
       ma4: ma4 && ma4.value,
+      showIndex:    document.getElementById('showIndex') && document.getElementById('showIndex').checked,
       cursorIdx:    BT_currentIdx,
       savedAt:      Date.now()
     };
@@ -90,11 +91,22 @@ function BT_init() {
     if (typeof saved.ma2 === 'string') document.getElementById('ma2').value = saved.ma2;
     if (typeof saved.ma3 === 'string') document.getElementById('ma3').value = saved.ma3;
     if (typeof saved.ma4 === 'string') document.getElementById('ma4').value = saved.ma4;
+    // ★ 指数走势图开关：恢复后立即应用显隐
+    if (typeof saved.showIndex === 'boolean') {
+      var siEl = document.getElementById('showIndex');
+      if (siEl) {
+        siEl.checked = saved.showIndex;
+        // 显隐状态由 BT_toggleShowIndex 同步到 section（不调 BT_loadIndex，
+        // 因为 12) 步骤会统一触发一次加载，避免重复请求）
+        var section = document.getElementById('btIndexSection');
+        if (section) section.style.display = saved.showIndex ? '' : 'none';
+      }
+    }
     // 同步恢复 BT_maPeriods 内存变量（否则 K线图还会用默认 [5,10,20,60]）
     var _restoredMA = [];
     ['ma1', 'ma2', 'ma3', 'ma4'].forEach(function(id) {
       var _vv = parseInt(saved[id]);
-      if (!isNaN(_vv) && _vv > 0 && _vv <= 250) _restoredMA.push(_vv);
+      if (!isNaN(_vv) && _vv > 0 && _vv <= 400) _restoredMA.push(_vv);
     });
     if (_restoredMA.length > 0) BT_maPeriods = _restoredMA;
   }
@@ -127,10 +139,12 @@ function BT_init() {
   var showMACD = document.getElementById('showMACD');
   var showVol = document.getElementById('showVol');
   var showEquity = document.getElementById('showEquity');
+  var showIndex = document.getElementById('showIndex');
   if (showMA)     showMA.addEventListener('change', BT_toggleShowMA);
   if (showMACD)   showMACD.addEventListener('change', BT_toggleShowMACD);
   if (showVol)    showVol.addEventListener('change', BT_toggleShowVol);
   if (showEquity) showEquity.addEventListener('change', BT_toggleShowEquity);
+  if (showIndex)  showIndex.addEventListener('change', function() { BT_toggleShowIndex(); BT_saveState(); });
 
   // 5.5) 指数下拉 → 重新加载指数图
   var idxEl = document.getElementById('btIndex');
@@ -185,9 +199,17 @@ function BT_init() {
   BT_renderHistory();
 
   // 11.2) 初始化大盘指数图表 + 加载默认指数
+  //    只有 showIndex=true 时才拉数据 + 初始化 ECharts（避免无意义拉取）
+  var _showIndexEl = document.getElementById('showIndex');
+  var _showIndex = _showIndexEl ? _showIndexEl.checked : true;
   if (typeof BT_initIndexChart === 'function') {
-    BT_initIndexChart();
-    BT_loadIndex(/*silent*/ true);
+    if (_showIndex) {
+      BT_initIndexChart();
+      BT_loadIndex(/*silent*/ true);
+    } else {
+      // 指数图被关闭：不初始化 ECharts，wrapper 已由状态恢复步骤隐藏
+      console.log('[backtest] 指数走势图已关闭，跳过初始化');
+    }
   }
 
   // 12) 自动加载：若上次有保存的标的 → 自动重拉
@@ -492,10 +514,20 @@ function BT_ensureZoomRangeHealthy() {
 }
 
 // 完成回测：保存本次回测摘要到 localStorage
-function BT_finishBacktest() {
+async function BT_finishBacktest() {
   if (!BT_currentSymbol) { BT_toast('请先加载 K 线', 'warn'); return; }
   if (BT_trades.length === 0) {
     if (!confirm('当前没有交易记录，仍要标记为完成回测吗？')) return;
+  }
+  // ★ 防御：如果当前 name 为空（后端 /kline-stock 接口没拿到），先查一次
+  //   走三级 fallback：后端 → 新浪 → 东财
+  if (!BT_currentSymbolName && BT_currentSymbol && /^(sh|sz)\d{6}$/i.test(BT_currentSymbol)) {
+    try {
+      var nm = await BT_lookupStockNames([BT_currentSymbol.toLowerCase()]);
+      if (nm[BT_currentSymbol.toLowerCase()]) {
+        BT_currentSymbolName = nm[BT_currentSymbol.toLowerCase()];
+      }
+    } catch (e) { /* 查不到也不阻塞保存 */ }
   }
   var stats = BT_computeStats(BT_currentClose);
   // 计算当前总资金 = 现金 + 持仓市值
@@ -637,6 +669,10 @@ async function BT_renderHistory() {
     box.innerHTML = '<tr><td colspan="12" class="bt-empty">还没有历史回测记录，完成一轮回测后会自动保存到这里。</td></tr>';
     return;
   }
+
+  // ★ 补全名称：老数据可能没存 name → 批量查 /api/market/stock-names 拿到名称
+  //   流程：同步渲染（先用 symbol 占位）→ 后台异步查名称 → 查到后局部刷新"标的"列
+  //   1) 先同步渲染
   var rows = list.map(function(s, i) {
     var ret = s.totalReturn >= 0 ? '+' + s.totalReturn + '%' : s.totalReturn + '%';
     var cls = s.totalReturn >= 0 ? 'bt-buy' : 'bt-sell';
@@ -647,11 +683,8 @@ async function BT_renderHistory() {
     var finished = (s.finishedAt || '').replace('T', ' ').substring(0, 16);
     var initCap = '¥' + (s.initCapital || 0).toLocaleString();
     // 标的列：优先显示名称（浦发银行），下方附代码（sh600000）。无名称时只显示代码
-    var symbolHtml = s.name
-      ? '<div style="font-weight:600;line-height:1.2;">' + BT_escapeHtml(s.name) + '</div>' +
-        '<div style="font-size:11px;color:var(--text-secondary,#999);line-height:1.2;">' +
-          BT_escapeHtml(s.symbol) + '</div>'
-      : '<b>' + BT_escapeHtml(s.symbol) + '</b>';
+    // ★ 老数据可能没 name → 后台异步批量查（见函数末尾）
+    var symbolHtml = BT_buildSymbolHtml(s.name, s.symbol);
     // 风险指标：老数据兜底（如果 summary 里没存，从 trades 数组重算）
     var dd, ddCls, mcl, mclCls;
     if (s.maxDrawdown != null) {
@@ -677,9 +710,9 @@ async function BT_renderHistory() {
       mclCls = '';
     }
     var sid = s.id || ('idx_' + i);
-    return '<tr>' +
+    return '<tr data-symbol="' + BT_escapeHtml(s.symbol) + '">' +
       '<td style="text-align: center;">' + (i + 1) + '</td>' +
-      '<td>' + symbolHtml + '</td>' +
+      '<td class="bt-symbol-cell">' + symbolHtml + '</td>' +
       '<td style="font-size: 12px; color: var(--text-secondary, #999); text-align: center;">' + finished + '</td>' +
       '<td style="text-align: right;">' + initCap + '</td>' +
       '<td style="text-align: right;">' + s.tradeCount + '</td>' +
@@ -696,6 +729,82 @@ async function BT_renderHistory() {
       '</tr>';
   }).join('');
   box.innerHTML = rows;
+
+  // ★ 2) 后台异步补全：找出没 name 的记录 → 批量查 /api/market/stock-names → 局部刷新"标的"列
+  var needNames = [];
+  for (var _i = 0; _i < list.length; _i++) {
+    if (!list[_i].name && list[_i].symbol && /^(sh|sz)\d{6}$/i.test(list[_i].symbol)) {
+      needNames.push(list[_i].symbol.toLowerCase());
+    }
+  }
+  if (needNames.length === 0) return;  // 全部都有名 → 不发请求
+
+  // 内存缓存（同一页面多次渲染时复用）
+  if (typeof BT_nameCache === 'undefined') window.BT_nameCache = {};
+  var unknownSymbols = needNames.filter(function(s) { return !BT_nameCache[s]; });
+  if (unknownSymbols.length === 0) {
+    // 全部已缓存 → 直接刷新 DOM
+    needNames.forEach(function(sym) {
+      var tr = box.querySelector('tr[data-symbol="' + sym + '"]');
+      if (tr && BT_nameCache[sym]) {
+        var cell = tr.querySelector('.bt-symbol-cell');
+        if (cell) cell.innerHTML = BT_buildSymbolHtml(BT_nameCache[sym], sym);
+        // 同步回写到 list 内存，避免下次重复查
+        for (var k = 0; k < list.length; k++) {
+          if (list[k].symbol && list[k].symbol.toLowerCase() === sym) list[k].name = BT_nameCache[sym];
+        }
+      }
+    });
+    return;
+  }
+
+  // 批量查（一次最多 50 个，截断）—— 三级 fallback：
+  //   1) 后端 /api/market/stock-names （内部已用腾讯+新浪 fallback）
+  //   2) 浏览器直连 新浪 hq.sinajs.cn   （CORS 开放，自动探测 sh/sz prefix）
+  //   3) 浏览器直连 东财 push2.eastmoney.com   （CORS 开放）
+  var toQuery = unknownSymbols.slice(0, 50);
+  BT_lookupStockNames(toQuery).then(function(nameMap) {
+    if (!nameMap) return;
+    Object.keys(nameMap).forEach(function(sym) {
+      BT_nameCache[sym] = nameMap[sym];
+    });
+    // 局部刷新 DOM
+    needNames.forEach(function(sym) {
+      if (!BT_nameCache[sym]) return;
+      var tr = box.querySelector('tr[data-symbol="' + sym + '"]');
+      if (!tr) return;
+      var cell = tr.querySelector('.bt-symbol-cell');
+      if (cell) cell.innerHTML = BT_buildSymbolHtml(BT_nameCache[sym], sym);
+      // 同步回写到 list 内存
+      for (var k = 0; k < list.length; k++) {
+        if (list[k].symbol && list[k].symbol.toLowerCase() === sym) list[k].name = BT_nameCache[sym];
+      }
+    });
+    // 持久化到 DataStore
+    if (BT_historyCollection && typeof BT_historyCollection.update === 'function') {
+      Object.keys(nameMap).forEach(function(sym) {
+        for (var k = 0; k < list.length; k++) {
+          if (list[k].symbol && list[k].symbol.toLowerCase() === sym && list[k].id) {
+            list[k].name = nameMap[sym];
+            try { BT_historyCollection.update(list[k].id, { name: nameMap[sym] }); } catch (e) { /* ignore */ }
+            break;
+          }
+        }
+      });
+    }
+  })
+  .catch(function(e) { console.warn('[bt-history] 批量查名失败', e); });
+}
+
+// 构造"标的"列 HTML（名称 + 代码，无名称时只显示代码）
+//   防御：如果 name === symbol（之前某次错误写入），也视为无名称
+function BT_buildSymbolHtml(name, symbol) {
+  var hasName = name && String(name).trim() && String(name).trim() !== String(symbol || '').trim();
+  if (hasName) {
+    return '<div style="font-weight:600;line-height:1.2;">' + BT_escapeHtml(name) + '</div>' +
+           '<div style="font-size:11px;color:var(--text-secondary,#999);line-height:1.2;">' + BT_escapeHtml(symbol) + '</div>';
+  }
+  return '<b>' + BT_escapeHtml(symbol) + '</b>';
 }
 
 // 简单的 HTML 转义（防止名称里的 < > & 破坏布局）
@@ -707,6 +816,117 @@ function BT_escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// ★ 批量查股票名称 —— 三级 fallback（保证尽量拿到名称）
+//   1) 后端 /api/market/stock-names  （内部已用腾讯 + 新浪）
+//   2) 浏览器直连 新浪 hq.sinajs.cn  （CORS 开放，自动探测 sh/sz prefix）
+//   3) 浏览器直连 东财 push2.eastmoney.com （CORS 开放，fallback）
+//   返回：Promise<{ 'sh600000': '浦发银行', ... }>
+function BT_lookupStockNames(symbols) {
+  var arr = symbols.map(function(s) { return s.toLowerCase(); }).filter(function(s) { return /^(sh|sz)\d{6}$/.test(s); });
+  if (!arr.length) return Promise.resolve({});
+  var result = {};
+
+  // ========== 1) 后端接口（自带腾讯+新浪 fallback）==========
+  return fetch('/api/market/stock-names?symbols=' + encodeURIComponent(arr.join(',')), {
+    headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') }
+  })
+    .then(function(r) { return r.ok ? r.json() : { names: {}, missing: arr }; })
+    .then(function(resp) {
+      if (resp && resp.names) {
+        Object.keys(resp.names).forEach(function(k) { result[k] = resp.names[k]; });
+      }
+      var remaining = arr.filter(function(s) { return !result[s]; });
+      if (!remaining.length) return result;
+
+      // ========== 2) 浏览器直连新浪（自动探测 sh/sz）==========
+      return fetch('https://hq.sinajs.cn/list=' + remaining.join(','), {
+        // 新浪只接受 浏览器 fetch，不要自定义 headers 触发预检
+      })
+        .then(function(r) { return r.text(); })
+        .then(function(text) {
+          // 新浪返回 GBK → 浏览器会自动用 GBK 解码（response.text() 用 GBK charset）
+          // 提取 hq_str_xx="名称,..."
+          var re = /hq_str_(\w{2}\d{6})="([^"]+)"/g;
+          var m;
+          while ((m = re.exec(text)) !== null) {
+            var sym = m[1].toLowerCase();
+            var nm = m[2].split(',')[0].trim();
+            if (nm) result[sym] = nm;
+          }
+          // 自动探测 sh/sz 错标的：剩余的尝试 flip
+          var stillMissing = remaining.filter(function(s) { return !result[s]; });
+          if (stillMissing.length === 0) return result;
+          var flipped = stillMissing.map(function(s) { return (s.startsWith('sh') ? 'sz' : 'sh') + s.slice(2); });
+          return fetch('https://hq.sinajs.cn/list=' + flipped.join(','))
+            .then(function(r) { return r.text(); })
+            .then(function(text2) {
+              var re2 = /hq_str_(\w{2}\d{6})="([^"]+)"/g;
+              var m2;
+              while ((m2 = re2.exec(text2)) !== null) {
+                var sym2 = m2[1].toLowerCase();
+                var nm2 = m2[2].split(',')[0].trim();
+                if (nm2) {
+                  // 把结果映射回原始 key
+                  for (var i = 0; i < stillMissing.length; i++) {
+                    if (flipped[i] === sym2) { result[stillMissing[i]] = nm2; break; }
+                  }
+                }
+              }
+              var stillMissing2 = arr.filter(function(s) { return !result[s]; });
+              if (!stillMissing2.length) return result;
+
+              // ========== 3) 浏览器直连东财 ==========
+              return BT_lookupFromEastMoney(stillMissing2, result);
+            });
+        });
+    })
+    .catch(function(e) {
+      console.warn('[BT_lookupStockNames] 后端接口失败', e);
+      // 后端挂了 → 走浏览器直连
+      return fetch('https://hq.sinajs.cn/list=' + arr.join(','))
+        .then(function(r) { return r.text(); })
+        .then(function(text) {
+          var re = /hq_str_(\w{2}\d{6})="([^"]+)"/g;
+          var m;
+          while ((m = re.exec(text)) !== null) {
+            var sym = m[1].toLowerCase();
+            var nm = m[2].split(',')[0].trim();
+            if (nm) result[sym] = nm;
+          }
+          var stillMissing = arr.filter(function(s) { return !result[s]; });
+          if (!stillMissing.length) return result;
+          return BT_lookupFromEastMoney(stillMissing, result);
+        })
+        .catch(function(e2) { console.warn('[BT_lookupStockNames] 新浪也失败', e2); return result; });
+    });
+}
+
+// 浏览器直连东财（每个 symbol 单独请求，mkt 自动探测）
+//   入参：symbols = 还需要查的（result 里没有的）
+//   出参：合并到 result 并返回
+function BT_lookupFromEastMoney(symbols, result) {
+  if (!symbols.length) return Promise.resolve(result);
+  // 顺序执行避免东财限流（前一个完成才发下一个）
+  var i = 0;
+  function next() {
+    if (i >= symbols.length) return Promise.resolve(result);
+    var sym = symbols[i++];
+    var code = sym.slice(2);
+    // 自动探测 mkt：先试 1（沪市），再试 0（深市）
+    return tryMkt(1).catch(function() { return tryMkt(0); }).catch(function() {}).then(next);
+  }
+  function tryMkt(mkt) {
+    return fetch('https://push2.eastmoney.com/api/qt/stock/get?secid=' + mkt + '.' + code + '&fields=f58')
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        var name = j && j.data && j.data.f58;
+        if (name) { result[sym] = name; return name; }
+        throw new Error('not found');
+      });
+  }
+  return next();
 }
 
 // 查看历史回测详情（弹窗显示资金流水 + 交易明细）

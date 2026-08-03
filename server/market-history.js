@@ -82,26 +82,38 @@ function recordFundSnapshot(fund) {
   const a = f.amount || {};
   const n = f.north || {};
 
+  // ★ 如果接口没发布当日融资融券数据，不覆盖已有的 rzye/rzrqye/margin_change_pct
+  //   避免把"接口最新一行（可能是昨天）"误当成今天写进库
+  const marginPending = (m.error === 'margin_not_published');
+
+  const rzye       = marginPending ? 0 : (m.rzye || 0);
+  const rzrqye     = marginPending ? 0 : (m.rzrqye || 0);
+  const changePct  = marginPending ? 0 : (m.changePct || 0);
+  // 使用 excluded.* 写入新值；UPDATE 时通过 SQL 表达式保留旧值
+  // (CASE WHEN excluded.rzye=0 THEN market_history.rzye ELSE excluded.rzye END)
+
   return new Promise(function(resolve) {
     db.run(`INSERT INTO market_history
       (date, rzye, rzrqye, margin_change_pct, amount_sh_yi, amount_sz_yi, amount_total_yi, north_net_yi, fetched_at, source)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(date) DO UPDATE SET
-        rzye=excluded.rzye,
-        rzrqye=excluded.rzrqye,
-        margin_change_pct=excluded.margin_change_pct,
+        rzye=CASE WHEN ?=1 THEN market_history.rzye   ELSE excluded.rzye   END,
+        rzrqye=CASE WHEN ?=1 THEN market_history.rzrqye ELSE excluded.rzrqye END,
+        margin_change_pct=CASE WHEN ?=1 THEN market_history.margin_change_pct ELSE excluded.margin_change_pct END,
         amount_sh_yi=excluded.amount_sh_yi,
         amount_sz_yi=excluded.amount_sz_yi,
         amount_total_yi=excluded.amount_total_yi,
         north_net_yi=excluded.north_net_yi,
         fetched_at=excluded.fetched_at`,
-      [today, m.rzye || 0, m.rzrqye || 0, m.changePct || 0,
+      [today, rzye, rzrqye, changePct,
        a.shYi || 0, a.szYi || 0, a.totalYi || 0,
        (n.netInflow || 0) / 1e8,
-       new Date().toISOString(), 'eastmoney+sina'],
+       new Date().toISOString(), 'eastmoney+sina',
+       // UPDATE 用的额外参数
+       marginPending ? 1 : 0, marginPending ? 1 : 0, marginPending ? 1 : 0],
       function(err) {
         if (err) console.warn('[market-history] fund 记录失败:', err.message);
-        else console.log('[market-history] fund 已记录 ' + today);
+        else console.log('[market-history] fund 已记录 ' + today + (marginPending ? ' (margin pending, 保留旧值)' : ''));
         resolve();
       });
   });
@@ -139,6 +151,19 @@ function recordSentimentSnapshot(sentiment) {
   });
 }
 
+// 查询某一天的完整市场数据（资金面 + 情绪面都从这里取）
+// 返回：单行对象（未找到返回 null）
+function getRowByDate(date) {
+  if (!date) return Promise.resolve(null);
+  const db = getDB();
+  return new Promise(function(resolve, reject) {
+    db.get('SELECT * FROM market_history WHERE date = ?', [date], function(err, row) {
+      if (err) return reject(err);
+      resolve(row || null);
+    });
+  });
+}
+
 // 查询最近 N 天历史数据
 // 入参：days - 天数（默认 30）
 // 返回：[{ date, rzye, rzrqye, margin_change_pct, amount_sh_yi, amount_sz_yi, amount_total_yi,
@@ -166,4 +191,4 @@ function getHistoryByDate(date) {
   });
 }
 
-module.exports = { recordFundSnapshot, recordSentimentSnapshot, getHistory, getHistoryByDate, initHistoryTable };
+module.exports = { recordFundSnapshot, recordSentimentSnapshot, getHistory, getHistoryByDate, getRowByDate, initHistoryTable, getLastTradingDate };
