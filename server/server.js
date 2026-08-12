@@ -1038,6 +1038,26 @@ app.get('/api/market/sentiment', auth.authMiddleware, async (req, res) => {
 app.get('/api/market/history', auth.authMiddleware, async (req, res) => {
   const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 730);
   try {
+    // ★ 关键：进入历史接口时先 await 拉取资金面 + 情绪面，写入 market_history 后再查库
+    //   这样保证"用户进入页面调 history"时，今天的最新数据必然已落库，
+    //   避免之前在 indices 异步触发时的竞态条件
+    //   getFundSnapshot / getSentimentSnapshot 自身有 5 分钟缓存，重复调用开销很低
+    await Promise.all([
+      marketFund.getFundSnapshot()
+        .then(function(fund) {
+          if (!fund._nonTradingDay) {
+            return marketHistory.recordFundSnapshot(fund);
+          }
+        })
+        .catch(function(e) { console.warn('[market] history 触发资金面失败:', e.message); }),
+      marketSentiment.getSentimentSnapshot()
+        .then(function(sentiment) {
+          if (!sentiment._nonTradingDay) {
+            return marketHistory.recordSentimentSnapshot(sentiment);
+          }
+        })
+        .catch(function(e) { console.warn('[market] history 触发情绪面失败:', e.message); })
+    ]);
     const rows = await marketHistory.getHistory(days);
     res.json({ days: days, count: rows.length, data: rows });
   } catch (e) {

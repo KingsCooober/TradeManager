@@ -19,19 +19,24 @@ const marketQuote = require('./market-quote');
 const marketHistory = require('./market-history');
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 分钟
+const CACHE_TTL_SHORT = 30 * 1000; // 30 秒（用于数据未发布时的短缓存）
 const cache = new Map();
 
 function getCache(key) {
   const entry = cache.get(key);
   if (!entry) return null;
-  if (Date.now() - entry.ts > CACHE_TTL) {
+  const ttl = entry.ttl || CACHE_TTL;
+  if (Date.now() - entry.ts > ttl) {
     cache.delete(key);
     return null;
   }
   return entry.data;
 }
 function setCache(key, data) {
-  cache.set(key, { data, ts: Date.now() });
+  cache.set(key, { data, ts: Date.now(), ttl: CACHE_TTL });
+}
+function setCacheShort(key, data) {
+  cache.set(key, { data, ts: Date.now(), ttl: CACHE_TTL_SHORT });
 }
 
 function httpsGet(url, redirects = 0) {
@@ -88,10 +93,14 @@ async function fetchNorthbound() {
   };
 }
 
-// 2) 融资融券（取最近 2 日用于算环比）
-// 返回 null 表示接口尚未发布今天的数据（例如 19:00 前调用），调用方应跳过写入
-async function fetchMargin() {
-  const url = 'https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPTA_RZRQ_LSHJ&columns=ALL&pageSize=5&sortColumns=dim_date&sortTypes=-1';
+// 2) 融资融券（一次性拉最近 N 天历史数据）
+// 返回：[{date, rzye, rzjme, rqye, rzrqye, changePct}, ...] 按日期降序
+//   之前 fetchMargin() 严格判断"接口最新日期必须等于目标写入日期"才返回数据，
+//   导致今天（东财尚未发布 8-12 数据）时连同已经发布但未写入的 8-11 一起被丢弃，
+//   数据库两融余额永远卡在 8-7。改为一次性拉多天，由调用方按数据本身日期写入。
+async function fetchMargin(days) {
+  const limitDays = Math.max(days || 5, 2);
+  const url = 'https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPTA_RZRQ_LSHJ&columns=ALL&pageSize=' + limitDays + '&sortColumns=dim_date&sortTypes=-1';
   const buf = await httpsGet(url);
   const text = buf.toString('utf8');
   const json = JSON.parse(text);
@@ -99,31 +108,29 @@ async function fetchMargin() {
     throw new Error('融资融券接口无数据');
   }
   const rows = json.result.data;
-  // ★ 关键：东财接口不一定每天 19:00 前就发布当天数据。
-  //   如果 rows[0] 不是数据库写入目标日期（getLastTradingDate 会把周末回退到周五），
-  //   则跳过，避免把"rows[0] 的数据"误当成"目标日期"写进数据库。
-  //   修复前用的是物理今天（new Date），导致周末调用时即使东财已发布周五数据，
-  //   todayStr=周六 仍 ≠ latestDateStr=周五 → 错判 null → 覆盖周五那行为 0。
-  const latestDateStr = String(rows[0].DIM_DATE).slice(0, 10);
-  const todayStr = marketHistory.getLastTradingDate();
-  if (latestDateStr !== todayStr) {
-    return null;  // 接口未发布目标写入日期的数据
-  }
-  const today = rows[0];
-  const yesterday = rows[1] || today;
   const num = (v) => typeof v === 'string' ? parseFloat(v) : (typeof v === 'number' ? v : 0);
-  return {
-    date: today.DIM_DATE,
-    rzye:       num(today.RZYE),       // 融资余额
-    rzjme:      num(today.RZJME),      // 融资净买入
-    rqye:       num(today.RQYE),       // 融券余额
-    rzrqye:     num(today.RZRQYE),     // 融资融券余额
-    // 昨日值（用于算环比）
-    prev: {
-      rzye:   num(yesterday.RZYE),
-      rzrqye: num(yesterday.RZRQYE)
-    }
-  };
+  // rows 已按 dim_date DESC 排序
+  const result = rows.map(function(row, i) {
+    const prev = rows[i + 1] || row;  // 上一条（更早一天）
+    const rzye = num(row.RZYE);
+    const prevRzye = num(prev.RZYE);
+    const changePct = (prevRzye > 0) ? ((rzye - prevRzye) / prevRzye) * 100 : 0;
+    return {
+      date:       String(row.DIM_DATE).slice(0, 10),
+      rzye:       rzye,
+      rzjme:      num(row.RZJME),
+      rqye:       num(row.RQYE),
+      rzrqye:     num(row.RZRQYE),
+      changePct:  changePct
+    };
+  });
+  return result;
+}
+
+// 兼容旧调用：返回 fetchMargin 拉到的最新一条的快照（用于 fund 接口实时评分）
+async function fetchMarginSnapshot() {
+  const rows = await fetchMargin(5);
+  return rows[0] || null;
 }
 
 // 3) 评分函数（pure）
@@ -195,26 +202,30 @@ async function getFundSnapshot() {
   if (cached) return Object.assign({ cached: true }, cached);
 
   // 并发获取：北向资金 + 融资融券 + 沪深两市总成交额
-  let [north, margin, marketAmount] = await Promise.all([
+  // marginHistory 是 fetchMargin 拉到的最近 N 天数据（用于补齐历史缺漏）
+  let [north, marginArr, marketAmount] = await Promise.all([
     fetchNorthbound().catch(e => ({ error: e.message, netInflow: 0 })),
-    fetchMargin().catch(e => ({ error: e.message, rzye: 0, rzjme: 0, rqye: 0, rzrqye: 0, prev: { rzye: 0, rzrqye: 0 } })),
+    fetchMargin(5).catch(e => []),
     marketQuote.fetchMarketTotalAmount().catch(e => ({ error: e.message, totalWan: 0, shWan: 0, szWan: 0 }))
   ]);
 
-  // ★ 如果 fetchMargin 返回 null（接口未发布当日数据），统一格式化为 error 占位
-  //   防止下方 margin.rzye / margin.prev 访问 null 导致崩溃
-  if (margin === null) {
-    margin = { error: 'margin_not_published', rzye: 0, rzjme: 0, rqye: 0, rzrqye: 0, prev: { rzye: 0, rzrqye: 0 } };
-  }
+  // 取最新一条作为"今天"快照（用于评分与前端实时展示）
+  const latestMargin = (Array.isArray(marginArr) && marginArr.length > 0) ? marginArr[0] : null;
+  const lastTradingDate = marketHistory.getLastTradingDate();
+  const marginLatestDate = latestMargin ? latestMargin.date : '';
+  const marginPending = !latestMargin || marginLatestDate !== lastTradingDate;
+  const margin = latestMargin || {
+    error: 'margin_not_published',
+    rzye: 0, rzjme: 0, rqye: 0, rzrqye: 0, changePct: 0
+  };
 
-  // 计算融资余额环比 %
-  let marginChangePct = 0;
-  if (margin && margin.rzye && margin.prev && margin.prev.rzye) {
-    marginChangePct = ((margin.rzye - margin.prev.rzye) / margin.prev.rzye) * 100;
-  }
+  // marginHistory 提供给 recordFundSnapshot 写入，按数据本身的 date 字段，
+  //   这样可以补齐"东财已发但我们之前没写"的历史日期（如 8-11）。
+  const marginHistory = Array.isArray(marginArr) ? marginArr : [];
 
   // 计算评分（总成交额单位：万元 → 亿元）
   const totalAmountWan = (marketAmount && marketAmount.totalWan) || 0;
+  const marginChangePct = margin.changePct || 0;
   const score = scoreFund(north.netInflow || 0, marginChangePct, totalAmountWan);
 
   const data = {
@@ -250,8 +261,14 @@ async function getFundSnapshot() {
     fetchedAt: new Date().toISOString()
   };
 
-  setCache(cacheKey, data);
-  return data;
+  // ★ 如果两融数据未发布（接口最新日期 ≠ 最近交易日，如 20:00 前），
+  //   不写入 5 分钟长缓存。用短缓存（30 秒）让用户刷新后能较快拿到已发布的数据
+  if (marginPending) {
+    setCacheShort(cacheKey, data);
+  } else {
+    setCache(cacheKey, data);
+  }
+  return Object.assign({}, data, { marginHistory: marginHistory });
 }
 
 module.exports = { getFundSnapshot, scoreFund, fetchNorthbound, fetchMargin };

@@ -25,6 +25,10 @@
     openWrappers.forEach(function (w) {
       if (w === exceptWrapper) return;
       w.classList.remove('open');
+      var cs = w.querySelector('.custom-select');
+      var ol = w.querySelector('.custom-select-options');
+      if (cs) cs.classList.remove('open');
+      if (ol) ol.classList.remove('open');
     });
   }
 
@@ -212,6 +216,10 @@
     closeAll(foundWrapper);
     if (foundWrapper) {
       foundWrapper.classList.remove('open');
+      var cs = foundWrapper.querySelector('.custom-select');
+      var ol = foundWrapper.querySelector('.custom-select-options');
+      if (cs) cs.classList.remove('open');
+      if (ol) ol.classList.remove('open');
     }
   });
 

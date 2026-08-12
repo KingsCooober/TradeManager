@@ -1,4 +1,8 @@
 // ===== 每日复盘模块 =====
+// 注意：以下全局变量按功能分组，新增变量请加到对应分组末尾
+// 数据分组：drData / drAllReviews / drAllTrades / drDisciplineRules
+// 状态分组：drCurrentDate / drCurrentUserId / drIsLoggedIn / drDataDirty / drAutoSaveTimer
+// 缓存分组：drMarketData / drHistoryData 及对应的 LoadTime / LoadPromise（资金面/情绪面已下线）
 
 var DR_INDICES = [
   { key: 'sh',     name: '上证指数' },
@@ -18,6 +22,27 @@ var DR_TREND_RANK = {
   '弱势下跌': 1
 };
 
+// ===== 交易复盘分析下拉选项 =====
+// 开仓质量评价
+var DR_ENTRY_TIMING_OPTS = ['左侧抄底', '回踩企稳', '右侧突破', '追高接力'];
+var DR_POSITION_SIZE_OPTS = ['过重', '适中', '过轻'];
+var DR_RATING_OPTS = ['优秀', '良好', '一般', '较差'];
+// 开仓心态
+var DR_OPEN_EMOTION_OPTS = ['冷静', '果断', '犹豫', '冲动', 'FOMO', '恐惧'];
+// 风控检查
+var DR_STOP_LOSS_OPTS = ['已设止损', '未设止损', '移动止损'];
+var DR_RISK_REWARD_OPTS = ['≥3:1', '2:1-3:1', '1:1-2:1', '<1:1'];
+// 平仓原因
+var DR_EXIT_REASON_OPTS = ['止盈', '止损', '时间止损', '情绪平仓', '计划平仓'];
+var DR_EXIT_TRIGGER_OPTS = ['到价自动', '手动执行', '破位止损', '恐慌抛售'];
+var DR_EXIT_TIMING_OPTS = ['过早', '适时', '过晚'];
+// 平仓后表现
+var DR_POST_EXIT_TREND_OPTS = ['继续上涨', '横盘震荡', '掉头下跌'];
+// 持仓走势判断
+var DR_HOLDING_TREND_OPTS = ['顺势上涨', '横盘震荡', '回调企稳', '破位下跌'];
+var DR_RISK_STATUS_OPTS = ['安全', '关注', '警戒', '危险'];
+var DR_HOLDING_DECISION_OPTS = ['继续持有', '减仓', '加仓', '清仓'];
+
 var drData = {};           // 当前编辑的复盘数据
 var drAllReviews = [];     // 所有复盘记录
 var drCurrentDate = '';    // 当前复盘日期
@@ -30,9 +55,6 @@ var drAutoSaveTimer = null; // 延迟自动保存定时器
 var drMarketData = null;    // 行情数据缓存（来自 /api/market/indices，5 分钟有效）
 var drMarketLoadTime = 0;   // 上次加载行情时间
 var drMarketLoadPromise = null; // 防止并发请求
-var drFundData = null;      // 资金面数据缓存（来自 /api/market/fund，5 分钟有效）
-var drFundLoadTime = 0;     // 上次加载资金面时间
-var drFundLoadPromise = null; // 防止并发请求
 
 function initDailyReview() {
   drCurrentDate = getToday();
@@ -48,12 +70,10 @@ function initDailyReview() {
   setupDRLoginEvents();
   // 注册全局搜索（每日复盘页：搜索历史复盘）
   setupDRGlobalSearch();
-  // 多维分析 · 技术面数据源：自动从行情 API 拉取 4 只指数实时价/均线，
-  // 算出价格在 ma5/ma20 上/下方，让 4 维评分中后 2 维「数据驱动」而非手填
+  // 风险提示系统：恢复当日已读状态
+  loadDRRiskDismissed();
+  // 多维分析 · 行情 + 历史趋势图（资金面/情绪面已下线，数据在历史趋势图中查看）
   loadDRMarketData();
-  // 情绪面数据（与资金面并行，5 分钟缓存；资金面失败时仍能加载情绪面）
-  loadDRSentimentData();
-  // 历史趋势折线图（两融余额 / 成交额 / 涨跌停比例）
   loadDRHistoryCharts();
 }
 
@@ -64,9 +84,7 @@ function setupDRLoginEvents() {
     checkDRLoginStatus();
     // 登录后重新拉行情（认证通过才可调用 /api/market/indices）
     if (typeof loadDRMarketData === 'function') loadDRMarketData(true);
-    // 登录后重新拉资金面、情绪面、历史数据
-    if (typeof loadDRFundData === 'function') loadDRFundData(true);
-    if (typeof loadDRSentimentData === 'function') loadDRSentimentData(true);
+    // 登录后重新拉历史数据（资金面/情绪面已下线）
     if (typeof loadDRHistoryCharts === 'function') loadDRHistoryCharts(true);
   });
   window.addEventListener('user-logout', function() {
@@ -114,19 +132,28 @@ function setupDRGlobalSearch() {
 }
 
 function setupDREventListeners() {
+  // 合并所有键盘快捷键到一个监听器（避免多个 keydown 叠加）
   document.addEventListener('keydown', function(e) {
+    // Escape：关闭弹窗
     if (e.key === 'Escape') {
       closeDRModal();
+      return;
     }
-    // Ctrl+S / Cmd+S 手动保存（与自动保存一致，但会弹 toast 提示）
+    // Ctrl+S / Cmd+S：手动保存
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
       if (typeof saveDRReview === 'function') saveDRReview();
+      return;
     }
+    // ←/→ 切换日期（在 input/textarea/select 中不触发）
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+    if (e.key === 'ArrowLeft') { navigateDRDate(-1); e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { navigateDRDate(1); e.preventDefault(); }
   });
   // 统一监听 change / input：在 .dr-section-body 内的表单字段变更后，
   // 标记 dirty 并通过 1 秒防抖触发自动保存（saveDRData 会本地 + 同步到服务器）。
-  // 这样 summary / discipline 字段（drGoodPoints、drPlannedPos、复选框等）无需各自
+  // 这样 summary / discipline 字段（drGoodPoints、复选框等）无需各自
   // 单独写保存逻辑也能在编辑后自动同步到后端。
   function markDirtyAndScheduleSave(e) {
     if (!e.target || !e.target.closest || !e.target.closest('.dr-section-body')) return;
@@ -140,6 +167,10 @@ function setupDREventListeners() {
       drAutoSaveTimer = null;
       showDRAutoSaveHint();
     }, 1000);
+    // 每日总结 textarea 输入时，实时更新进度条
+    if (e.target && e.target.id && /^dr(GoodPoints|BadPoints|BiggestLesson|TomorrowNotes|WatchList)$/.test(e.target.id)) {
+      if (typeof updateDRProgressBar === 'function') updateDRProgressBar();
+    }
   }
   document.addEventListener('change', markDirtyAndScheduleSave);
   document.addEventListener('input', markDirtyAndScheduleSave);
@@ -203,7 +234,6 @@ function loadFromServerDR() {
           return {
             id: r.id,
             date: r.review_date,
-            themes: safeJSON(r.themes_json),
             tradeReviews: safeJSON(r.trade_reviews_json),
             discipline: safeJSON(r.discipline_json),
             summary: summary,
@@ -380,15 +410,23 @@ function showDRAutoSaveHint() {
   }, 4000);
 }
 
+// 日期切换防抖（避免快速点击 ◀▶ 触发多次 API 请求）
+var drDateChangeTimer = null;
+var DR_DATE_DEBOUNCE_MS = 300;
+
 function onDRDateChange() {
   autoSaveDR();
   var input = document.getElementById('drDate');
   drCurrentDate = input.value;
+  // 立即加载本地数据（trades/review），API 请求防抖
   loadTradesForDate(drCurrentDate);
   loadReviewForDate(drCurrentDate);
-  // ★ 切日期时同步重载资金面/情绪面（用目标日期从 market_history 查历史快照）
-  if (typeof loadDRFundData === 'function') loadDRFundData(drCurrentDate);
-  if (typeof loadDRSentimentData === 'function') loadDRSentimentData(drCurrentDate);
+  // API 请求防抖（资金面/情绪面已下线，只需重绘历史图表）
+  if (drDateChangeTimer) clearTimeout(drDateChangeTimer);
+  drDateChangeTimer = setTimeout(function() {
+    if (typeof renderDRHistoryCharts === 'function' && drHistoryData) renderDRHistoryCharts();
+    drDateChangeTimer = null;
+  }, DR_DATE_DEBOUNCE_MS);
 }
 
 function navigateDRDate(delta) {
@@ -399,9 +437,12 @@ function navigateDRDate(delta) {
   document.getElementById('drDate').value = drCurrentDate;
   loadTradesForDate(drCurrentDate);
   loadReviewForDate(drCurrentDate);
-  // ★ 同上：切日期时同步重载资金面/情绪面
-  if (typeof loadDRFundData === 'function') loadDRFundData(drCurrentDate);
-  if (typeof loadDRSentimentData === 'function') loadDRSentimentData(drCurrentDate);
+  // API 请求防抖（资金面/情绪面已下线，只需重绘历史图表）
+  if (drDateChangeTimer) clearTimeout(drDateChangeTimer);
+  drDateChangeTimer = setTimeout(function() {
+    if (typeof renderDRHistoryCharts === 'function' && drHistoryData) renderDRHistoryCharts();
+    drDateChangeTimer = null;
+  }, DR_DATE_DEBOUNCE_MS);
 }
 
 // ===== 加载交易记录 =====
@@ -433,6 +474,8 @@ function loadTradesForDate(date) {
   // 用 id 去重，避免同笔交易（开仓=出场=今日）出现两次
   var seen = {};
   var dayTrades = [];
+  // 当前持仓：开仓日早于今日且仍未平仓（status === 'open'）
+  var holdings = [];
   drAllTrades.forEach(function(t) {
     if (t.date === date || t.exitDate === date) {
       var key = String(t.id);
@@ -440,9 +483,13 @@ function loadTradesForDate(date) {
       seen[key] = true;
       dayTrades.push(t);
     }
+    if (t.status === 'open' && t.date && t.date < date) {
+      holdings.push(t);
+    }
   });
-  renderDRTrades(dayTrades);
-  updateDRSummaryCards(dayTrades);
+  // 持仓按开仓日期升序（最早的在前）
+  holdings.sort(function(a, b) { return (a.date || '').localeCompare(b.date || ''); });
+  renderDRTrades(dayTrades, holdings);
 }
 
 // ===== 加载复盘数据 =====
@@ -482,7 +529,6 @@ function loadReviewForDate(date) {
       indices: DR_INDICES.map(function(def) {
         return { key: def.key, name: def.name, maState: '', macdState: '', trendResult: '', trendHint: '', ma5Analysis: { currentPrice: null, ma5: null, position: '' } };
       }),
-      themes: [{ name: '', strength: '', stage: '' }],
       tradeReviews: [],
       marketRegime: { position: '', matchedRuleId: '', matchedRuleDesc: '', note: '' },
       discipline: { moodScore: 3, moodTags: [], executedStop: true, executedTakeProfit: false, chaseKilling: false, frequentTrading: false, overnightFull: false, plannedPosition: '', actualPosition: '' },
@@ -501,11 +547,9 @@ function loadReviewForDate(date) {
 
 // ===== 填充表单 =====
 function populateFormFromData() {
-  setTextVal('drMarketOverallReason', drData.overallReason || '');
   renderDRIndicesMAStatus();
   recalcDROverall();
 
-  renderDRThemes();
   renderDRDisciplineRules();
   renderDRMarketRegime();
 
@@ -517,8 +561,6 @@ function populateFormFromData() {
   setCheckVal('drChaseKilling', d.chaseKilling);
   setCheckVal('drFrequentTrading', d.frequentTrading);
   setCheckVal('drOvernightFull', d.overnightFull);
-  setTextVal('drPlannedPos', d.plannedPosition);
-  setTextVal('drActualPos', d.actualPosition);
 
   var s = drData.summary || {};
   setTextVal('drGoodPoints', s.goodPoints);
@@ -526,6 +568,9 @@ function populateFormFromData() {
   setTextVal('drBiggestLesson', s.biggestLesson);
   setTextVal('drTomorrowNotes', s.tomorrowNotes);
   setTextVal('drWatchList', s.watchList);
+
+  // 更新复盘进度条
+  if (typeof updateDRProgressBar === 'function') updateDRProgressBar();
 
   renderDRTradeReviews();
 }
@@ -578,15 +623,11 @@ function renderDRIndicesMAStatus() {
     html += '<div class="dr-index-name">' + esc(idx.name) + '</div>';
     html += '<div class="dr-index-fields">';
 
-    // K线图区域（默认隐藏，点击 📊 K线 按钮展开 / 受总开关联动控制）
+    // K线图区域（默认全部展开，无收起功能）
     // 单个指数的均线状态/MACD状态/价格 vs 5日线/走势判断等指标已在此处隐藏，
-    // 用户展开 K线图后从 K线本身的形态 + 走势判断，K线图已包含 MA/成交额/MACD 等参考。
+    // 用户从 K线本身的形态 + 走势判断，K线图已包含 MA/成交额/MACD 等参考。
     html += '<div class="dr-field dr-field-wide dr-kline-wrap" data-index="' + i + '">';
-    html += '<div class="dr-kline-toolbar">';
-    html += '<button type="button" class="btn btn-xs btn-ghost dr-kline-toggle" data-index="' + i + '" data-key="' + esc(idx.key) + '" onclick="toggleDRKline(this)">📊 K线</button>';
-    html += '<span class="dr-kline-hint" id="drKlineHint' + i + '">点击展开日K线图（120 根）</span>';
-    html += '</div>';
-    html += '<div class="dr-kline-container" id="drKline' + i + '" style="display:none"></div>';
+    html += '<div class="dr-kline-container" id="drKline' + i + '"></div>';
     html += '</div>';
 
     html += '</div></div>';
@@ -594,90 +635,10 @@ function renderDRIndicesMAStatus() {
 
   container.innerHTML = html;
 
-  // 渲染后同步总开关的视觉状态（如果某些 K线已被展开但总开关仍是「收起」，
-  // 总开关 label 显示「部分展开」/「全部展开」取决于展开数量）
-  syncKlineToggleAllBtn();
-}
-
-// ===== 大盘研判 section 折叠/展开 =====
-function toggleDRMarketSection() {
-  var body = document.getElementById('drMarketSectionBody');
-  var icon = document.getElementById('drMarketSectionIcon');
-  var header = document.querySelector('#drMarketSection .dr-section-header--clickable');
-  if (!body) return;
-  var isCollapsed = body.style.display === 'none';
-  if (isCollapsed) {
-    body.style.display = '';
-    if (icon) icon.textContent = '▼';
-    if (header) header.setAttribute('aria-expanded', 'true');
-  } else {
-    body.style.display = 'none';
-    if (icon) icon.textContent = '▶';
-    if (header) header.setAttribute('aria-expanded', 'false');
-  }
-}
-
-// ===== K线总开关：同步展开/收起全部 4 个指数的 K线图 =====
-function toggleAllDRKline() {
-  var containers = document.querySelectorAll('.dr-kline-container');
-  if (!containers.length) return;
-  // 任意一个仍是收起状态 → 全部展开；否则全部收起
-  var anyHidden = Array.prototype.some.call(containers, function(c) {
-    return c.style.display === 'none' || c.style.display === '';
+  // 渲染后自动加载全部 4 个指数的 K线图
+  drData.indices.forEach(function(idx, i) {
+    renderDRKlineChart(i, idx.key);
   });
-  var newDisplay = anyHidden ? 'block' : 'none';
-  var buttons = document.querySelectorAll('.dr-kline-toggle');
-  Array.prototype.forEach.call(containers, function(c) {
-    var wasHidden = c.style.display === 'none' || c.style.display === '';
-    c.style.display = newDisplay;
-    if (newDisplay === 'block' && wasHidden) {
-      // 容器之前是隐藏的 → 懒加载 K线（保留已绘制的实例，不重新创建）
-      var wrap = c.closest('.dr-kline-wrap');
-      if (wrap) {
-        var idxAttr = wrap.getAttribute('data-index');
-        var btn = document.querySelector('.dr-kline-toggle[data-index="' + idxAttr + '"]');
-        if (btn) renderDRKlineChart(parseInt(idxAttr), btn.getAttribute('data-key'));
-      }
-    } else if (newDisplay === 'none') {
-      // 收起时，保留实例（避免下次再请求）但更新按钮文本
-      var idxAttr2 = c.id.replace('drKline', '');
-      if (drKlineCharts && drKlineCharts[idxAttr2]) {
-        // 不 dispose，只隐藏 DOM
-      }
-    }
-  });
-  // 收起状态：按钮恢复"📊 K线"；展开状态：显示"📊 收起"
-  Array.prototype.forEach.call(buttons, function(b) {
-    b.textContent = newDisplay === 'block' ? '🔼 收起' : '📊 K线';
-    if (newDisplay === 'block') b.classList.add('active');
-    else b.classList.remove('active');
-  });
-  syncKlineToggleAllBtn();
-}
-
-// 同步总开关按钮的文本和样式（根据当前各 K线的展开状态）
-function syncKlineToggleAllBtn() {
-  var btn = document.getElementById('drKlineToggleAll');
-  if (!btn) return;
-  var containers = document.querySelectorAll('.dr-kline-container');
-  if (!containers.length) {
-    btn.textContent = '📊 展开 K线';
-    return;
-  }
-  var expanded = 0;
-  Array.prototype.forEach.call(containers, function(c) {
-    if (c.style.display === 'block') expanded++;
-  });
-  if (expanded === 0) {
-    btn.textContent = '📊 展开 K线';
-    btn.classList.remove('dr-kline-toggle-all--partial');
-  } else if (expanded === containers.length) {
-    btn.textContent = '📊 收起 K线';
-    btn.classList.remove('dr-kline-toggle-all--partial');
-  } else {
-    btn.textContent = '📊 展开 K线（' + expanded + '/' + containers.length + '）';
-    btn.classList.add('dr-kline-toggle-all--partial');
-  }
 }
 
 // 单个指数 select 变化 → 重新算该指数的走势 + 整体走势 + 整体仓位
@@ -758,7 +719,7 @@ function recalcDROverallTrend() {
 
   var judged = drData.indices.filter(function(i) { return i.trendResult; });
   if (judged.length === 0) {
-    return { trend: '', hint: '等待行情数据（后端自动识别均线/MACD 状态）...', totalScore: 0, scoreBreakdown: '', hasScore: false, hasFund: false, totalAll: 0, fundScore: 0, fundBreakdown: '' };
+    return { trend: '', hint: '等待行情数据（后端自动识别均线/MACD 状态）...', totalScore: 0, scoreBreakdown: '', hasScore: false, totalAll: 0 };
   }
 
   var weakest = judged[0];
@@ -807,40 +768,10 @@ function recalcDROverallTrend() {
     hint += ' ｜ 技术面均分：' + totalScore + '/40 → ' + scoreToTrend(totalScore);
   }
 
-  // 资金面 0-20 分（数据驱动，无需用户填写）
-  var fundScore = 0;
-  var fundBreakdown = '';
-  var hasFund = false;
-  // ★ 非交易日：跳过资金面分数计入（避免把"非交易"分 0 拉低综合分）
-  var fundCardNonTrading = document.getElementById('drFundCard') && document.getElementById('drFundCard').dataset.nonTradingDay === '1';
-  if (drFundData && drFundData.score && !fundCardNonTrading) {
-    fundScore = drFundData.score.total;
-    fundBreakdown = drFundData.score.breakdown;
-    hasFund = true;
-    hint += ' ｜ 资金面分：' + fundScore + '/20';
-  } else if (fundCardNonTrading) {
-    hint += ' ｜ 资金面分：非交易日（跳过）';
-  }
-
-  // 情绪面 0-20 分（数据驱动，无需用户填写）
-  var sentimentScore = 0;
-  var sentimentBreakdown = '';
-  var hasSentiment = false;
-  // ★ 非交易日：情绪面分数同样跳过
-  var sentimentNonTrading = drSentimentData && drSentimentData._nonTradingDay;
-  if (drSentimentData && drSentimentData.score && !sentimentNonTrading) {
-    sentimentScore = drSentimentData.score.total;
-    sentimentBreakdown = drSentimentData.score.breakdown;
-    hasSentiment = true;
-    hint += ' ｜ 情绪面分：' + sentimentScore + '/20';
-  }
-
-  // 综合分 = 技术面 0-40 + 资金面 0-20 + 情绪面 0-20 = 0-80
-  var totalAll = (hasScore ? totalScore : 0) + (hasFund ? fundScore : 0) + (hasSentiment ? sentimentScore : 0);
-  var hasAny = hasScore || hasFund || hasSentiment;
-  if (hasAny) {
-    var totalTrend = scoreToCompositeTrend(totalAll);
-    hint += ' ｜ 综合分：' + totalAll + '/80 → ' + totalTrend;
+  // 综合分 = 技术面 0-40（资金面/情绪面已下线，数据保留在历史趋势图中查看）
+  var totalAll = hasScore ? totalScore : 0;
+  if (hasScore) {
+    hint += ' ｜ 综合分：' + totalAll + '/40 → ' + scoreToCompositeTrend(totalAll);
   }
 
   return {
@@ -848,14 +779,8 @@ function recalcDROverallTrend() {
     hint: hint,
     totalScore: totalScore,
     scoreBreakdown: scoreBreakdown,
-    fundScore: fundScore,
-    fundBreakdown: fundBreakdown,
-    sentimentScore: sentimentScore,
-    sentimentBreakdown: sentimentBreakdown,
     totalAll: totalAll,
-    hasScore: hasScore,
-    hasFund: hasFund,
-    hasSentiment: hasSentiment
+    hasScore: hasScore
   };
 }
 
@@ -993,8 +918,7 @@ function loadDRMarketData(force) {
         return k + '(' + (it.quote && it.quote.price) + ')';
       }).join(' '));
       applyMarketDataToIndices();
-      // 行情加载完成后再拉资金面（资金面接口需要 4 只指数成交额合计）
-      if (typeof loadDRFundData === 'function') loadDRFundData();
+      // 资金面已改为并行加载（initDailyReview 中同时调用），不再链式触发
       return data;
     })
     .catch(function(e) {
@@ -1077,256 +1001,18 @@ function applyMarketDataToIndices() {
     if (typeof renderDRIndicesMAStatus === 'function') renderDRIndicesMAStatus();
     if (typeof recalcDROverall === 'function') recalcDROverall();
   }
+
+  // 风险提示系统：行情刷新后检查 MACD 水上死叉
+  if (typeof checkDRRiskAlerts === 'function') checkDRRiskAlerts();
 }
 
-// ==================== 资金面 0-20 分 ====================
-// 数据源：/api/market/fund（北向资金 + 融资融券 + 沪深两市总成交额）
-//   沪深两市总成交额由后端从 sh000001(沪市) + sz399001(深市) 的 amount 字段求和
-// 评分维度：
-//   北向资金  0-8 分：净流入 >50亿 = 8 / 0-50亿 = 6 / 0~-50亿 = 4 / <-50亿 = 2
-//   融资余额  0-6 分：环比 >+1% = 6 / 0-1% = 4 / -1%-0% = 3 / <-1% = 1
-//   市场成交  0-6 分：>1.5万亿 = 6 / 1.0-1.5 = 5 / 0.8-1.0 = 4 / 0.6-0.8 = 2 / <0.6 = 0
-// 总分 0-20，与技术面 0-40 + 情绪面 0-20 = 综合分 0-80
+// ==================== 资金面 0-20 分（已下线，数据保留在历史趋势图中）====================
+// 原数据源 /api/market/fund 已停止调用，相关 UI 卡片已从 HTML 移除。
+// 北向资金 / 融资余额 / 总成交额 等数据仍通过 /api/market/history 在历史趋势图中展示。
 
-var DR_FUND_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
-
-// 拉取资金面数据（后端内部自动获取沪深两市总成交额，前端无需再传 4 只指数 amount）
-// 入参：dateOrForce - 可选；不传或传 true 时拉今天实时数据；传 YYYY-MM-DD 时拉那天历史快照
-function loadDRFundData(dateOrForce) {
-  var isForce = dateOrForce === true;
-  var queryDate = (typeof dateOrForce === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateOrForce)) ? dateOrForce : null;
-  // 切日期时强制重载（即使在缓存 TTL 内）
-  if (isForce || queryDate) {
-    drFundData = null;  // 清缓存
-  }
-  if (!isForce && !queryDate && drFundData && (Date.now() - drFundLoadTime) < DR_FUND_CACHE_TTL) {
-    applyFundToUI();
-    return Promise.resolve(drFundData);
-  }
-  if (drFundLoadPromise && !isForce && !queryDate) return drFundLoadPromise;
-  var url = '/api/market/fund';
-  if (queryDate) url += '?date=' + encodeURIComponent(queryDate);
-
-  // 不再需要 4 只指数成交额合计 —— 后端内部直接从 sh000001 + sz399001 拉取
-  drFundLoadPromise = authFetch(url, { method: 'GET' })
-    .then(function(r) {
-      if (!r.ok) throw new Error('资金面接口返回 ' + r.status);
-      return r.json();
-    })
-    .then(function(data) {
-      drFundData = data;
-      drFundLoadTime = Date.now();
-      // ★ 非交易日：后端返回 { _nonTradingDay: true, date, message }
-      //   资金面卡显示"非交易日"提示，分数不计入综合分
-      if (data._nonTradingDay) {
-        console.log('[DR] 资金面: 非交易日（' + data.message + '），上一交易日=' + data.date);
-        applyNonTradingDayToUI(data);
-        if (typeof recalcDROverall === 'function') recalcDROverall();
-        // 仍尝试加载情绪面（接口内部也会自动短路）
-        if (typeof loadDRSentimentData === 'function') loadDRSentimentData(queryDate || undefined);
-        return data;
-      }
-      console.log('[DR] 资金面已加载', '总成交', data.amount && data.amount.totalYi + '亿',
-        '北向净流入', data.north && (data.north.netInflow / 1e8).toFixed(2) + '亿',
-        '融资变化', data.margin && data.margin.changePct.toFixed(2) + '%',
-        '资金面分', data.score && data.score.total + '/20');
-      applyFundToUI();
-      // 资金面加载完后，重新计算综合走势（综合分从 0-60 → 0-80）
-      if (typeof recalcDROverall === 'function') recalcDROverall();
-      // 链式加载情绪面（与资金面无依赖关系，但分批加载可降低并发压力）
-      if (typeof loadDRSentimentData === 'function') loadDRSentimentData(queryDate || undefined);
-      return data;
-    })
-    .catch(function(e) {
-      console.warn('[DR] 资金面加载失败，保持空值:', e.message);
-      return null;
-    })
-    .then(function(d) {
-      drFundLoadPromise = null;
-      return d;
-    });
-  return drFundLoadPromise;
-}
-
-// ==================== 情绪面 0-20 分 ====================
-// 数据源：/api/market/sentiment（沪深两市涨跌停统计 + 上涨家数占比）
-// 评分维度：
-//   涨跌停差   0-8 分：(涨停 - 跌停) >= 80 = 8 / 30-80 = 6 / 0-30 = 4 / -30-0 = 2 / <-30 = 0
-//   上涨占比   0-8 分：>=80% = 8 / 60-80% = 6 / 40-60% = 4 / 20-40% = 2 / <20% = 0
-//   涨停绝对数 0-4 分：>=80 = 4 / 40-80 = 3 / 20-40 = 2 / <20 = 1
-// 总分 0-20，与技术面 0-40 + 资金面 0-20 = 综合分 0-80
-
-var drSentimentData = null;      // 情绪面数据缓存（来自 /api/market/sentiment，5 分钟有效）
-var drSentimentLoadTime = 0;
-var drSentimentLoadPromise = null;
-var DR_SENTIMENT_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
-
-// 拉取情绪面数据
-// 入参：dateOrForce - 可选；不传或传 true 时拉今天实时数据；传 YYYY-MM-DD 时拉那天历史快照
-function loadDRSentimentData(dateOrForce) {
-  var isForce = dateOrForce === true;
-  var queryDate = (typeof dateOrForce === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateOrForce)) ? dateOrForce : null;
-  if (isForce || queryDate) {
-    drSentimentData = null;  // 清缓存
-  }
-  if (!isForce && !queryDate && drSentimentData && (Date.now() - drSentimentLoadTime) < DR_SENTIMENT_CACHE_TTL) {
-    applySentimentToUI();
-    return Promise.resolve(drSentimentData);
-  }
-  if (drSentimentLoadPromise && !isForce && !queryDate) return drSentimentLoadPromise;
-  var url = '/api/market/sentiment';
-  if (queryDate) url += '?date=' + encodeURIComponent(queryDate);
-  drSentimentLoadPromise = authFetch(url, { method: 'GET' })
-    .then(function(r) {
-      if (!r.ok) throw new Error('情绪面接口返回 ' + r.status);
-      return r.json();
-    })
-    .then(function(data) {
-      drSentimentData = data;
-      drSentimentLoadTime = Date.now();
-      // ★ 非交易日：跳过 applySentimentToUI（避免显示昨天的涨跌停数）
-      if (data._nonTradingDay) {
-        console.log('[DR] 情绪面: 非交易日（' + data.message + '）');
-        // ★ 关键：情绪面卡片 HTML 默认 display:none，必须显式显示
-        var sCard = document.getElementById('drSentimentCard');
-        if (sCard) {
-          sCard.style.display = '';
-          sCard.dataset.nonTradingDay = '1';
-        }
-        if (typeof recalcDROverall === 'function') recalcDROverall();
-        return data;
-      }
-      var m = data.merged || {};
-      console.log('[DR] 情绪面已加载', '上涨', m.up, '下跌', m.down, '涨停', m.zt, '跌停', m.dt,
-        '情绪面分', data.score && data.score.total + '/20');
-      applySentimentToUI();
-      // 情绪面加载完后，重新计算综合走势（综合分 0-80）
-      if (typeof recalcDROverall === 'function') recalcDROverall();
-      return data;
-    })
-    .catch(function(e) {
-      console.warn('[DR] 情绪面加载失败，保持空值:', e.message);
-      return null;
-    })
-    .then(function(d) {
-      drSentimentLoadPromise = null;
-      return d;
-    });
-  return drSentimentLoadPromise;
-}
-
-// ★ 非交易日 UI 处理：把资金面卡片显示为"非交易日"提示
-//   上一交易日的数据（北向/两融/成交额）填 0 + 灰色"非交易"水印
-//   资金面分数不计入综合分（applyNonTradingDayToUI 不调用 applyFundToUI）
-function applyNonTradingDayToUI(data) {
-  var card = document.getElementById('drFundCard');
-  if (!card) return;
-  // 设置全局标记，recalcDROverall 看到后跳过资金面分数
-  card.dataset.nonTradingDay = '1';
-  card.dataset.lastTradingDate = data.date || '';
-  // ★ 关键：HTML 默认 display:none，必须显式清除 inline style 才能显示卡片
-  card.style.display = '';
-  // 找一个合适的容器显示"非交易日"提示
-  var hint = card.querySelector('.dr-ntd-hint');
-  if (!hint) {
-    hint = document.createElement('div');
-    hint.className = 'dr-ntd-hint';
-    hint.style.cssText = 'padding:24px 16px;text-align:center;color:#888;background:rgba(128,128,128,0.06);border-radius:8px;margin:8px 0;';
-    hint.innerHTML = '<div style="font-size:18px;margin-bottom:6px;">📅 非交易日</div>'
-                   + '<div style="font-size:13px;">' + (data.message || '周末/节假日休市') + '</div>'
-                   + '<div style="font-size:12px;margin-top:6px;color:#aaa;">上一交易日：' + (data.date || '--') + '</div>';
-    // 插到卡片标题之后
-    var titleEl = card.querySelector('.dr-card-title, h3');
-    if (titleEl && titleEl.nextSibling) {
-      card.insertBefore(hint, titleEl.nextSibling);
-    } else {
-      card.appendChild(hint);
-    }
-  }
-  // 把数字字段清空为 "--"，避免显示昨天的数据让用户误以为"今天"的
-  // ★ 修正：HTML 实际 ID 是 drFundAmount / drFundNorth / drFundMargin（不是 drTotalAmount / drNorthNet / drMarginRzye）
-  var ids = ['drFundNorth', 'drFundMargin', 'drFundAmount', 'drFundScore', 'drFundBreakdown'];
-  ids.forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.textContent = id === 'drFundScore' ? '--/20' : (id === 'drFundBreakdown' ? '--' : '--');
-  });
-}
-
-// 渲染情绪面卡片
-function applySentimentToUI() {
-  var card = document.getElementById('drSentimentCard');
-  if (!card) return;
-
-  // ★ 切日期时清除"非交易日"状态
-  if (card.dataset.nonTradingDay) {
-    delete card.dataset.nonTradingDay;
-  }
-
-  if (!drSentimentData) {
-    card.style.display = 'none';
-    return;
-  }
-  card.style.display = '';
-
-  var score = drSentimentData.score || {};
-  var merged = drSentimentData.merged || {};
-
-  // 评分徽章
-  var scoreEl = document.getElementById('drSentimentScore');
-  if (scoreEl) {
-    scoreEl.textContent = (score.total || 0) + '/20';
-    scoreEl.className = 'dr-fund-score ' + getSentimentScoreBadgeClass(score.total || 0);
-  }
-  var breakdownEl = document.getElementById('drSentimentBreakdown');
-  if (breakdownEl) breakdownEl.textContent = score.breakdown || '';
-
-  // 涨跌停差
-  var lddEl = document.getElementById('drSentimentLDD');
-  if (lddEl) {
-    var lddDiff = (merged.zt || 0) - (merged.dt || 0);
-    var sign = lddDiff > 0 ? '+' : '';
-    lddEl.textContent = sign + lddDiff;
-    lddEl.className = 'dr-fund-num ' + (lddDiff > 0 ? 'fund-up' : (lddDiff < 0 ? 'fund-down' : 'fund-flat'));
-  }
-  var lddHintEl = document.getElementById('drSentimentLDDHint');
-  if (lddHintEl) {
-    lddHintEl.textContent = '涨停 ' + (merged.zt || 0) + ' / 跌停 ' + (merged.dt || 0);
-  }
-
-  // 上涨家数占比
-  var upPctEl = document.getElementById('drSentimentUpPct');
-  if (upPctEl) {
-    var upPct = score.upPct || 0;
-    upPctEl.textContent = upPct.toFixed(1) + '%';
-    upPctEl.className = 'dr-fund-num ' + (upPct >= 50 ? 'fund-up' : (upPct >= 20 ? 'fund-flat' : 'fund-down'));
-  }
-  var upPctHintEl = document.getElementById('drSentimentUpPctHint');
-  if (upPctHintEl) {
-    upPctHintEl.textContent = '上涨 ' + (merged.up || 0) + ' / 下跌 ' + (merged.down || 0) + ' / 平盘 ' + (merged.flat || 0);
-  }
-
-  // 涨停数
-  var ztEl = document.getElementById('drSentimentZT');
-  if (ztEl) {
-    ztEl.textContent = (merged.zt || 0) + ' 只';
-  }
-  var ztHintEl = document.getElementById('drSentimentZTHint');
-  if (ztHintEl) {
-    var sh = (drSentimentData.sh && drSentimentData.sh.zt) || 0;
-    var sz = (drSentimentData.sz && drSentimentData.sz.zt) || 0;
-    ztHintEl.textContent = '沪市 ' + sh + ' + 深市 ' + sz;
-  }
-}
-
-// 情绪面 0-20 分 CSS class（与综合走势档位对齐）
-function getSentimentScoreBadgeClass(total) {
-  if (total >= 17) return 'fund-score-max';     // 强势（>= 17/20）
-  if (total >= 13) return 'fund-score-bullish'; // 多头（13-16）
-  if (total >= 9)  return 'fund-score-rebound'; // 反弹（9-12）
-  if (total >= 5)  return 'fund-score-neutral'; // 震荡（5-8）
-  if (total >= 2)  return 'fund-score-warning'; // 走弱（2-4）
-  return 'fund-score-weak';                     // 弱势（0-1）
-}
+// ==================== 情绪面 0-20 分（已下线，数据保留在历史趋势图中）====================
+// 原数据源 /api/market/sentiment 已停止调用，相关 UI 卡片已从 HTML 移除。
+// 涨跌停 / 涨跌家数 等数据仍通过 /api/market/history 在历史趋势图中展示。
 
 // ==================== 历史趋势折线图 ====================
 // 数据源：/api/market/history?days=730（后端从 market_history 表读取近 2 年全量数据）
@@ -1340,6 +1026,7 @@ function getSentimentScoreBadgeClass(total) {
 // 注：涨跌停历史从今天开始累积，之前的日期为 0（公开 API 无历史涨跌停数据）
 
 var drHistoryData = null;          // 全量历史数据缓存（近 2 年）
+var drHistoryLoadTime = 0;         // 上次加载时间（用于自动过期）
 var drDisplayDays = 60;            // 图表显示天数（默认 60）
 var drHistoryECharts = { margin: null, amount: null, ldd: null, upDown: null };  // ECharts 实例缓存
 var DR_HISTORY_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
@@ -1347,7 +1034,8 @@ var DR_HISTORY_API_DAYS = 730;     // 后端最大可查询天数（≈ 2 年）
 
 // 拉取并渲染历史趋势图（始终拉全量，渲染时按 drDisplayDays 切片）
 function loadDRHistoryCharts(force) {
-  if (!force && drHistoryData) {
+  var cacheExpired = (Date.now() - drHistoryLoadTime) > DR_HISTORY_CACHE_TTL;
+  if (!force && drHistoryData && !cacheExpired) {
     renderDRHistoryCharts();
     return Promise.resolve(drHistoryData);
   }
@@ -1364,10 +1052,13 @@ function loadDRHistoryCharts(force) {
     })
     .then(function(data) {
       drHistoryData = data;
+      drHistoryLoadTime = Date.now();
       if (hintEl) {
         hintEl.textContent = '图表显示近 ' + displayDays + ' 天（共 ' + (data.count || 0) + ' 天历史数据，百分位基于近 2 年）';
       }
       renderDRHistoryCharts();
+      // 风险提示系统：历史数据加载后检查成交额/两融余额百分位
+      if (typeof checkDRRiskAlerts === 'function') checkDRRiskAlerts();
       return data;
     })
     .catch(function(e) {
@@ -1484,6 +1175,26 @@ function percentileBadge(label, p) {
          'border:1px solid ' + color + '55;">' + label + ' · P' + p + '</span>';
 }
 
+// ★ 历史图表：查找当前复盘日期在 displayData 中的索引
+function findDRDateIndex(displayData) {
+  if (!drCurrentDate || !displayData) return -1;
+  for (var i = displayData.length - 1; i >= 0; i--) {
+    if (displayData[i].date === drCurrentDate) return i;
+  }
+  return -1;
+}
+
+// 生成 markLine 配置：在当前日期位置画垂直高亮线
+function getDRCurrentDateMarkLine(idx) {
+  if (idx < 0) return null;
+  return {
+    symbol: 'none',
+    label: { show: false },
+    lineStyle: { color: '#4361ee', type: 'dashed', width: 1.5, opacity: 0.6 },
+    data: [{ xAxis: idx }]
+  };
+}
+
 // 1) 两融余额（亿元）—— 含历史百分位
 // displayData: 用于绘制折线（最近 N 天）
 // fullData:    用于计算百分位（近 2 年全量）
@@ -1493,6 +1204,8 @@ function drawDRMarginChart(echarts, displayData, fullData) {
   var ts = getEChartsTextStyle();
   // 显示数据：折线
   var dates = displayData.map(function(d) { return d.date.slice(5); });
+  // ★ 当前日期在图表中的索引（用于高亮标记线）
+  var currentDateIdx = findDRDateIndex(displayData);
   var marginArr = displayData.map(function(d) { return Math.round((d.rzrqye || 0) / 1e8); });
   // 全量数据：百分位
   var fullMarginArr = (fullData || displayData).map(function(d) { return Math.round((d.rzrqye || 0) / 1e8); });
@@ -1599,7 +1312,8 @@ function drawDRMarginChart(echarts, displayData, fullData) {
             symbol: 'circle', symbolSize: 10, itemStyle: { color: '#94a3b8' },
             label: { show: true, position: 'top', formatter: '昨 ' + prevVal + ' 亿', color: '#94a3b8', fontSize: 9, fontWeight: 600 } }] : [])
         ]
-      }
+      },
+      markLine: getDRCurrentDateMarkLine(currentDateIdx)
     }]
   });
   if (drHistoryECharts.margin) drHistoryECharts.margin.dispose();
@@ -1615,6 +1329,8 @@ function drawDRAmountChart(echarts, displayData, fullData) {
   var ts = getEChartsTextStyle();
   // 显示数据：折线
   var dates = displayData.map(function(d) { return d.date.slice(5); });
+  // ★ 当前日期在图表中的索引（用于高亮标记线）
+  var currentDateIdx = findDRDateIndex(displayData);
   // 两市总成交额（亿元）
   var amountArr = displayData.map(function(d) { return Math.round(d.amount_total_yi || 0); });
   // 全量数据：百分位
@@ -1718,7 +1434,8 @@ function drawDRAmountChart(echarts, displayData, fullData) {
             { name: '当前位置', value: currentVal, xAxis: dates.length - 1, yAxis: currentVal },
             ...(prevVal != null ? [{ name: '昨日', value: prevVal, xAxis: dates.length - 2, yAxis: prevVal, symbol: 'circle', symbolSize: 10, itemStyle: { color: '#94a3b8' }, label: { show: true, position: 'top', formatter: '昨 ' + prevVal + ' 亿', color: '#94a3b8', fontSize: 9, fontWeight: 600 } }] : [])
           ]
-        }
+        },
+        markLine: getDRCurrentDateMarkLine(currentDateIdx)
       },
       {
         name: '5日均线',
@@ -1742,6 +1459,8 @@ function drawDRLDDChart(echarts, data) {
   if (!el) return;
   var ts = getEChartsTextStyle();
   var dates = data.map(function(d) { return d.date.slice(5); });
+  // ★ 当前日期在图表中的索引（用于高亮标记线）
+  var currentDateIdx = findDRDateIndex(data);
   // 跌停数（堆在下半，绿色）/ 涨停数（堆在上半，红色）
   var dtArr = data.map(function(d) { return d.dt_count || 0; });
   var ztArr = data.map(function(d) { return d.zt_count || 0; });
@@ -1876,7 +1595,8 @@ function drawDRLDDChart(echarts, data) {
           itemStyle: { color: '#94a3b8' },
           label: { show: true, position: 'top', formatter: '昨比 ' + prevRatio, color: '#94a3b8', fontSize: 9, fontWeight: 600 },
           data: [{ name: '昨日比例', value: prevRatio, xAxis: dates.length - 2, yAxis: prevRatio }]
-        } : { data: [] }
+        } : { data: [] },
+        markLine: getDRCurrentDateMarkLine(currentDateIdx)
       }
     ]
   });
@@ -1893,6 +1613,8 @@ function drawDRUpDownChart(echarts, data) {
   if (!el) return;
   var ts = getEChartsTextStyle();
   var dates = data.map(function(d) { return d.date.slice(5); });
+  // ★ 当前日期在图表中的索引（用于高亮标记线）
+  var currentDateIdx = findDRDateIndex(data);
   // 下跌家数（堆在下半，绿色）/ 上涨家数（堆在上半，红色）
   var downArr = data.map(function(d) { return d.down_count || 0; });
   var upArr = data.map(function(d) { return d.up_count || 0; });
@@ -2031,7 +1753,8 @@ function drawDRUpDownChart(echarts, data) {
           itemStyle: { color: '#94a3b8' },
           label: { show: true, position: 'top', formatter: '昨比 ' + prevRatio, color: '#94a3b8', fontSize: 9, fontWeight: 600 },
           data: [{ name: '昨日比例', value: prevRatio, xAxis: dates.length - 2, yAxis: prevRatio }]
-        } : { data: [] }
+        } : { data: [] },
+        markLine: getDRCurrentDateMarkLine(currentDateIdx)
       }
     ]
   });
@@ -2062,86 +1785,6 @@ window.addEventListener('resize', function() {
   if (drHistoryECharts.ldd)     drHistoryECharts.ldd.resize();
   if (drHistoryECharts.upDown)  drHistoryECharts.upDown.resize();
 });
-
-// 把资金面数据渲染到独立卡片
-function applyFundToUI() {
-  var card = document.getElementById('drFundCard');
-  if (!card) return;
-
-  // ★ 切日期时清除"非交易日"状态：移除提示框 + 清除 dataset
-  //   否则从非交易日切到交易日会同时显示"📅 非交易日"和真实数字
-  if (card.dataset.nonTradingDay) {
-    delete card.dataset.nonTradingDay;
-    delete card.dataset.lastTradingDate;
-    var oldHint = card.querySelector('.dr-ntd-hint');
-    if (oldHint && oldHint.parentNode) oldHint.parentNode.removeChild(oldHint);
-  }
-
-  if (!drFundData) {
-    card.style.display = 'none';
-    return;
-  }
-  card.style.display = '';
-
-  var score = drFundData.score || {};
-  var north = drFundData.north || {};
-  var margin = drFundData.margin || {};
-  var amount = drFundData.amount || {};
-
-  // 评分徽章
-  var scoreEl = document.getElementById('drFundScore');
-  if (scoreEl) {
-    scoreEl.textContent = score.total + '/20';
-    scoreEl.className = 'dr-fund-score ' + getFundScoreBadgeClass(score.total);
-  }
-  var breakdownEl = document.getElementById('drFundBreakdown');
-  if (breakdownEl) breakdownEl.textContent = score.breakdown || '';
-
-  // 北向资金
-  var northEl = document.getElementById('drFundNorth');
-  if (northEl) {
-    var netYi = (north.netInflow || 0) / 1e8;
-    var sign = netYi > 0 ? '+' : '';
-    northEl.textContent = sign + netYi.toFixed(2) + ' 亿';
-    northEl.className = 'dr-fund-num ' + (netYi > 0 ? 'fund-up' : (netYi < 0 ? 'fund-down' : 'fund-flat'));
-  }
-  var northHintEl = document.getElementById('drFundNorthHint');
-  if (northHintEl) northHintEl.textContent = '沪股通 ' + (north.hk2sh / 1e8).toFixed(2) + ' + 深股通 ' + (north.hk2sz / 1e8).toFixed(2) + ' 亿';
-
-  // 融资余额
-  var marginEl = document.getElementById('drFundMargin');
-  if (marginEl) {
-    var pct = margin.changePct || 0;
-    var sign2 = pct > 0 ? '+' : '';
-    marginEl.textContent = sign2 + pct.toFixed(2) + '%';
-    marginEl.className = 'dr-fund-num ' + (pct > 0 ? 'fund-up' : (pct < 0 ? 'fund-down' : 'fund-flat'));
-  }
-  var marginHintEl = document.getElementById('drFundMarginHint');
-  if (marginHintEl) marginHintEl.textContent = '余额 ' + (margin.rzye / 1e12).toFixed(2) + ' 万亿（昨日 ' + (margin.prev && margin.prev.rzye / 1e12 || 0).toFixed(2) + '）';
-
-  // 成交额（沪深两市 = sh000001 + sz399001 的 amount 字段求和）
-  var amountEl = document.getElementById('drFundAmount');
-  if (amountEl) {
-    amountEl.textContent = (amount.totalYi || 0).toFixed(0) + ' 亿';
-  }
-  var amountHintEl = document.getElementById('drFundAmountHint');
-  if (amountHintEl) {
-    // 沪市 + 深市成交额明细（单位：亿元）
-    var shYi = (amount.shYi || 0).toFixed(0);
-    var szYi = (amount.szYi || 0).toFixed(0);
-    amountHintEl.textContent = '沪市 ' + shYi + ' 亿 + 深市 ' + szYi + ' 亿（数据源: sh000001+sz399001）';
-  }
-}
-
-// 资金面 0-20 分 CSS class（与综合走势档位对齐）
-function getFundScoreBadgeClass(total) {
-  if (total >= 17) return 'fund-score-max';     // 强势（>= 17/20）
-  if (total >= 13) return 'fund-score-bullish'; // 多头（13-16）
-  if (total >= 9)  return 'fund-score-rebound'; // 反弹（9-12）
-  if (total >= 5)  return 'fund-score-neutral'; // 震荡（5-8）
-  if (total >= 2)  return 'fund-score-warning'; // 走弱（2-4）
-  return 'fund-score-weak';                     // 弱势（0-1）
-}
 
 // 单个指数的走势判定（5-10 均线 + MACD + 价格 vs 5日线位置 → 6 种走势之一）
 // ma5Position: 'above'（价格在 5 日线上方） / 'below'（下方） / ''（未填）
@@ -2289,56 +1932,23 @@ function updateDRTrendResultUI(trend, hint, totalScore, scoreBreakdown) {
     if (hintEl) hintEl.textContent = hint || '请为每个指数选择「均线状态」和「MACD 状态」';
   }
 
-  // 技术面 + 资金面 + 情绪面 + 综合分徽章
+  // 技术面综合分徽章（资金面/情绪面已下线，仅显示技术分 0-40）
   if (scoreEl) {
     // 从 closure 找到综合分（recalcDROverallTrend 的返回值）
     var lastOverall = window._lastDROverall || {};
     var hasScore     = !!lastOverall.hasScore;
-    var hasFund      = !!lastOverall.hasFund;
-    var hasSentiment = !!lastOverall.hasSentiment;
-    var techScore     = lastOverall.totalScore;
-    var fundScore     = lastOverall.fundScore;
-    var sentimentScore = lastOverall.sentimentScore;
-    var totalAll      = lastOverall.totalAll;
-    if (hasScore || hasFund || hasSentiment) {
+    var techScore    = lastOverall.totalScore;
+    var totalAll     = lastOverall.totalAll;
+    if (hasScore) {
       scoreEl.style.display = '';
       var valSpan = scoreEl.querySelector('.dr-trend-result-score-value');
       var detailSpan = scoreEl.querySelector('.dr-trend-result-score-detail');
       if (valSpan) {
-        // 优先显示综合分
-        var allThree = hasScore && hasFund && hasSentiment;
-        if (allThree) {
-          valSpan.textContent = '综合分 ' + totalAll + '/80';
-          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalAll);
-        } else if (hasScore && hasFund) {
-          valSpan.textContent = '技术+资金 ' + totalAll + '/60';
-          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalAll);
-        } else if (hasScore && hasSentiment) {
-          valSpan.textContent = '技术+情绪 ' + totalAll + '/60';
-          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalAll);
-        } else if (hasFund && hasSentiment) {
-          valSpan.textContent = '资金+情绪 ' + totalAll + '/40';
-          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(totalAll);
-        } else if (hasScore) {
-          valSpan.textContent = '技术分 ' + techScore + '/40';
-          valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(techScore);
-        } else if (hasFund) {
-          valSpan.textContent = '资金分 ' + fundScore + '/20';
-          valSpan.className = 'dr-trend-result-score-value ' + getFundScoreBadgeClass(fundScore);
-        } else {
-          valSpan.textContent = '情绪分 ' + sentimentScore + '/20';
-          valSpan.className = 'dr-trend-result-score-value ' + getSentimentScoreBadgeClass(sentimentScore);
-        }
+        valSpan.textContent = '技术分 ' + techScore + '/40';
+        valSpan.className = 'dr-trend-result-score-value ' + getScoreBadgeClass(techScore);
       }
       if (detailSpan) {
-        var parts = [];
-        if (hasScore)     parts.push('技术 ' + techScore + '/40');
-        if (hasFund)      parts.push('资金 ' + fundScore + '/20');
-        if (hasSentiment) parts.push('情绪 ' + sentimentScore + '/20');
-        if (hasScore || hasFund || hasSentiment) {
-          parts.push('综合 ' + totalAll + '/' + (allThree ? '80' : (hasScore ? '40' : (hasFund ? '20' : '20'))));
-        }
-        detailSpan.textContent = parts.join(' · ');
+        detailSpan.textContent = '技术 ' + techScore + '/40 · 综合 ' + totalAll + '/40';
       }
     } else {
       scoreEl.style.display = 'none';
@@ -2421,8 +2031,6 @@ function renderDRMarketRegime() {
   if (!drData.marketRegime) drData.marketRegime = { position: '', matchedRuleId: '', matchedRuleDesc: '', note: '' };
   var mr = drData.marketRegime;
 
-  setTextVal('drRegimeNote', mr.note || '');
-
   // 历史数据中可能保留旧规则的 matchedRuleId（593c9eb 之前）。新规则统一为
   // 'trend_<走势名>' 格式，源自 TREND_TO_POSITION。如果旧规则 id 找不到，
   // 静默回退到 autoCalcDRPosition（按当前整体走势重新匹配）。
@@ -2452,7 +2060,6 @@ function renderDRMarketRegime() {
 
 function saveDRMarketRegimeToData() {
   if (!drData.marketRegime) drData.marketRegime = { position: '', matchedRuleId: '', matchedRuleDesc: '', note: '' };
-  drData.marketRegime.note = getTextVal('drRegimeNote');
 }
 
 function saveDRIndicesToData() {
@@ -2462,8 +2069,6 @@ function saveDRIndicesToData() {
 // ===== 从表单保存到 drData =====
 function saveCurrentFormToData() {
   saveDRIndicesToData();
-  drData.overallReason = getTextVal('drMarketOverallReason');
-
   saveDRMarketRegimeToData();
 
   drData.discipline = {
@@ -2473,9 +2078,7 @@ function saveCurrentFormToData() {
     executedTakeProfit: getCheckVal('drExecutedTP'),
     chaseKilling: getCheckVal('drChaseKilling'),
     frequentTrading: getCheckVal('drFrequentTrading'),
-    overnightFull: getCheckVal('drOvernightFull'),
-    plannedPosition: getTextVal('drPlannedPos'),
-    actualPosition: getTextVal('drActualPos')
+    overnightFull: getCheckVal('drOvernightFull')
   };
 
   drData.summary = {
@@ -2489,92 +2092,59 @@ function saveCurrentFormToData() {
   saveDRThemesToData();
 }
 
-// ===== 概览卡片 =====
-function updateDRSummaryCards(dayTrades) {
-  var total = dayTrades.length;
-  var closed = dayTrades.filter(function(t) { return t.status !== 'open' && t.pnl !== '' && !isNaN(parseFloat(t.pnl)); });
-  var wins = closed.filter(function(t) { return parseFloat(t.pnl) > 0; });
-  var totalPnl = closed.reduce(function(s, t) { return s + parseFloat(t.pnl || 0); }, 0);
-  var totalR = closed.reduce(function(s, t) { return s + parseFloat(t.pnlR || 0); }, 0);
-  var wr = closed.length > 0 ? (wins.length / closed.length * 100).toFixed(0) : '-';
-  var followed = closed.filter(function(t) { return t.followedPlan === '是'; });
-  var followRate = closed.length > 0 ? (followed.length / closed.length * 100).toFixed(0) : '-';
-
-  setText('drCardTotal', total);
-  setText('drCardPnl', CNY(totalPnl));
-  setText('drCardWinRate', wr + '%');
-  setText('drCardFollowRate', followRate + '%');
-  setText('drCardTotalR', fmtR(totalR));
-
-  var pnlEl = document.getElementById('drCardPnl');
-  if (pnlEl) {
-    pnlEl.style.color = totalPnl >= 0 ? 'var(--color-red)' : 'var(--color-green)';
-  }
-}
-
 // ===== 交易复盘列表 =====
-function renderDRTrades(dayTrades) {
+function renderDRTrades(dayTrades, holdings) {
   var container = document.getElementById('drTradesList');
   if (!container) return;
 
-  if (dayTrades.length === 0) {
-    container.innerHTML = '<div class="dr-empty-hint">当日无交易记录</div>';
+  var hasDayTrades = dayTrades.length > 0;
+  var hasHoldings = holdings && holdings.length > 0;
+
+  if (!hasDayTrades && !hasHoldings) {
+    container.innerHTML = '';
+    var emptyGuide = document.getElementById('drTradesEmpty');
+    if (emptyGuide) emptyGuide.style.display = '';
     return;
   }
+  var emptyGuide = document.getElementById('drTradesEmpty');
+  if (emptyGuide) emptyGuide.style.display = 'none';
+
+  // 当日交易再拆分为「当日开仓」与「当日出场」两组
+  var opens = [];
+  var exits = [];
+  dayTrades.forEach(function(t) {
+    if (t.date === drCurrentDate) {
+      opens.push(t);
+    } else if (t.exitDate === drCurrentDate) {
+      exits.push(t);
+    }
+  });
 
   var html = '';
-  dayTrades.forEach(function(t) {
-    var existing = (drData.tradeReviews || []).find(function(r) { return r.tradeId === t.id; });
-    var pnlColor = t.pnl !== '' && !isNaN(parseFloat(t.pnl)) ? (parseFloat(t.pnl) >= 0 ? 'var(--color-red)' : 'var(--color-green)') : 'var(--text-secondary)';
+  if (opens.length > 0) {
+    html += '<div class="dr-trade-group">';
+    html += '<div class="dr-trade-group-title">📥 当日开仓 <span class="dr-trade-group-count">' + opens.length + '</span></div>';
+    opens.forEach(function(t) { html += renderDRDayTradeCard(t, 'open'); });
+    html += '</div>';
+  }
 
-    // 区分「当日开仓」与「当日出场（跨日持仓平仓）」两种来源
-    var isOpenedToday = t.date === drCurrentDate;
-    var isExitedToday = !isOpenedToday && t.exitDate === drCurrentDate;
-    var sourceTag = isExitedToday
-      ? '<span class="dr-trade-source dr-source-exit" title="此笔在 ' + esc(t.date) + ' 开仓，今日平仓">📤 当日出场 · 开仓 ' + esc(t.date) + '</span>'
-      : '<span class="dr-trade-source dr-source-open" title="今日开仓">📥 当日开仓</span>';
+  if (exits.length > 0) {
+    html += '<div class="dr-trade-group">';
+    html += '<div class="dr-trade-group-title">📤 当日出场 <span class="dr-trade-group-count">' + exits.length + '</span></div>';
+    exits.forEach(function(t) { html += renderDRDayTradeCard(t, 'exit'); });
+    html += '</div>';
+  }
 
-    html += '<div class="dr-trade-card card" data-trade-id="' + esc(t.id) + '">';
-    html += '<div class="dr-trade-header">';
-    html += sourceTag;
-    html += '<span class="dr-trade-symbol">' + esc(t.symbol || '-') + '</span>';
-    html += '<span class="dr-trade-dir ' + (t.dir === '多' ? 'dir-long' : 'dir-short') + '">' + esc(t.dir || '-') + '</span>';
-    html += '<span class="dr-trade-entry">入场 ' + esc(t.entry || '-') + '</span>';
-    html += '<span class="dr-trade-exit">出场 ' + esc(t.exit || '-') + '</span>';
-    html += '<span class="dr-trade-pnl" style="color:' + pnlColor + '">' + (t.pnl !== '' ? CNY(parseFloat(t.pnl)) : '-') + '</span>';
-    html += '<span class="dr-trade-r">' + fmtR(parseFloat(t.pnlR) || 0) + '</span>';
-    html += '<a href="index.html#trade-' + esc(t.id) + '" class="dr-trade-edit-link" title="跳转到交易管理页编辑此笔交易" aria-label="编辑此笔交易">✏️ 编辑</a>';
+  if (hasHoldings) {
+    html += '<div class="dr-trade-group">';
+    html += '<div class="dr-trade-group-title">💼 当前持仓 <span class="dr-trade-group-count">' + holdings.length + '</span></div>';
+    holdings.forEach(function(t) { html += renderDRHoldingCard(t); });
     html += '</div>';
-
-    html += '<div class="dr-trade-fields">';
-    html += '<div class="dr-field-row">';
-    html += '<div class="dr-field"><label>买入逻辑</label><input type="text" class="dr-input dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="buyLogic" value="' + esc((existing && existing.buyLogic) || '') + '" placeholder="为什么买这只"></div>';
-    html += '<div class="dr-field"><label>买入信号</label><input type="text" class="dr-input dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="buySignal" value="' + esc((existing && existing.buySignal) || '') + '" placeholder="具体触发信号"></div>';
-    html += '<div class="dr-field"><label>买点类型</label><select class="dr-select dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="buyType">';
-    // 买点类型与开仓计算器同步（来自 utils.js BUY_TYPES）；优先预填 trade.buyType
-    var curBuyType = (existing && existing.buyType) || t.buyType || '';
-    html += '<option value=""' + (curBuyType === '' ? ' selected' : '') + '>请选择</option>';
-    (window.BUY_TYPES || []).forEach(function(bt) {
-      html += '<option value="' + esc(bt) + '"' + (curBuyType === bt ? ' selected' : '') + '>' + esc(bt) + '</option>';
-    });
-    html += '</select></div>';
-    html += '<div class="dr-field"><label>符合系统</label><select class="dr-select dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="followedPlan">';
-    html += '<option value="是"' + (t.followedPlan === '是' ? ' selected' : '') + '>是 ✓</option>';
-    html += '<option value="否"' + (t.followedPlan !== '是' ? ' selected' : '') + '>否 ✗</option>';
-    html += '</select></div>';
-    html += '</div>';
-    html += '<div class="dr-field-row">';
-    html += '<div class="dr-field"><label>当时心态</label><input type="text" class="dr-input dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="mood" value="' + esc((existing && existing.mood) || '') + '" placeholder="交易时的心态"></div>';
-    html += '<div class="dr-field dr-field-wide"><label>教训与总结</label><textarea class="dr-textarea dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="lesson" rows="2" placeholder="本次交易的教训">' + esc((existing && existing.lesson) || '') + '</textarea></div>';
-    html += '</div>';
-    html += '<div class="dr-field-row"><div class="dr-field dr-field-wide"><label>改进措施</label><textarea class="dr-textarea dr-trade-field" data-trade-id="' + esc(t.id) + '" data-field="improvement" rows="2" placeholder="下次如何改进">' + esc((existing && existing.improvement) || '') + '</textarea></div></div>';
-    html += '</div>';
-    html += '</div>';
-  });
+  }
 
   container.innerHTML = html;
 
-  // 绑定事件
+  // 绑定事件（开仓/平仓/持仓卡片的可编辑字段统一处理）
   container.querySelectorAll('.dr-trade-field').forEach(function(el) {
     el.addEventListener('change', function() {
       saveTradeFieldToData(el.dataset.tradeId, el.dataset.field, el.value);
@@ -2588,6 +2158,186 @@ function renderDRTrades(dayTrades) {
   if (typeof upgradeSelectToCustom === 'function') {
     container.querySelectorAll('select.dr-select').forEach(upgradeSelectToCustom);
   }
+}
+
+// 渲染当日交易卡片（开仓/出场差异化字段）
+function renderDRDayTradeCard(t, source) {
+  var existing = (drData.tradeReviews || []).find(function(r) { return r.tradeId === t.id; });
+  var pnlColor = t.pnl !== '' && !isNaN(parseFloat(t.pnl)) ? (parseFloat(t.pnl) >= 0 ? 'var(--color-red)' : 'var(--color-green)') : 'var(--text-secondary)';
+
+  var sourceTag = source === 'exit'
+    ? '<span class="dr-trade-source dr-source-exit" title="此笔在 ' + esc(t.date) + ' 开仓，今日平仓">📤 当日出场 · 开仓 ' + esc(t.date) + '</span>'
+    : '<span class="dr-trade-source dr-source-open" title="今日开仓">📥 当日开仓</span>';
+
+  var html = '<div class="dr-trade-card card" data-trade-id="' + esc(t.id) + '">';
+  html += '<div class="dr-trade-header">';
+  html += sourceTag;
+  html += '<span class="dr-trade-symbol">' + esc(t.symbol || '-') + '</span>';
+  html += '<span class="dr-trade-dir ' + (t.dir === '多' ? 'dir-long' : 'dir-short') + '">' + esc(t.dir || '-') + '</span>';
+  html += '<span class="dr-trade-entry">入场 ' + esc(t.entry || '-') + '</span>';
+  if (source === 'exit') {
+    html += '<span class="dr-trade-exit">出场 ' + esc(t.exit || '-') + '</span>';
+    html += '<span class="dr-trade-pnl" style="color:' + pnlColor + '">' + (t.pnl !== '' ? CNY(parseFloat(t.pnl)) : '-') + '</span>';
+    html += '<span class="dr-trade-r">' + fmtR(parseFloat(t.pnlR) || 0) + '</span>';
+  }
+  html += '<a href="index.html#trade-' + esc(t.id) + '" class="dr-trade-edit-link" title="跳转到交易管理页编辑此笔交易" aria-label="编辑此笔交易">✏️ 编辑</a>';
+  html += '</div>';
+
+  html += '<div class="dr-trade-fields">';
+  if (source === 'open') {
+    html += renderDROpenFields(t, existing);
+  } else {
+    html += renderDRExitFields(t, existing);
+  }
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+// 生成 select HTML（含请选择占位 + 选项列表）
+function drSelectHTML(tradeId, field, options, currentVal) {
+  var html = '<select class="dr-select dr-trade-field" data-trade-id="' + esc(tradeId) + '" data-field="' + esc(field) + '">';
+  html += '<option value=""' + (currentVal === '' ? ' selected' : '') + '>请选择</option>';
+  (options || []).forEach(function(opt) {
+    html += '<option value="' + esc(opt) + '"' + (currentVal === opt ? ' selected' : '') + '>' + esc(opt) + '</option>';
+  });
+  html += '</select>';
+  return html;
+}
+
+// 生成 input HTML
+function drInputHTML(tradeId, field, value, placeholder) {
+  return '<input type="text" class="dr-input dr-trade-field" data-trade-id="' + esc(tradeId) + '" data-field="' + esc(field) + '" value="' + esc(value || '') + '" placeholder="' + esc(placeholder || '') + '">';
+}
+
+// 生成 textarea HTML
+function drTextareaHTML(tradeId, field, value, placeholder, rows) {
+  return '<textarea class="dr-textarea dr-trade-field" data-trade-id="' + esc(tradeId) + '" data-field="' + esc(field) + '" rows="' + (rows || 2) + '" placeholder="' + esc(placeholder || '') + '">' + esc(value || '') + '</textarea>';
+}
+
+// 生成分组标题
+function drSectionTitleHTML(title) {
+  return '<div class="dr-analysis-section-title">' + esc(title) + '</div>';
+}
+
+// 开仓标的复盘字段（4 个维度）
+function renderDROpenFields(t, existing) {
+  var html = '';
+  // 1. 开仓决策分析
+  html += drSectionTitleHTML('开仓决策分析');
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>买入逻辑</label>' + drInputHTML(t.id, 'buyLogic', existing && existing.buyLogic, '为什么买这只') + '</div>';
+  html += '<div class="dr-field"><label>买入信号</label>' + drInputHTML(t.id, 'buySignal', existing && existing.buySignal, '具体触发信号') + '</div>';
+  html += '<div class="dr-field"><label>买点类型</label>' + drSelectHTML(t.id, 'buyType', window.BUY_TYPES || [], (existing && existing.buyType) || t.buyType || '') + '</div>';
+  html += '<div class="dr-field"><label>符合系统</label>' + drSelectHTML(t.id, 'followedPlan', ['是', '否'], t.followedPlan || '') + '</div>';
+  html += '</div>';
+  // 2. 开仓质量评价
+  html += drSectionTitleHTML('开仓质量评价');
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>开仓时机</label>' + drSelectHTML(t.id, 'entryTiming', DR_ENTRY_TIMING_OPTS, existing && existing.entryTiming) + '</div>';
+  html += '<div class="dr-field"><label>仓位大小</label>' + drSelectHTML(t.id, 'positionSizeRating', DR_POSITION_SIZE_OPTS, existing && existing.positionSizeRating) + '</div>';
+  html += '<div class="dr-field"><label>入场评分</label>' + drSelectHTML(t.id, 'entryRating', DR_RATING_OPTS, existing && existing.entryRating) + '</div>';
+  html += '</div>';
+  // 3. 开仓心态
+  html += drSectionTitleHTML('开仓心态');
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>开仓情绪</label>' + drSelectHTML(t.id, 'openEmotion', DR_OPEN_EMOTION_OPTS, existing && existing.openEmotion) + '</div>';
+  html += '<div class="dr-field dr-field-wide"><label>情绪影响</label>' + drInputHTML(t.id, 'emotionImpact', existing && existing.emotionImpact, '情绪对开仓决策的影响') + '</div>';
+  html += '</div>';
+  // 4. 风控检查
+  html += drSectionTitleHTML('风控检查');
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>止损设置</label>' + drSelectHTML(t.id, 'stopLossSetup', DR_STOP_LOSS_OPTS, existing && existing.stopLossSetup) + '</div>';
+  html += '<div class="dr-field"><label>风险收益比</label>' + drSelectHTML(t.id, 'riskRewardRatio', DR_RISK_REWARD_OPTS, existing && existing.riskRewardRatio) + '</div>';
+  html += '</div>';
+  // 改进措施（保留原字段）
+  html += '<div class="dr-field-row"><div class="dr-field dr-field-wide"><label>改进措施</label>' + drTextareaHTML(t.id, 'improvement', existing && existing.improvement, '下次如何改进') + '</div></div>';
+  return html;
+}
+
+// 平仓标的复盘字段（4 个维度）
+function renderDRExitFields(t, existing) {
+  var html = '';
+  // 1. 平仓原因
+  html += drSectionTitleHTML('平仓原因');
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>平仓类型</label>' + drSelectHTML(t.id, 'exitReason', DR_EXIT_REASON_OPTS, existing && existing.exitReason) + '</div>';
+  html += '<div class="dr-field"><label>平仓触发</label>' + drSelectHTML(t.id, 'exitTrigger', DR_EXIT_TRIGGER_OPTS, existing && existing.exitTrigger) + '</div>';
+  html += '</div>';
+  // 2. 平仓时机
+  html += drSectionTitleHTML('平仓时机');
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>平仓时机</label>' + drSelectHTML(t.id, 'exitTiming', DR_EXIT_TIMING_OPTS, existing && existing.exitTiming) + '</div>';
+  html += '<div class="dr-field"><label>执行评分</label>' + drSelectHTML(t.id, 'exitRating', DR_RATING_OPTS, existing && existing.exitRating) + '</div>';
+  html += '</div>';
+  // 3. 平仓后表现
+  html += drSectionTitleHTML('平仓后表现');
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>平仓后走势</label>' + drSelectHTML(t.id, 'postExitTrend', DR_POST_EXIT_TREND_OPTS, existing && existing.postExitTrend) + '</div>';
+  html += '<div class="dr-field dr-field-wide"><label>最大不利</label>' + drInputHTML(t.id, 'maxAdverse', existing && existing.maxAdverse, '如果不平仓，最大浮亏会到多少') + '</div>';
+  html += '</div>';
+  // 4. 交易总结
+  html += drSectionTitleHTML('交易总结');
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>做对什么</label>' + drTextareaHTML(t.id, 'didRight', existing && existing.didRight, '本次交易做对的地方') + '</div>';
+  html += '<div class="dr-field"><label>做错什么</label>' + drTextareaHTML(t.id, 'didWrong', existing && existing.didWrong, '本次交易做错的地方') + '</div>';
+  html += '</div>';
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>改进措施</label>' + drTextareaHTML(t.id, 'improvement', existing && existing.improvement, '下次如何改进') + '</div>';
+  html += '<div class="dr-field"><label>最大教训</label>' + drTextareaHTML(t.id, 'biggestLesson', existing && existing.biggestLesson, '本次交易最大的一个教训') + '</div>';
+  html += '</div>';
+  return html;
+}
+
+// 渲染当前持仓卡片（带每日状态分析字段）
+function renderDRHoldingCard(t) {
+  var existing = (drData.tradeReviews || []).find(function(r) { return r.tradeId === t.id; });
+  // 计算持仓天数（开仓日到当前复盘日）
+  var holdingDays = 0;
+  if (t.date) {
+    var openD = new Date(t.date + 'T00:00:00');
+    var curD = new Date(drCurrentDate + 'T00:00:00');
+    if (!isNaN(openD.getTime()) && !isNaN(curD.getTime())) {
+      holdingDays = Math.round((curD - openD) / 86400000);
+    }
+  }
+  var holdingDaysText = holdingDays > 0 ? ('持仓 ' + holdingDays + ' 天') : '持仓中';
+
+  var html = '<div class="dr-trade-card dr-holding-card card" data-trade-id="' + esc(t.id) + '">';
+  html += '<div class="dr-trade-header">';
+  html += '<span class="dr-trade-source dr-source-holding" title="开仓于 ' + esc(t.date) + '，至今未平仓">💼 当前持仓 · 开仓 ' + esc(t.date) + '</span>';
+  html += '<span class="dr-trade-symbol">' + esc(t.symbol || '-') + '</span>';
+  html += '<span class="dr-trade-dir ' + (t.dir === '多' ? 'dir-long' : 'dir-short') + '">' + esc(t.dir || '-') + '</span>';
+  html += '<span class="dr-trade-entry">入场 ' + esc(t.entry || '-') + '</span>';
+  if (t.stop) html += '<span class="dr-trade-exit">止损 ' + esc(t.stop) + '</span>';
+  if (t.posSize) html += '<span class="dr-trade-possize">仓位 ' + esc(t.posSize) + '</span>';
+  html += '<span class="dr-holding-days">' + esc(holdingDaysText) + '</span>';
+  html += '<a href="index.html#trade-' + esc(t.id) + '" class="dr-trade-edit-link" title="跳转到交易管理页编辑此笔交易" aria-label="编辑此笔交易">✏️ 编辑</a>';
+  html += '</div>';
+  if (t.note) {
+    html += '<div class="dr-holding-note">' + esc(t.note) + '</div>';
+  }
+
+  // 每日状态分析字段
+  html += '<div class="dr-trade-fields">';
+  // 1. 走势判断 + 风险状态 + 持仓决策
+  html += drSectionTitleHTML('每日状态分析');
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>走势判断</label>' + drSelectHTML(t.id, 'holdingTrend', DR_HOLDING_TREND_OPTS, existing && existing.holdingTrend) + '</div>';
+  html += '<div class="dr-field"><label>风险状态</label>' + drSelectHTML(t.id, 'riskStatus', DR_RISK_STATUS_OPTS, existing && existing.riskStatus) + '</div>';
+  html += '<div class="dr-field"><label>持仓决策</label>' + drSelectHTML(t.id, 'holdingDecision', DR_HOLDING_DECISION_OPTS, existing && existing.holdingDecision) + '</div>';
+  html += '</div>';
+  // 2. 文本备注
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field dr-field-wide"><label>今日观察</label>' + drTextareaHTML(t.id, 'todayObservation', existing && existing.todayObservation, '今日量价行为、异动、异常成交量的观察记录') + '</div>';
+  html += '</div>';
+  html += '<div class="dr-field-row">';
+  html += '<div class="dr-field"><label>明日计划</label>' + drTextareaHTML(t.id, 'tomorrowPlan', existing && existing.tomorrowPlan, '明日需要满足什么条件才继续持有/减仓/加仓') + '</div>';
+  html += '<div class="dr-field"><label>风险提示</label>' + drTextareaHTML(t.id, 'riskNote', existing && existing.riskNote, '当前持仓的风险点或注意事项') + '</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+  return html;
 }
 
 function saveTradeFieldToData(tradeId, field, value) {
@@ -2609,94 +2359,6 @@ function saveTradeFieldToData(tradeId, field, value) {
     drAutoSaveTimer = null;
     showDRAutoSaveHint();
   }, 1000);
-}
-
-// ===== 主线板块 =====
-function renderDRThemes() {
-  var container = document.getElementById('drThemesList');
-  if (!container) return;
-  var themes = drData.themes || [{ name: '', strength: '', stage: '' }];
-
-  var html = '';
-  themes.forEach(function(t, i) {
-    html += '<div class="dr-theme-row">';
-    html += '<input type="text" class="dr-input dr-theme-field" data-index="' + i + '" data-field="name" value="' + esc(t.name) + '" placeholder="主线名称 (如: AI算力)">';
-    html += '<select class="dr-select dr-theme-field" data-index="' + i + '" data-field="strength">';
-    ['', '强', '中', '弱'].forEach(function(s) {
-      html += '<option value="' + esc(s) + '"' + (t.strength === s ? ' selected' : '') + '>' + (s || '强度') + '</option>';
-    });
-    html += '</select>';
-    html += '<select class="dr-select dr-theme-field" data-index="' + i + '" data-field="stage">';
-    ['', '刚开始', '进行中', '尾声'].forEach(function(s) {
-      html += '<option value="' + esc(s) + '"' + (t.stage === s ? ' selected' : '') + '>' + (s || '阶段') + '</option>';
-    });
-    html += '</select>';
-    if (i > 0 || themes.length > 1) {
-      html += '<button class="dr-btn-icon dr-btn-remove" onclick="removeDRTheme(' + i + ')" title="删除">✕</button>';
-    }
-    html += '</div>';
-  });
-
-  container.innerHTML = html;
-
-  container.querySelectorAll('.dr-theme-field').forEach(function(el) {
-    el.addEventListener('change', function() {
-      saveDRThemesToData();
-      renderDRThemes();
-    });
-  });
-
-  // 把所有原生 select 升级为 custom-select（视觉与"买点类型"统一）
-  if (typeof upgradeSelectToCustom === 'function') {
-    container.querySelectorAll('select.dr-select').forEach(upgradeSelectToCustom);
-  }
-}
-
-function saveDRThemesToData() {
-  var container = document.getElementById('drThemesList');
-  if (!container) return;
-  var themes = [];
-  container.querySelectorAll('.dr-theme-row').forEach(function(row) {
-    var t = { name: '', strength: '', stage: '' };
-    row.querySelectorAll('.dr-theme-field').forEach(function(el) {
-      t[el.dataset.field] = el.value;
-    });
-    themes.push(t);
-  });
-  drData.themes = themes;
-  // 主线板块修改后立即触发自动保存
-  drDataDirty = true;
-  if (drAutoSaveTimer) clearTimeout(drAutoSaveTimer);
-  drAutoSaveTimer = setTimeout(function() {
-    saveDRData();
-    drDataDirty = false;
-    drAutoSaveTimer = null;
-    showDRAutoSaveHint();
-  }, 1000);
-}
-
-function addDRTheme() {
-  saveDRThemesToData();
-  if (!drData.themes) drData.themes = [];
-  drData.themes.push({ name: '', strength: '', stage: '' });
-  renderDRThemes();
-  // 新增主题行后立即保存（不依赖字段 change 事件）
-  drDataDirty = true;
-  saveDRData();
-  drDataDirty = false;
-  showDRAutoSaveHint();
-}
-
-function removeDRTheme(idx) {
-  saveDRThemesToData();
-  drData.themes.splice(idx, 1);
-  if (drData.themes.length === 0) drData.themes.push({ name: '', strength: '', stage: '' });
-  renderDRThemes();
-  // 删除主题行后立即保存
-  drDataDirty = true;
-  saveDRData();
-  drDataDirty = false;
-  showDRAutoSaveHint();
 }
 
 // ===== 交易纪律（全局） =====
@@ -3024,67 +2686,9 @@ function renderDRTradeReviews() {
   // trade reviews are rendered inline with trades list
 }
 
-// ===== 复盘历史列表 =====
-function renderReviewHistory() {
-  var container = document.getElementById('drHistoryList');
-  if (!container) return;
-
-  // 合并当前正在编辑的复盘（drData）进列表
-  // 这样未保存的修改也能在历史卡片中实时看到
-  // 用 JSON 深拷贝避免 drData 与历史记录共享引用
-  var merged = drAllReviews.map(function(r) { return JSON.parse(JSON.stringify(r)); });
-  if (drData && drData.date) {
-    var drSnapshot = JSON.parse(JSON.stringify(drData));
-    var idx = merged.findIndex(function(r) { return r.date === drSnapshot.date; });
-    if (idx >= 0) {
-      merged[idx] = drSnapshot;  // 用最新的 drData 覆盖（包含未保存修改）
-    } else {
-      merged.push(drSnapshot);
-    }
-  }
-
-  if (merged.length === 0) {
-    container.innerHTML = '<div class="dr-empty-hint">暂无历史复盘</div>';
-    return;
-  }
-
-  var sorted = merged.slice().sort(function(a, b) { return b.date > a.date ? 1 : b.date < a.date ? -1 : 0; });
-  var html = '';
-  sorted.forEach(function(r) {
-    var isActive = r.date === drCurrentDate;
-    // 大盘走势：取 indices 中第一个有 trendResult 的指数结果
-    var indices = Array.isArray(r.indices) ? r.indices : [];
-    var trendText = '-';
-    var trendCls = '';
-    for (var i = 0; i < indices.length; i++) {
-      if (indices[i].trendResult) {
-        trendText = indices[i].trendResult;
-        trendCls = DR_TREND_STYLES[indices[i].trendResult] ? DR_TREND_STYLES[indices[i].trendResult].cls : '';
-        break;
-      }
-    }
-    // 兼容旧数据：旧 r.market 结构里第一个指数的 trend
-    if (trendText === '-' && Array.isArray(r.market) && r.market[0] && r.market[0].trend) {
-      trendText = r.market[0].trend;
-    }
-    // 建议仓位：取 marketRegime.position
-    var mr = r.marketRegime || {};
-    var position = mr.position || '-';
-
-    html += '<div class="dr-history-item' + (isActive ? ' active' : '') + '" onclick="jumpToReview(\'' + esc(r.date) + '\')">';
-    html += '<div class="dr-history-date">' + esc(r.date) + '</div>';
-    html += '<div class="dr-history-info">';
-    if (trendCls) {
-      html += '<span class="dr-history-trend ' + trendCls + '">' + esc(trendText) + '</span>';
-    } else {
-      html += '<span class="dr-history-trend">' + esc(trendText) + '</span>';
-    }
-    html += '<span class="dr-history-badge">' + esc(position) + '</span>';
-    html += '</div>';
-    html += '</div>';
-  });
-  container.innerHTML = html;
-}
+// ===== 历史复盘列表（已移除，通过顶部日期切换访问历史复盘） =====
+// 保留 renderReviewHistory 空函数避免调用错误
+function renderReviewHistory() { /* no-op: 历史复盘列表已移除 */ }
 
 function jumpToReview(date) {
   autoSaveDR();
@@ -3092,9 +2696,8 @@ function jumpToReview(date) {
   document.getElementById('drDate').value = date;
   loadTradesForDate(date);
   loadReviewForDate(date);
-  // ★ 切日期时同步重载资金面/情绪面
-  if (typeof loadDRFundData === 'function') loadDRFundData(date);
-  if (typeof loadDRSentimentData === 'function') loadDRSentimentData(date);
+  // 切日期后立即重绘历史图表以更新当前日期高亮线
+  if (typeof renderDRHistoryCharts === 'function' && drHistoryData) renderDRHistoryCharts();
 }
 
 // ===== 保存 =====
@@ -3242,6 +2845,46 @@ function getTextVal(id) {
   return el ? el.value : '';
 }
 
+// ===== 复盘进度提示 =====
+// 检查 5 个关键字段是否已填写
+var DR_PROGRESS_FIELDS = [
+  { id: 'drGoodPoints', label: '做得好' },
+  { id: 'drBadPoints', label: '需改进' },
+  { id: 'drBiggestLesson', label: '教训' },
+  { id: 'drTomorrowNotes', label: '明日注意' },
+  { id: 'drWatchList', label: '关注标的' }
+];
+
+function updateDRProgressBar() {
+  var filled = 0;
+  DR_PROGRESS_FIELDS.forEach(function(f) {
+    var el = document.getElementById(f.id);
+    if (el && el.value && el.value.trim().length > 0) filled++;
+  });
+  var pct = Math.round(filled / DR_PROGRESS_FIELDS.length * 100);
+  var fillEl = document.getElementById('drProgressFill');
+  var textEl = document.getElementById('drProgressText');
+  if (fillEl) fillEl.style.width = pct + '%';
+  if (textEl) textEl.textContent = '已完成 ' + filled + '/' + DR_PROGRESS_FIELDS.length + ' 项';
+}
+
+// ===== Skeleton loading 占位 =====
+function showDRSkeleton(cardId) {
+  var card = document.getElementById(cardId);
+  if (!card) return;
+  card.style.display = '';
+  var nums = card.querySelectorAll('.dr-fund-num');
+  var hints = card.querySelectorAll('.dr-fund-item-hint');
+  nums.forEach(function(el) {
+    el.textContent = '加载中';
+    el.className = 'dr-fund-num dr-skeleton';
+  });
+  hints.forEach(function(el) {
+    el.textContent = '加载中...';
+    el.className = 'dr-fund-item-hint dr-skeleton';
+  });
+}
+
 function setSelectVal(id, val) {
   var el = document.getElementById(id);
   if (el) el.value = val || '';
@@ -3278,7 +2921,8 @@ function closeDRModal() {
     'drDisciplineModal': closeDRDisciplineModal,
     'drDisciplineDelModal': closeDRDisciplineDelModal,
     'drAlertModal': closeDRAlertModal,
-    'drConfirmModal': closeDRConfirmModal
+    'drConfirmModal': closeDRConfirmModal,
+    'drRiskBacktestModal': closeDRRiskBacktest
   };
   var fn = closeFns[openModal.id];
   if (fn) {
@@ -3410,35 +3054,10 @@ function loadEcharts() {
 // 存储已初始化的 ECharts 实例（key: index 序号 → echarts instance）
 var drKlineCharts = {};
 
-// 切换 K线图展开/收起
-function toggleDRKline(btn) {
-  var idx = parseInt(btn.dataset.index);
-  var key = btn.dataset.key;
-  var container = document.getElementById('drKline' + idx);
-  if (!container) return;
-  if (container.style.display === 'none') {
-    container.style.display = 'block';
-    btn.textContent = '🔼 收起';
-    btn.classList.add('active');
-    document.getElementById('drKlineHint' + idx).textContent = '加载中...';
-    renderDRKlineChart(idx, key);
-  } else {
-    container.style.display = 'none';
-    btn.textContent = '📊 K线';
-    btn.classList.remove('active');
-    document.getElementById('drKlineHint' + idx).textContent = '点击展开日K线图（120 根）';
-    if (drKlineCharts[idx]) {
-      if (drKlineCharts[idx]._resizeHandler) {
-        window.removeEventListener('resize', drKlineCharts[idx]._resizeHandler);
-      }
-      drKlineCharts[idx].dispose();
-      drKlineCharts[idx] = null;
-    }
-  }
-}
-
 // 渲染 K线图（异步：先加载 ECharts + 拉数据，再绘图）
 function renderDRKlineChart(idx, key) {
+  var container = document.getElementById('drKline' + idx);
+  if (container) container.setAttribute('data-loading', '1');
   Promise.all([
     loadEcharts(),
     authFetch('/api/market/kline/' + key + '?count=120').then(function(r) {
@@ -3449,10 +3068,7 @@ function renderDRKlineChart(idx, key) {
     drawDRKlineChart(results[0], idx, key, results[1]);
   }).catch(function(e) {
     console.error('[DR] K线加载失败:', e.message);
-    var hint = document.getElementById('drKlineHint' + idx);
-    if (hint) hint.textContent = '❌ 加载失败: ' + e.message;
-    var btn = document.querySelector('.dr-kline-toggle[data-index="' + idx + '"]');
-    if (btn) { btn.textContent = '📊 重试'; btn.classList.remove('active'); }
+    if (container) container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);font-size:13px;">❌ 加载失败: ' + esc(e.message) + '</div>';
   });
 }
 
@@ -3560,12 +3176,380 @@ function drawDRKlineChart(echarts, idx, key, data) {
   var resizeHandler = function() { chart.resize(); };
   window.addEventListener('resize', resizeHandler);
   chart._resizeHandler = resizeHandler;
+}
 
-  // 成功提示
-  var hint = document.getElementById('drKlineHint' + idx);
-  if (hint) {
-    var lastDate = data.dates[data.dates.length - 1];
-    hint.textContent = '✅ ' + data.name + ' · ' + data.dates.length + ' 根 · 至 ' + lastDate;
+// ==================== 实时风险提示系统 ====================
+// 设计：
+//   1) 技术面：监控四大指数 MACD 水上死叉（DIFF 下穿 DEA 且两者均 > 0）
+//      — 复用后端 /api/market/indices 已计算的 macdState 字段（detectMacdState）
+//      — MACD 参数标准 12/26/9，由后端 calcMACD() 统一计算
+//   2) 情绪面：监控市场总成交额 / 两融余额是否达到近 500 天 95 百分位
+//      — 复用 drHistoryData（近 2 年）+ calcPercentile()
+//      — 异常交易日（0 值 / 缺失）自动过滤
+//   3) 缓存：跟随现有 drMarketData / drHistoryData 的 5 分钟 TTL，不额外请求
+//   4) 已读：按「日期 + 类型」存 localStorage，当日不再弹（次日自动重置）
+
+var DR_RISK_ALERT = {
+  PERCENTILE_WINDOW: 500,       // 百分位计算窗口（天）
+  PERCENTILE_THRESHOLD: 95,     // 百分位阈值
+  ALERT_SEVERITY: {             // 严重程度（影响是否可标记已读）
+    macd: 'urgent',             // MACD 水上死叉 = 紧急（可关但当日不再重复弹）
+    margin: 'warning',          // 两融余额高位 = 警告
+    turnover: 'warning'         // 成交额高位 = 警告
+  }
+};
+var drRiskAlertDismissed = {};  // 当日已读的 alert key → true
+var drRiskAlertCache = {        // 检测结果缓存（避免每次渲染都重算）
+  macd: null,
+  sentiment: null,
+  macdAt: 0,
+  sentimentAt: 0
+};
+
+// 从 localStorage 恢复当日已读状态（key 含日期，次日自动失效）
+function loadDRRiskDismissed() {
+  try {
+    var raw = localStorage.getItem('dr_risk_dismissed');
+    if (!raw) return;
+    var obj = JSON.parse(raw);
+    // 只保留今天的已读记录
+    var today = getToday();
+    drRiskAlertDismissed = {};
+    if (obj.date === today && obj.keys) {
+      obj.keys.forEach(function(k) { drRiskAlertDismissed[k] = true; });
+    }
+  } catch (e) { drRiskAlertDismissed = {}; }
+}
+
+// 保存已读状态到 localStorage
+function saveDRRiskDismissed() {
+  try {
+    localStorage.setItem('dr_risk_dismissed', JSON.stringify({
+      date: getToday(),
+      keys: Object.keys(drRiskAlertDismissed)
+    }));
+  } catch (e) { /* ignore quota */ }
+}
+
+// 生成当日 alert key（含日期，保证次日重置）
+function drRiskAlertKey(type, sub) {
+  return getToday() + '_' + type + (sub ? '_' + sub : '');
+}
+
+// ===== 1) MACD 水上死叉检测 =====
+// 数据源：drData.indices[].macdState（由后端 detectMacdState 计算）
+// 触发条件：macdState === '水上死叉'
+// 返回：[{ key, indexName, indexKey, macdState, timePoint }] 或空数组
+function detectMacdDeadCrossAlerts() {
+  if (!Array.isArray(drData.indices)) return [];
+  var alerts = [];
+  var timePoint = drCurrentDate || getToday();
+  drData.indices.forEach(function(idx) {
+    if (idx.macdState === '水上死叉') {
+      alerts.push({
+        key: drRiskAlertKey('macd', idx.key),
+        type: 'macd',
+        severity: DR_RISK_ALERT.ALERT_SEVERITY.macd,
+        indexName: idx.name,
+        indexKey: idx.key,
+        macdState: idx.macdState,
+        timePoint: timePoint
+      });
+    }
+  });
+  return alerts;
+}
+
+// ===== 2) 市场情绪百分位检测 =====
+// 数据源：drHistoryData.data（近 2 年，含 rzrqye / amount_total_yi）
+// 触发条件：当前值 ≥ 近 500 天 95 百分位
+// 异常过滤：0 值 / null / 负值（缺失数据）
+// 返回：[{ key, metric, label, currentVal, percentile, threshold, unit }] 或空数组
+function detectSentimentPercentileAlerts() {
+  if (!drHistoryData || !drHistoryData.data || drHistoryData.data.length === 0) return [];
+
+  var fullData = drHistoryData.data;
+  var sampleDays = DR_RISK_ALERT.PERCENTILE_WINDOW;
+  // 取近 N 天作为百分位计算样本
+  var sample = fullData.slice(-sampleDays);
+
+  var alerts = [];
+
+  // --- 两融余额（rzrqye，单位：元 → 亿元）---
+  var marginArrYi = filterAbnormalValues(sample.map(function(d) { return d.rzrqye; }))
+    .map(function(v) { return v / 1e8; });
+  if (marginArrYi.length >= 30) {
+    // 当前值：取最后一条有效记录
+    var curMargin = null;
+    for (var i = fullData.length - 1; i >= 0; i--) {
+      if (fullData[i].rzrqye > 0) { curMargin = fullData[i].rzrqye; break; }
+    }
+    if (curMargin != null) {
+      var marginYi = curMargin / 1e8;
+      var marginP = calcPercentile(marginArrYi, marginYi);
+      if (marginP != null && marginP >= DR_RISK_ALERT.PERCENTILE_THRESHOLD) {
+        alerts.push({
+          key: drRiskAlertKey('margin'),
+          type: 'margin',
+          severity: DR_RISK_ALERT.ALERT_SEVERITY.margin,
+          metric: 'margin',
+          label: '两融余额',
+          currentVal: marginYi,
+          percentile: marginP,
+          threshold: DR_RISK_ALERT.PERCENTILE_THRESHOLD,
+          unit: '亿元',
+          sampleSize: marginArrYi.length
+        });
+      }
+    }
+  }
+
+  // --- 两市总成交额（amount_total_yi，单位：亿元）---
+  var amountArr = filterAbnormalValues(sample.map(function(d) { return d.amount_total_yi; }));
+  if (amountArr.length >= 30) {
+    var curAmount = null;
+    for (var j = fullData.length - 1; j >= 0; j--) {
+      if (fullData[j].amount_total_yi > 0) { curAmount = fullData[j].amount_total_yi; break; }
+    }
+    if (curAmount != null) {
+      var amountP = calcPercentile(amountArr, curAmount);
+      if (amountP != null && amountP >= DR_RISK_ALERT.PERCENTILE_THRESHOLD) {
+        alerts.push({
+          key: drRiskAlertKey('turnover'),
+          type: 'turnover',
+          severity: DR_RISK_ALERT.ALERT_SEVERITY.turnover,
+          metric: 'turnover',
+          label: '两市总成交额',
+          currentVal: curAmount,
+          percentile: amountP,
+          threshold: DR_RISK_ALERT.PERCENTILE_THRESHOLD,
+          unit: '亿元',
+          sampleSize: amountArr.length
+        });
+      }
+    }
+  }
+
+  return alerts;
+}
+
+// ===== 异常数据过滤（供回测复用）=====
+// 过滤规则：0 / null / 负值 / 超出均值 ±5σ 的极端异常
+// 返回过滤后的数组
+function filterAbnormalValues(arr) {
+  if (!arr || arr.length === 0) return [];
+  var valid = arr.filter(function(v) { return typeof v === 'number' && v > 0 && !isNaN(v); });
+  if (valid.length === 0) return [];
+  // 均值 ± 5σ 过滤极端数据错误（保留合法高位值）
+  var sum = 0;
+  for (var i = 0; i < valid.length; i++) sum += valid[i];
+  var mean = sum / valid.length;
+  var sqSum = 0;
+  for (var k = 0; k < valid.length; k++) sqSum += (valid[k] - mean) * (valid[k] - mean);
+  var std = Math.sqrt(sqSum / valid.length);
+  if (std === 0) return valid;
+  var lo = mean - 5 * std;
+  var hi = mean + 5 * std;
+  return valid.filter(function(v) { return v >= lo && v <= hi; });
+}
+
+// ===== 主检查函数：汇总所有风险并渲染 =====
+function checkDRRiskAlerts() {
+  // 检测
+  var macdAlerts = detectMacdDeadCrossAlerts();
+  var sentimentAlerts = detectSentimentPercentileAlerts();
+
+  // 缓存
+  drRiskAlertCache.macd = macdAlerts;
+  drRiskAlertCache.sentiment = sentimentAlerts;
+  drRiskAlertCache.macdAt = Date.now();
+  drRiskAlertCache.sentimentAt = Date.now();
+
+  // 合并 + 过滤已读
+  var allAlerts = macdAlerts.concat(sentimentAlerts);
+  var activeAlerts = allAlerts.filter(function(a) {
+    return !drRiskAlertDismissed[a.key];
+  });
+
+  renderDRRiskAlerts(activeAlerts);
+}
+
+// ===== 渲染风险提示（综合走势判断下方的高亮警示）=====
+function renderDRRiskAlerts(alerts) {
+  var wrap = document.getElementById('drTrendRiskHighlight');
+  var body = document.getElementById('drTrendRiskBody');
+  if (!wrap || !body) return;
+
+  if (!alerts || alerts.length === 0) {
+    wrap.style.display = 'none';
+    body.innerHTML = '';
+    return;
+  }
+
+  // 构建高亮提示内容（精简版，避免占用过多空间）
+  var html = '';
+  alerts.forEach(function(a) {
+    var tag = '';
+    var text = '';
+    if (a.type === 'macd') {
+      tag = '技术面';
+      text = '<b>' + esc(a.indexName) + '</b> 出现 MACD 水上死叉（DIFF 下穿 DEA，两者均位于零轴上方）';
+    } else if (a.type === 'margin') {
+      tag = '情绪面';
+      text = '<b>两融余额 ' + a.currentVal.toFixed(0) + ' ' + a.unit + '</b> 达近 ' + a.sampleSize
+           + ' 天 <b>P' + a.percentile + '</b>（≥ P' + a.threshold + ' 高位）';
+    } else if (a.type === 'turnover') {
+      tag = '情绪面';
+      text = '<b>两市总成交额 ' + a.currentVal.toFixed(0) + ' ' + a.unit + '</b> 达近 ' + a.sampleSize
+           + ' 天 <b>P' + a.percentile + '</b>（≥ P' + a.threshold + ' 高位）';
+    }
+    html += '<div class="dr-trend-risk-item">'
+          + '<span class="dr-trend-risk-item-icon" aria-hidden="true">⚠</span>'
+          + '<span class="dr-trend-risk-item-tag">' + tag + '</span>'
+          + '<span class="dr-trend-risk-item-text">' + text + '</span>'
+          + '</div>';
+  });
+  body.innerHTML = html;
+  wrap.style.display = '';
+}
+
+// ===== 标记为已读（隐藏高亮警示）=====
+function dismissDRRiskAlerts() {
+  var wrap = document.getElementById('drTrendRiskHighlight');
+  if (!wrap) return;
+  wrap.style.display = 'none';
+
+  // 将当前所有活跃 alert key 标记为已读
+  var allAlerts = (drRiskAlertCache.macd || []).concat(drRiskAlertCache.sentiment || []);
+  allAlerts.forEach(function(a) {
+    drRiskAlertDismissed[a.key] = true;
+  });
+  saveDRRiskDismissed();
+}
+
+// ===== 历史回测弹窗 =====
+function openDRRiskBacktest() {
+  var modal = document.getElementById('drRiskBacktestModal');
+  if (modal) modal.classList.add('show');
+  // 预填结果区域
+  var resultEl = document.getElementById('drRiskBtResult');
+  if (resultEl && !resultEl.innerHTML) {
+    resultEl.innerHTML = '<div class="dr-risk-bt-empty">选择回测范围后点击「开始回测」</div>';
+  }
+}
+
+function closeDRRiskBacktest() {
+  var modal = document.getElementById('drRiskBacktestModal');
+  if (modal) modal.classList.remove('show');
+}
+
+// 执行历史回测：扫描历史数据，统计百分位信号触发次数
+function runDRRiskBacktest() {
+  var resultEl = document.getElementById('drRiskBtResult');
+  var rangeEl = document.getElementById('drRiskBtRange');
+  if (!resultEl) return;
+  var days = rangeEl ? parseInt(rangeEl.value) : 365;
+
+  if (!drHistoryData || !drHistoryData.data || drHistoryData.data.length === 0) {
+    resultEl.innerHTML = '<div class="dr-risk-bt-empty">历史数据未加载，请稍后重试</div>';
+    return;
+  }
+
+  var fullData = drHistoryData.data;
+  var sampleDays = DR_RISK_ALERT.PERCENTILE_WINDOW;
+  var threshold = DR_RISK_ALERT.PERCENTILE_THRESHOLD;
+
+  // 回测范围：取最近 days 天
+  var btData = fullData.slice(-days);
+
+  // 逐日计算百分位信号（使用当日之前 sampleDays 天作为样本）
+  var marginSignals = [];
+  var turnoverSignals = [];
+  var marginTotal = 0;
+  var turnoverTotal = 0;
+
+  for (var i = 0; i < btData.length; i++) {
+    var cur = btData[i];
+
+    // 两融余额信号
+    if (cur.rzrqye > 0) {
+      marginTotal++;
+      // 取 btData[0..i] 中最近 sampleDays 天的有效数据作为样本
+      var startIdx = Math.max(0, i - sampleDays);
+      var sampleMargin = [];
+      for (var j = startIdx; j <= i; j++) {
+        if (btData[j].rzrqye > 0) sampleMargin.push(btData[j].rzrqye / 1e8);
+      }
+      if (sampleMargin.length >= 30) {
+        var curMarginYi = cur.rzrqye / 1e8;
+        var mp = calcPercentile(sampleMargin, curMarginYi);
+        if (mp != null && mp >= threshold) {
+          marginSignals.push({ date: cur.date, value: curMarginYi, p: mp });
+        }
+      }
+    }
+
+    // 成交额信号
+    if (cur.amount_total_yi > 0) {
+      turnoverTotal++;
+      var startIdx2 = Math.max(0, i - sampleDays);
+      var sampleAmount = [];
+      for (var k = startIdx2; k <= i; k++) {
+        if (btData[k].amount_total_yi > 0) sampleAmount.push(btData[k].amount_total_yi);
+      }
+      if (sampleAmount.length >= 30) {
+        var ap = calcPercentile(sampleAmount, cur.amount_total_yi);
+        if (ap != null && ap >= threshold) {
+          turnoverSignals.push({ date: cur.date, value: cur.amount_total_yi, p: ap });
+        }
+      }
+    }
+  }
+
+  // 渲染回测结果
+  var html = '';
+
+  // 汇总卡片
+  html += '<div class="dr-risk-bt-summary">';
+  html += '<div class="dr-risk-bt-stat"><div class="dr-risk-bt-stat-label">回测天数</div><div class="dr-risk-bt-stat-value">' + btData.length + '</div></div>';
+  html += '<div class="dr-risk-bt-stat"><div class="dr-risk-bt-stat-label">两融高位信号</div><div class="dr-risk-bt-stat-value">' + marginSignals.length + '/' + marginTotal + '</div></div>';
+  html += '<div class="dr-risk-bt-stat"><div class="dr-risk-bt-stat-label">成交额高位信号</div><div class="dr-risk-bt-stat-value">' + turnoverSignals.length + '/' + turnoverTotal + '</div></div>';
+  html += '<div class="dr-risk-bt-stat"><div class="dr-risk-bt-stat-label">信号阈值</div><div class="dr-risk-bt-stat-value">P' + threshold + '</div></div>';
+  html += '</div>';
+
+  // 明细表（合并两融 + 成交额信号，按日期倒序）
+  var allSignals = [];
+  marginSignals.forEach(function(s) { allSignals.push({ date: s.date, type: '两融余额', value: s.value.toFixed(0) + ' 亿', p: s.p }); });
+  turnoverSignals.forEach(function(s) { allSignals.push({ date: s.date, type: '总成交额', value: s.value.toFixed(0) + ' 亿', p: s.p }); });
+  allSignals.sort(function(a, b) { return a.date < b.date ? 1 : -1; });
+
+  if (allSignals.length === 0) {
+    html += '<div class="dr-risk-bt-empty">回测范围内无高位信号触发</div>';
+  } else {
+    html += '<table class="dr-risk-bt-table"><thead><tr>'
+          + '<th>日期</th><th>指标</th><th>数值</th><th>百分位</th>'
+          + '</tr></thead><tbody>';
+    // 最多显示 200 条避免 DOM 过大
+    var maxRows = Math.min(allSignals.length, 200);
+    for (var r = 0; r < maxRows; r++) {
+      var s = allSignals[r];
+      var pClass = s.p >= 98 ? 'bt-tag-high' : 'bt-tag-mid';
+      html += '<tr><td>' + s.date + '</td><td>' + s.type + '</td><td>' + s.value + '</td>'
+            + '<td class="' + pClass + '">P' + s.p + '</td></tr>';
+    }
+    html += '</tbody></table>';
+    if (allSignals.length > 200) {
+      html += '<div class="dr-risk-bt-empty">（仅显示前 200 条，共 ' + allSignals.length + ' 条信号）</div>';
+    }
+  }
+
+  resultEl.innerHTML = html;
+
+  // 更新 hint
+  var hintEl = document.getElementById('drRiskBtHint');
+  if (hintEl) {
+    hintEl.textContent = '回测完成：扫描 ' + btData.length + ' 天，发现 '
+      + (marginSignals.length + turnoverSignals.length) + ' 个高位信号（异常数据已过滤）';
   }
 }
 

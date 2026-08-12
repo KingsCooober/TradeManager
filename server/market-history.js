@@ -71,52 +71,75 @@ function initHistoryTable() {
 }
 initHistoryTable();
 
-// 记录今日资金面（fund 字段被更新，其他字段保留）
-// 用「最近交易日」作记录主键（周六/日调用时回退到周五），保证图表最右端的日期是真实交易日
+// 记录资金面（fund 字段被更新，其他字段保留）
+// fund.marginHistory 存在时，按数据本身的 date 字段逐条写入（补齐历史缺漏）
+// 否则按"最近交易日"作主键，写入单条记录
 function recordFundSnapshot(fund) {
-  const today = getLastTradingDate();
   const db = getDB();
-
   const f = fund || {};
   const m = f.margin || {};
   const a = f.amount || {};
   const n = f.north || {};
+  const history = Array.isArray(f.marginHistory) ? f.marginHistory : null;
+  const now = new Date().toISOString();
 
-  // ★ 如果接口没发布当日融资融券数据，不覆盖已有的 rzye/rzrqye/margin_change_pct
-  //   避免把"接口最新一行（可能是昨天）"误当成今天写进库
-  const marginPending = (m.error === 'margin_not_published');
+  // ★ 多个写入目标：(history 数组) + (单条 today)
+  //  - history 中的日期按其本身 date 字段写入：用于补齐"东财已发但我们之前没写"的历史日期
+  //  - today（最近交易日）写入 amount + north + 当日 margin（如果东财今天已发）
+  const targets = [];
+  if (history && history.length > 0) {
+    history.forEach(function(h) {
+      if (h && h.date) targets.push({ date: h.date, rzye: h.rzye, rzrqye: h.rzrqye, changePct: h.changePct });
+    });
+  }
+  const today = getLastTradingDate();
+  // 当日 margin：仅在 margin.date 等于 today 时才覆盖当日的两融
+  //   否则保留旧值（避免 20:00 前写入 0 覆盖 19:00 的数据）
+  const todayMargin = (m && m.date && m.date.slice(0, 10) === today)
+    ? { date: today, rzye: m.rzye, rzrqye: m.rzrqye, changePct: m.changePct }
+    : { date: today, rzye: null, rzrqye: null, changePct: null };
+  // 去重（history 可能已包含 today）
+  const hasToday = targets.some(function(t) { return t.date === today; });
+  if (!hasToday) targets.push(todayMargin);
 
-  const rzye       = marginPending ? 0 : (m.rzye || 0);
-  const rzrqye     = marginPending ? 0 : (m.rzrqye || 0);
-  const changePct  = marginPending ? 0 : (m.changePct || 0);
-  // 使用 excluded.* 写入新值；UPDATE 时通过 SQL 表达式保留旧值
-  // (CASE WHEN excluded.rzye=0 THEN market_history.rzye ELSE excluded.rzye END)
-
-  return new Promise(function(resolve) {
-    db.run(`INSERT INTO market_history
-      (date, rzye, rzrqye, margin_change_pct, amount_sh_yi, amount_sz_yi, amount_total_yi, north_net_yi, fetched_at, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(date) DO UPDATE SET
-        rzye=CASE WHEN ?=1 THEN market_history.rzye   ELSE excluded.rzye   END,
-        rzrqye=CASE WHEN ?=1 THEN market_history.rzrqye ELSE excluded.rzrqye END,
-        margin_change_pct=CASE WHEN ?=1 THEN market_history.margin_change_pct ELSE excluded.margin_change_pct END,
-        amount_sh_yi=excluded.amount_sh_yi,
-        amount_sz_yi=excluded.amount_sz_yi,
-        amount_total_yi=excluded.amount_total_yi,
-        north_net_yi=excluded.north_net_yi,
-        fetched_at=excluded.fetched_at`,
-      [today, rzye, rzrqye, changePct,
-       a.shYi || 0, a.szYi || 0, a.totalYi || 0,
-       (n.netInflow || 0) / 1e8,
-       new Date().toISOString(), 'eastmoney+sina',
-       // UPDATE 用的额外参数
-       marginPending ? 1 : 0, marginPending ? 1 : 0, marginPending ? 1 : 0],
-      function(err) {
-        if (err) console.warn('[market-history] fund 记录失败:', err.message);
-        else console.log('[market-history] fund 已记录 ' + today + (marginPending ? ' (margin pending, 保留旧值)' : ''));
-        resolve();
+  // 串行写入，确保外层 Promise 按顺序 resolve
+  return targets.reduce(function(p, t) {
+    return p.then(function() {
+      return new Promise(function(resolve) {
+        const marginPending = (t.rzye == null);
+        const rzye       = marginPending ? null : (t.rzye || 0);
+        const rzrqye     = marginPending ? null : (t.rzrqye || 0);
+        const changePct  = marginPending ? null : (t.changePct || 0);
+        // ★ marginPending=true 时直接覆盖 rzye/rzrqye 为 NULL（不被 COALESCE 保留旧值）
+        //   这样当天东财还没发布时，能正确把"被污染的 0"恢复为"未发布"
+        const rzyeSql       = marginPending ? 'NULL' : 'excluded.rzye';
+        const rzrqyeSql     = marginPending ? 'NULL' : 'excluded.rzrqye';
+        const changePctSql  = marginPending ? 'NULL' : 'excluded.margin_change_pct';
+        db.run(`INSERT INTO market_history
+          (date, rzye, rzrqye, margin_change_pct, amount_sh_yi, amount_sz_yi, amount_total_yi, north_net_yi, fetched_at, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(date) DO UPDATE SET
+            rzye=${rzyeSql},
+            rzrqye=${rzrqyeSql},
+            margin_change_pct=${changePctSql},
+            amount_sh_yi=excluded.amount_sh_yi,
+            amount_sz_yi=excluded.amount_sz_yi,
+            amount_total_yi=excluded.amount_total_yi,
+            north_net_yi=excluded.north_net_yi,
+            fetched_at=excluded.fetched_at`,
+          [t.date, rzye, rzrqye, changePct,
+           a.shYi || 0, a.szYi || 0, a.totalYi || 0,
+           (n.netInflow || 0) / 1e8,
+           now, 'eastmoney+sina'],
+          function(err) {
+            if (err) console.warn('[market-history] fund 记录失败', t.date, err.message);
+            else if (marginPending) console.log('[market-history] fund 标记 ' + t.date + ' 两融未发布');
+            else console.log('[market-history] fund 已记录 ' + t.date + ' 两融');
+            resolve();
+          });
       });
-  });
+    });
+  }, Promise.resolve());
 }
 
 // 记录今日情绪面（sentiment 字段被更新，其他字段保留）
