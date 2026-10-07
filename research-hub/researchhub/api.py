@@ -981,6 +981,22 @@ def backfill_start(payload: dict = Body(...)) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.get("/content/missing")
+def reports_missing_content(source: str = "") -> dict:
+    """有多少抓取进来的研报还没拿到正文（供「一键补全」提示用）。"""
+    sources = [source] if source in feeds.SOURCE_BY_KEY else None
+    return backfill.count_missing(sources)
+
+
+@router.post("/content/fill")
+def reports_fill_content(payload: dict = Body(default={})) -> dict:
+    """只补正文：把库里缺正文的条目重试一遍，不重新扫描列表。"""
+    try:
+        return backfill.start_fill(payload or {})
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/backfill/status")
 def backfill_status() -> dict:
     return backfill.status()

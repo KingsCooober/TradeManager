@@ -232,6 +232,7 @@ a { color: var(--accent); }
 }
 .card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--text-dim); }
 .tag-mini { background: var(--bg-sunken); padding: 1px 6px; border-radius: 20px; color: var(--text-soft); }
+.tag-mini.warn-tag { background: rgba(194, 65, 12, .12); color: var(--warn); font-weight: 600; }
 .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .dot.unread { background: var(--accent); }
 .dot.reading { background: var(--star); }

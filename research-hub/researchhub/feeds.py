@@ -622,10 +622,12 @@ def fetch_content(item: dict) -> dict:
     else:
         page = _fetch(url)
         content = _em_parse_page(page)
-    return {"content": content, "url": url, "info_code": item_id}
+    # reason: "" 表示正常；"empty" 表示页面打开成功但来源站确实没有文字正文
+    return {"content": content, "url": url, "info_code": item_id,
+            "reason": "" if content else "empty"}
 
 
-def build_markdown(item: dict, content: str) -> str:
+def build_markdown(item: dict, content: str, reason: str = "") -> str:
     """把元信息 + 正文拼成一篇完整的 Markdown。"""
     meta = [
         ("机构", item.get("org")),
@@ -642,10 +644,25 @@ def build_markdown(item: dict, content: str) -> str:
     lines.append("")
     if content:
         lines += ["---", "", content.strip(), ""]
+    elif reason == "empty":
+        lines += [
+            "> 📄 **这篇研报在来源站只有标题与摘要，没有公开的文字版全文。**",
+            "> 元数据（机构 / 分析师 / 评级 / 日期）已完整保留，正文请点开原文页查看：",
+            f"> [{item.get('url')}]({item.get('url')})",
+            "",
+        ]
+    elif reason == "failed":
+        lines += [
+            "> ⚠️ **正文抓取失败**（网络波动或来源限流）。",
+            "> 可以到「研报抓取 → 补全缺失正文」一键重试：",
+            f"> [{item.get('url')}]({item.get('url')})",
+            "",
+        ]
     else:
         lines += [
-            "> 未能抓取到公开正文（来源页面可能只提供摘要，或页面结构有变化）。",
-            f"> 请点开原文页查看：[{item.get('url')}]({item.get('url')})",
+            "> ⏳ 这篇研报还没有抓取正文。",
+            "> 到「研报抓取 → 补全缺失正文」可以一键补充。",
+            f"> [{item.get('url')}]({item.get('url')})",
             "",
         ]
     lines += ["---", "", "*本内容由程序自动抓取自公开页面，版权归原券商所有，仅供个人研究使用。*"]

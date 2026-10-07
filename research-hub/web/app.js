@@ -392,6 +392,7 @@
         <p class="card-excerpt">${esc(r.summary || r.excerpt || '（暂无摘要）')}</p>
         <div class="card-meta">
           <span class="dot ${r.read_status}"></span><span>${statusLabel}</span>
+          ${(!r.word_count && ['feed','auto','backfill'].includes(r.source_type)) ? '<span class="tag-mini warn-tag" title="这篇没有抓到正文，可到「研报抓取 → 补全缺失正文」重试">无正文</span>' : ''}
           ${r.org ? `<span>· ${esc(r.org)}</span>` : ''}
           ${r.rating ? `<span>· ${esc(r.rating)}</span>` : ''}
           ${r.report_date ? `<span>· ${esc(r.report_date)}</span>` : ''}
@@ -1091,6 +1092,55 @@
       ${(j.log && j.log.length) ? `<div class="bf-log">${j.log.slice(-8).map((l) => `<div>${esc(l)}</div>`).join('')}</div>` : ''}`;
   }
 
+  function renderContentFixPanel() {
+    const m = feedsState.missing || { count: 0, retryable: 0, no_body: 0, by_source: [] };
+    const busy = feedsState.bf && feedsState.bf.running;
+    const detail = (m.by_source || []).map((x) =>
+      `${esc(feedsState.sources.find((s) => s.key === x.name)?.label.split(' · ')[0] || x.name)} ${x.count}`).join(' · ');
+    let body;
+    if (!m.count) {
+      body = '<span class="hint" style="margin:0">✅ 所有抓取进来的研报都有正文</span>';
+    } else if (!m.retryable) {
+      body = `<span class="hint" style="margin:0">有 <b>${m.count}</b> 篇没有正文，但都是
+        <b>来源站本身没有文字版全文</b>的（已保留标题/机构/评级/日期与原文链接）</span>`;
+    } else {
+      body = `<span class="hint" style="margin:0">有 <b style="color:var(--warn)">${m.retryable}</b> 篇正文缺失${detail ? `（${detail}）` : ''}
+        ${m.no_body ? `，另有 ${m.no_body} 篇来源站无正文` : ''}</span>`;
+    }
+    return `<div class="stat-card" style="margin-bottom:14px">
+      <div class="auto-head">
+        <div class="k" style="font-size:13px;color:var(--text);font-weight:600">正文补全</div>
+        <span class="spacer"></span>
+        ${m.retryable && !busy ? '<button class="btn sm primary" id="cf-run">一键补全</button>' : ''}
+      </div>
+      <div style="margin-top:8px">${body}</div>
+      <div class="hint" style="margin-top:6px">抓取时遇到网络波动或来源限流会漏掉正文，「一键补全」会把它们重试一遍；来源站本身没有正文的不会反复重试。</div>
+    </div>`;
+  }
+
+  async function loadMissing() {
+    try {
+      feedsState.missing = await api('/api/content/missing');
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function bindContentFix() {
+    const btn = $('#cf-run');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 补全中';
+      try {
+        feedsState.bf = await api('/api/content/fill', { method: 'POST', body: {} });
+        startAutoPoll(3000);
+        toast(`开始补全 ${feedsState.bf.content_total || 0} 篇的正文`);
+        renderFeeds();
+      } catch (e) {
+        toast(e.message, 'err');
+        btn.disabled = false; btn.textContent = '一键补全';
+      }
+    });
+  }
+
   function renderBackfillPanel() {
     const themes = feedsState.themes || [];
     const sources = feedsState.sources || [];
@@ -1204,7 +1254,7 @@
       const wasRunning = feedsState.bf?.running;
       feedsState.bf = job;
       if (wasRunning && !job.running) {
-        await Promise.all([loadList(), loadStats(), loadFacets()]);
+        await Promise.all([loadList(), loadStats(), loadFacets(), loadMissing()]);
         toast(`批量导入结束：入库 ${job.created} 篇`, job.created ? 'ok' : '');
       }
     } catch (e) { /* 忽略 */ }
@@ -1327,6 +1377,7 @@
         自动抓取默认关闭，开启后才会联网；请求均已限流，请勿用于批量囤积或二次分发。</span></div>
 
       ${renderAutoPanel()}
+      ${renderContentFixPanel()}
       ${renderBackfillPanel()}
       ${renderSubsTable()}
       ${renderLogsCard()}
@@ -1406,6 +1457,7 @@
     $('#af-new').addEventListener('click', () => openSubModal(null));
 
     bindSubTable();
+    bindContentFix();
     bindBackfill();
     bindFeedForm();
     renderFeedResults();
@@ -2062,7 +2114,7 @@
   async function renderFeedsPage() {
     if (!feedsState.loaded) await loadFeedSources();
     if (state.view !== 'feeds') return;
-    await Promise.all([loadAuto(), loadBackfillStatus(), loadThemes()]);
+    await Promise.all([loadAuto(), loadBackfillStatus(), loadThemes(), loadMissing()]);
     if (state.view !== 'feeds') return;
     const raw = feedsState.autoRaw || [];
     feedsState.autoRaw = null;

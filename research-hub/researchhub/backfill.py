@@ -234,6 +234,42 @@ def start(payload: dict) -> dict:
     return status()
 
 
+def start_fill(payload: dict) -> dict:
+    """只补正文：把库里所有缺正文的抓取条目重试一遍，不重新扫描列表。"""
+    global _thread
+    if _thread and _thread.is_alive():
+        raise RuntimeError("已有任务在运行")
+    sources = [s for s in (payload.get("sources") or list(feeds.SOURCE_BY_KEY.keys()))
+               if s in feeds.SOURCE_BY_KEY] or list(feeds.SOURCE_BY_KEY.keys())
+    missing = count_missing(sources)
+    if not missing["retryable"]:
+        raise RuntimeError(
+            "没有可重试的缺正文研报"
+            + (f"（另有 {missing['no_body']} 篇来源站本身就没有文字正文）" if missing["no_body"] else ""))
+
+    params = {
+        "sources": sources, "types": [], "days": 30, "keywords": [],
+        "theme": "", "fetch_content": True, "mode": "fill",
+        "max_items": MAX_CREATE_PER_JOB, "begin_date": "", "end_date": "",
+    }
+    global JOB
+    with _job_lock:
+        JOB = _empty_job(params)
+        job = JOB
+        job.update({
+            "running": True, "phase": "content", "started_at": db.now(),
+            "combo_total": 0, "content_total": missing["retryable"],
+            "end_date": date.today().isoformat(),
+            "begin_date": (date.today() - timedelta(days=30)).isoformat(),
+        })
+        _log(job, f"开始补正文：可重试 {missing['retryable']} 篇"
+                  + (f"（另有 {missing['no_body']} 篇来源站无正文，跳过）" if missing["no_body"] else ""))
+    _stop_flag.clear()
+    _thread = threading.Thread(target=_run, args=(job,), name="backfill-fill", daemon=True)
+    _thread.start()
+    return status()
+
+
 def _set(job: dict, **fields) -> None:
     with _job_lock:
         job.update(fields)
@@ -249,14 +285,17 @@ def _should_stop(job: dict) -> bool:
 
 
 def _run(job: dict) -> None:
+    fill_only = job["params"].get("mode") == "fill"
     patterns = compile_matcher(job["params"]["keywords"])
     today = date.today()
     begin = job["params"].get("begin_date") or (today - timedelta(days=job["params"]["days"])).isoformat()
     end = job["params"].get("end_date") or today.isoformat()
-    pending: list[tuple[str, str]] = []          # (source, info_id)
+    pending: list[tuple[str, str]] = []          # (source, report_id)
 
     try:
-        combos = _combos(job["params"])
+        combos = [] if fill_only else _combos(job["params"])
+        if fill_only:
+            _log(job, "[补正文] 跳过扫描，直接重试库里缺正文的条目")
         for index, (source, type_key) in enumerate(combos):
             if _should_stop(job):
                 break
@@ -276,11 +315,13 @@ def _run(job: dict) -> None:
         if job["params"]["fetch_content"] and pending and not _should_stop(job):
             _set(job, phase="content", content_total=len(pending), message="")
             _log(job, f"[补正文] 共 {len(pending)} 篇待抓")
+            base = 0 if fill_only else 50          # 只补正文时全程都为补正文阶段
+            span = 100 if fill_only else 50
             for idx, (source, info_id) in enumerate(pending, 1):
                 if _should_stop(job):
                     break
                 _fetch_one_content(job, source, info_id)
-                _set(job, content_done=idx, progress=50 + int(idx / len(pending) * 50),
+                _set(job, content_done=idx, progress=base + int(idx / len(pending) * span),
                      current=f"补正文 {idx}/{len(pending)}")
                 if idx % 10 == 0:
                     _log(job, f"  正文进度 {idx}/{len(pending)}")
@@ -290,35 +331,71 @@ def _run(job: dict) -> None:
              finished_at=db.now(), current="",
              progress=100 if not stopped else job.get("progress", 0),
              message=("已手动停止，已入库的内容保留；再跑一次会接着补" if stopped else "全部完成"))
-        _log(job, ("已停止。" if stopped else "完成。") +
-             f" 扫描 {job['scanned']} 篇 / 命中 {job['matched']} / 入库 {job['created']} / "
-             f"跳过 {job['skipped']} / 正文 {job.get('content_done', 0)}")
+        if fill_only:
+            _log(job, ("已停止。" if stopped else "完成。") +
+                 f" 重试 {job.get('content_total', 0)} 篇 / 成功 {job.get('content_done', 0)} / "
+                 f"仍失败 {job.get('content_failed', 0)}")
+        else:
+            _log(job, ("已停止。" if stopped else "完成。") +
+                 f" 扫描 {job['scanned']} 篇 / 命中 {job['matched']} / 入库 {job['created']} / "
+                 f"跳过 {job['skipped']} / 正文 {job.get('content_done', 0)}")
     except Exception as exc:  # noqa: BLE001
         _set(job, running=False, phase="error", finished_at=db.now(),
              message=f"{type(exc).__name__}: {exc}")
         _log(job, f"✗ 任务异常：{type(exc).__name__}: {exc}")
 
 
-NO_CONTENT_MARK = "未能抓取到公开正文"
+# 来源站确实没有文字正文的标记 —— 这类重试也没用，不再反复抓
+NO_BODY_MARK = "没有公开的文字版全文"
+
+
+def _domain_clause(sources: list[str]) -> str:
+    parts = []
+    for source in sources:
+        parts.append("source_url LIKE '%sina.com.cn%'" if source == "sina"
+                     else "source_url LIKE '%eastmoney.com%'")
+    return " OR ".join(parts)
+
+
+def _retryable_where() -> str:
+    """可重试的缺正文条件：没正文，且不是「来源本来就没有正文」那一类。"""
+    return ("source_type IN ('feed', 'auto', 'backfill') AND word_count = 0 "
+            f"AND content NOT LIKE '%{NO_BODY_MARK}%'")
+
+
+def count_missing(sources: list[str] | None = None) -> dict:
+    """统计缺正文情况：总数 / 可重试 / 来源本来就没有正文。"""
+    sources = sources or list(feeds.SOURCE_BY_KEY.keys())
+    domain = _domain_clause(sources)
+    if not domain:
+        return {"count": 0, "retryable": 0, "no_body": 0, "by_source": []}
+    conn = db.connect()
+    total = conn.execute(
+        f"SELECT COUNT(*) n FROM reports WHERE source_type IN ('feed','auto','backfill') "
+        f"AND word_count = 0 AND ({domain})").fetchone()["n"]
+    no_body = conn.execute(
+        f"SELECT COUNT(*) n FROM reports WHERE source_type IN ('feed','auto','backfill') "
+        f"AND word_count = 0 AND content LIKE ? AND ({domain})",
+        (f"%{NO_BODY_MARK}%",)).fetchone()["n"]
+    by_source = []
+    for source in sources:
+        like = "%sina.com.cn%" if source == "sina" else "%eastmoney.com%"
+        n = conn.execute(
+            f"SELECT COUNT(*) n FROM reports WHERE {_retryable_where()} AND source_url LIKE ?",
+            (like,)).fetchone()["n"]
+        if n:
+            by_source.append({"name": source, "count": n})
+    return {"count": total, "retryable": total - no_body, "no_body": no_body, "by_source": by_source}
 
 
 def _stale_without_content(sources: list[str], existing_ids: set) -> list[tuple[str, str]]:
-    """找出库里还没正文的抓取条目，让补正文阶段可以跨任务续跑。"""
-    domain_clauses, params = [], []
-    for source in sources:
-        if source == "sina":
-            domain_clauses.append("source_url LIKE '%sina.com.cn%'")
-        else:
-            domain_clauses.append("source_url LIKE '%eastmoney.com%'")
-    if not domain_clauses:
+    """找出还可重试的缺正文条目，让补正文阶段可以跨任务续跑。"""
+    domain = _domain_clause(sources)
+    if not domain:
         return []
     rows = db.connect().execute(
-        f"SELECT id, source_url FROM reports "
-        f"WHERE source_type IN ('feed', 'auto', 'backfill') "
-        f"AND (content LIKE ? OR word_count = 0) AND ({' OR '.join(domain_clauses)}) "
-        f"ORDER BY id DESC LIMIT 4000",
-        (f"%{NO_CONTENT_MARK}%",),
-    ).fetchall()
+        f"SELECT id, source_url FROM reports WHERE {_retryable_where()} AND ({domain}) "
+        f"ORDER BY id DESC LIMIT 4000").fetchall()
     out = []
     for row in rows:
         if str(row["id"]) in existing_ids:
@@ -421,10 +498,27 @@ def _fetch_one_content(job: dict, source: str, report_id: str) -> None:
         item["kind"] = match.group(1) if match else "lastest"
     else:
         item["kind"] = "stock" if "/report/info/" in (row["source_url"] or "") else "industry"
+    content = ""
+    reason = "failed"
+    for attempt in range(2):          # 偶发的限流/超时会返回空，隔一下重试一次
+        try:
+            fetched = feeds.fetch_content(item)
+            content = fetched.get("content") or ""
+            if content:
+                reason = ""
+                break
+            reason = fetched.get("reason") or "empty"
+        except feeds.FeedError:
+            reason = "failed"
+        if attempt == 0:
+            time.sleep(1.5)
     try:
-        fetched = feeds.fetch_content(item)
-        content = fetched.get("content") or ""
         if not content:
+            # 把"来源本来就没正文"和"抓取失败"分别写清楚，方便用户判断要不要重试
+            note_md = feeds.build_markdown(item, "", reason)
+            conn.execute("UPDATE reports SET content = ?, word_count = 0, updated_at = ? WHERE id = ?",
+                         (note_md, db.now(), report_id))
+            conn.commit()
             _bump(job, "content_failed")
             return
         markdown = feeds.build_markdown(item, content)
