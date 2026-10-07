@@ -1,0 +1,29 @@
+name: Deploy to Lighthouse
+
+# push 到 master 时自动部署；也可在 GitHub Actions 页面手动触发
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# 同一时间只允许一个部署任务
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH 部署到服务器
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 212.64.17.221
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /var/www/trademanager
+            echo "[deploy] 同步代码到 origin/master..."
+            git fetch origin master
+            git reset --hard origin/master
+            bash scripts/deploy.sh
