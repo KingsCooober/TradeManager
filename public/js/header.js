@@ -33,6 +33,9 @@ function renderAppHeader(page) {
   if (page === 'daily') {
     logoutFn = 'handleDRLogout';
     loginFn = 'openDRLoginModal';
+  } else if (page === 'aihot') {
+    logoutFn = 'handleAihotLogout';
+    loginFn = 'openAihotLoginModal';
   }
 
   existing.innerHTML =
@@ -45,6 +48,7 @@ function renderAppHeader(page) {
         '<a href="diary2.html" class="header-tab' + (page === 'diary' ? ' active' : '') + '" data-page="diary" title="历史交易深度复盘：筛选 / 排序 / 单笔分析">📖 复盘总结</a>' +
         '<a href="backtest.html" class="header-tab' + (page === 'backtest' ? ' active' : '') + '" data-page="backtest" title="看着历史 K 线手动模拟买卖的练习工具">🎯 回测练习</a>' +
         '<a href="research.html" class="header-tab' + (page === 'research' ? ' active' : '') + '" data-page="research" title="研报库：订阅式抓取公开研报、AI 摘要要点、划词高亮与批注、按行业标签归档">📑 研报库</a>' +
+        '<a href="aihot.html" class="header-tab' + (page === 'aihot' ? ' active' : '') + '" data-page="aihot" title="AIHOT：精选资讯、全部动态、热点榜与 AI 日报">🤖 AIHOT</a>' +
       '</nav>' +
     '</div>' +
     '<div class="header-right">' +

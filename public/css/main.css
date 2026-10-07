@@ -238,6 +238,7 @@ body {
 /* 修：backtest 页一直漏了配色，浅色主题下白字配白底 → 只剩 emoji 看得见 */
 .header-tab[data-page="backtest"] { background: #ef4444; }
 .header-tab[data-page="research"] { background: #7c3aed; }
+.header-tab[data-page="aihot"] { background: #0f766e; }
 
 .header-right {
   display: flex;

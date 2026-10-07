@@ -13,6 +13,7 @@ const bcrypt = require('bcryptjs');
 
 // P0-1: 引入自实现的轻量 JWT 认证模块（与标准 JWT 兼容）
 const auth = require('./auth');
+const aihotProxy = require('./aihot-proxy');
 // 行情数据代理（腾讯股票 API 免 Key）
 const market = require('./market-quote');
 // 资金面数据代理（北向资金 + 融资融券 + 沪深两市总成交额）
@@ -251,6 +252,9 @@ db.serialize(() => {
 });
 
 // ===== API 路由 =====
+
+// AIHOT：官方公开只读 API 的内部阅读代理；要求登录，缓存遵循上游 Cache-Control。
+aihotProxy.mount(app, auth);
 
 // 用户注册
 app.post('/api/register', (req, res) => {

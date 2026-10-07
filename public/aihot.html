@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="AIHOT：精选 AI 资讯、全部动态、热点榜与 AI 日报">
+<title>AIHOT - Trade Manager</title>
+<link rel="stylesheet" href="css/main.css?v=17">
+<link rel="stylesheet" href="css/aihot.css?v=1">
+</head>
+<body class="aihot-page">
+<header class="app-header" id="appHeader"></header>
+
+<main class="ah-page">
+  <div class="ah-intro">
+    <div>
+      <div class="ah-eyebrow">AI industry intelligence</div>
+      <h1>AIHOT</h1>
+      <p>精选资讯、全量动态、热点榜与 AI 日报，直接同步自 AIHOT 官方公开接口。</p>
+    </div>
+    <div class="ah-intro-links">
+      <a href="https://aihot.news" target="_blank" rel="noopener noreferrer">打开 AIHOT 原站 ↗</a>
+      <a href="https://aihot.news/terms" target="_blank" rel="noopener noreferrer">使用规则</a>
+    </div>
+  </div>
+
+  <section class="ah-auth-gate" id="ahAuthGate" hidden>
+    <div class="ah-gate-icon">AI</div>
+    <h2>登录后查看 AIHOT</h2>
+    <p>此板块仅用于 Trade Manager 账户的内部阅读，不提供公开镜像或对外转发服务。</p>
+    <button class="btn btn-primary" type="button" onclick="openAihotLoginModal()">登录 Trade Manager</button>
+  </section>
+
+  <div class="ah-layout" id="ahApp" hidden>
+    <aside class="ah-sidebar" aria-label="AIHOT 内容导航">
+      <div class="ah-sidebar-label">内容</div>
+      <button type="button" class="ah-nav-item is-active" data-ah-section="selected" aria-current="page">
+        <span class="ah-nav-icon" aria-hidden="true">ϟ</span><span>精选</span>
+      </button>
+      <button type="button" class="ah-nav-item" data-ah-section="all">
+        <span class="ah-nav-icon ah-nav-list" aria-hidden="true">☷</span><span>全部 AI 动态</span>
+      </button>
+      <button type="button" class="ah-nav-item" data-ah-section="hot">
+        <span class="ah-nav-icon ah-nav-hot" aria-hidden="true">♨</span><span>热点榜</span>
+      </button>
+      <button type="button" class="ah-nav-item" data-ah-section="daily">
+        <span class="ah-nav-icon" aria-hidden="true">▤</span><span>AI 日报</span>
+      </button>
+      <div class="ah-sidebar-note">由 AIHOT 官方公开 API 提供内容<br>仅供个人及组织内部阅读</div>
+    </aside>
+
+    <section class="ah-content">
+      <div class="ah-content-head">
+        <div>
+          <h2 id="ahSectionTitle">精选</h2>
+          <p id="ahSectionSub">AIHOT 编辑精选的近期 AI 行业动态</p>
+        </div>
+        <div class="ah-toolbar">
+          <label class="ah-window-control" id="ahWindowControl" hidden>
+            <span class="ah-sr-only">时间范围</span>
+            <select id="ahWindow">
+              <option value="24h">近 24 小时</option>
+              <option value="7d">近 7 天</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn-sm btn-ghost" id="ahRefresh">↻ 刷新</button>
+        </div>
+      </div>
+      <div class="ah-sync-status" id="ahSyncStatus" role="status" aria-live="polite"></div>
+      <div id="ahContent" class="ah-items" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <footer class="ah-footer" id="ahFooter" hidden>
+    内容由 AIHOT 聚合与整理；文章事实及原文版权归对应来源。请通过原文链接核对重要信息。
+    <a href="https://aihot.news/terms" target="_blank" rel="noopener noreferrer">AIHOT 使用规则</a>
+  </footer>
+</main>
+
+<div class="ah-modal" id="ahLoginModal" hidden role="dialog" aria-modal="true" aria-labelledby="ahLoginTitle">
+  <button class="ah-modal-mask" type="button" data-ah-close aria-label="关闭登录弹窗"></button>
+  <div class="ah-modal-card">
+    <button class="ah-modal-close" type="button" data-ah-close aria-label="关闭">×</button>
+    <h2 id="ahLoginTitle">登录 Trade Manager</h2>
+    <p>使用现有账户登录，AIHOT 内容仅向已登录用户提供。</p>
+    <form id="ahLoginForm">
+      <label for="ahUsername">用户名</label>
+      <input id="ahUsername" name="username" autocomplete="username" required maxlength="100">
+      <label for="ahPassword">密码</label>
+      <input id="ahPassword" name="password" type="password" autocomplete="current-password" required>
+      <div class="ah-login-error" id="ahLoginError" role="alert"></div>
+      <button class="btn btn-primary" type="submit" id="ahLoginSubmit">登录</button>
+    </form>
+  </div>
+</div>
+
+<script src="js/header.js?v=8"></script>
+<script src="js/aihot.js?v=1"></script>
+</body>
+</html>
