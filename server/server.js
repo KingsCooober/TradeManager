@@ -27,6 +27,16 @@ const PORT = process.env.PORT || 3000;
 
 // 中间件
 app.use(cors());
+
+// 研报库：/research/* 反向代理到独立的研报服务，并随交易台一起启动/关闭（见 research-proxy.js）
+// ★ 必须挂在 express.json() 之前：否则 POST/PATCH 的 JSON body 会先被解析消费，
+//   转发给上游时变成空 body，上游会一直等直到超时 —— 研报库的写操作会全部失效。
+try {
+  require('./research-proxy').mount(app, { autostart: require.main === module });
+} catch (e) {
+  console.warn('  研报库代理未加载（不影响主站）：', e.message);
+}
+
 app.use(express.json());
 // 静态资源禁用浏览器缓存（避免 JS 修改后用户还得硬刷新）
 app.use(express.static(path.join(__dirname, '../public'), {

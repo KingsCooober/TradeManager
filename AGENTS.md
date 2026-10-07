@@ -34,6 +34,32 @@ utils.js → database.js → sync.js → storage.js → calculator.js → table.
 - `diary2.html` — 复盘总结（独立页面，加载 `diary2.js`、`diary2.css`）
 - `debug_*.html` — 本地存储调试页面（非生产环境使用）
 
+### 研报库（集成功能，独立进程）
+
+- `research-hub/` 是一个独立的 Python（FastAPI）服务 + 原生 JS 前端，**不属于 Node 应用**，
+  前端共享的 `public/js/header.js` 里有一个指向它的导航入口 `📑 研报库` → `/research/`。
+- `server/research-proxy.js` 把 `/research/*` 反向代理到 `127.0.0.1:8765`，让两者同源同端口。
+  - 只挂在 `/research` 前缀下，**不要**把代理挪到根路径或 `/api`，否则会盖掉既有路由；
+  - 上游未启动时返回 503（页面给引导页、`/research/api/*` 给 JSON），不得抛异常影响主站。
+- 研报库前端是「子路径感知」的：`web/app.js` 顶部用 `BASE` 推导挂载前缀，所有请求走 `BASE + path`。
+  直接以根路径运行该服务时 `BASE` 为空串，行为不变 —— 改动那边代码时保持这个约定。
+- **随交易台一起启动**：`server.js` 启动时 `research-proxy.mount()` 会把研报库作为子进程拉起
+  （已在跑则复用、挂了 5 秒后自动重启、交易台退出时一并 kill）。不需要额外 npm 脚本，
+  也不要再给 deploy.sh 加单独的启动步骤 —— 否则会起两个实例抢 8765 端口。
+- `RESEARCH_AUTOSTART=0` 可关闭自动启动；`mount()` 传入 `autostart: require.main === module`，
+  这样被测试 require 时不会误启子进程。
+- `GET /api/research/status`、`POST /api/research/start` 是引导页的重试通道，**只接受本机请求**
+  （`isLocalRequest()` 同时校验 socket IP 与 `X-Forwarded-For` / `X-Real-IP`，防反代穿透），
+  外部 IP 一律 403。改这块务必保留这个闸门。子进程日志在 `server/research.log`（已 gitignore）。
+- **静态资源缓存**：研报库的 Python 服务对**所有响应**加了
+  `Cache-Control: no-store, no-cache, must-revalidate`（与交易台 `express.static` 的约定一致）。
+  不加的话浏览器会按启发式缓存留下旧的 `style.css`，改完样式用户看到的还是旧版（表现为"页面像没样式"）。
+  改研报库前端资源时，若担心用户手上还有旧缓存，可同步把 `web/index.html` 里的 `?v=N` 递增。
+- ⚠ 代理必须挂在 `express.json()` **之前**：否则 POST/PATCH 的 JSON body 会先被解析消费，
+  转发给上游变成空 body，上游一直等直到超时（研报库写操作全废）。代理内部还有一层兜底：
+  检测到 `req.body` 已解析时重新序列化转发。
+- 数据在 `research-hub/data/`，与 `server/data.db` 无关，互不影响。
+
 ## 启动方式
 
 ```bash

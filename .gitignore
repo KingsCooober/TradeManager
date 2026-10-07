@@ -7,6 +7,8 @@ server/node_modules/
 *.db-wal
 *.db-shm
 server/data.db
+research-hub/data/
+server/research.log
 
 # 临时文件 & 调试页面
 ~$*.xlsx

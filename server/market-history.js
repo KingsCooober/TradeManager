@@ -66,8 +66,13 @@ function initHistoryTable() {
     north_net_yi REAL DEFAULT 0,
     fetched_at TEXT,
     source TEXT
-  )`);
-  db.run('CREATE INDEX IF NOT EXISTS idx_market_history_date ON market_history(date DESC)');
+  )`, function (err) {
+    // ★ 建表与建索引必须串行：原先两条 db.run 并发下发，全新数据库首次启动时建表要真正
+    //   落盘、索引语句先执行，报 "no such table: main.market_history"；而这条 db.run 没挂
+    //   回调，Statement 的 error 事件无人监听，会直接把整个 Node 进程带崩。
+    if (err) { console.error('market_history 建表失败:', err.message); return; }
+    db.run('CREATE INDEX IF NOT EXISTS idx_market_history_date ON market_history(date DESC)');
+  });
 }
 initHistoryTable();
 

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>研报阅读整理工作台</title>
+<link rel="stylesheet" href="style.css?v=2">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📑</text></svg>">
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- ───────────────────────── 左侧导航 -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="brand-mark">研</div>
+      <div class="brand-text">
+        <strong>研报工作台</strong>
+        <span id="brand-sub">Research Hub</span>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button class="nav-item is-active" data-nav="all">
+        <span class="nav-ico">▤</span><span>全部研报</span><b class="nav-count" id="c-all">0</b>
+      </button>
+      <button class="nav-item" data-nav="starred">
+        <span class="nav-ico">★</span><span>星标</span><b class="nav-count" id="c-star">0</b>
+      </button>
+      <button class="nav-item" data-nav="unread">
+        <span class="nav-ico">○</span><span>未读</span><b class="nav-count" id="c-unread">0</b>
+      </button>
+      <button class="nav-item" data-nav="reading">
+        <span class="nav-ico">◐</span><span>在读</span><b class="nav-count" id="c-reading">0</b>
+      </button>
+      <button class="nav-item" data-nav="read">
+        <span class="nav-ico">●</span><span>已读</span><b class="nav-count" id="c-read">0</b>
+      </button>
+      <div class="nav-sep"></div>
+      <button class="nav-item" data-nav="feeds">
+        <span class="nav-ico">⇩</span><span>研报抓取</span>
+      </button>
+      <button class="nav-item" data-nav="dashboard">
+        <span class="nav-ico">◫</span><span>数据看板</span>
+      </button>
+    </nav>
+
+    <div class="filters" id="filters">
+      <div class="filters-head">
+        <span>筛选</span>
+        <button class="link" id="btn-clear-filters">清除</button>
+      </div>
+      <div id="facet-box"></div>
+    </div>
+
+    <div class="rail-foot">
+      <button class="ghost-btn" id="btn-export-md">导出 Markdown</button>
+      <button class="ghost-btn" id="btn-export-json">导出 JSON</button>
+      <div class="rail-foot-row">
+        <button class="ghost-btn" id="btn-settings">⚙ 设置</button>
+        <button class="ghost-btn" id="btn-theme" title="切换主题">◐</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ───────────────────────── 研报列表 -->
+  <section class="list-pane" id="list-pane">
+    <header class="list-head">
+      <div class="search">
+        <span class="search-ico">⌕</span>
+        <input id="search" type="search" placeholder="搜索标题 / 机构 / 正文…" autocomplete="off">
+        <kbd>/</kbd>
+      </div>
+      <div class="list-actions">
+        <select id="sort" title="排序">
+          <option value="created_desc">最近添加</option>
+          <option value="date_desc">报告日期</option>
+          <option value="words_desc">篇幅最长</option>
+          <option value="title">标题 A-Z</option>
+        </select>
+        <button class="btn primary" id="btn-new">＋ 新建</button>
+        <button class="btn" id="btn-upload">上传</button>
+        <button class="btn" id="btn-batch-del" title="批量删除：按时间或阅读状态清理研报">🗑 批量</button>
+      </div>
+      <div class="list-status">
+        <span id="list-count">—</span>
+        <div class="chips" id="active-filters"></div>
+        <div class="pager" id="list-pager" style="margin-left:auto"></div>
+      </div>
+    </header>
+    <div class="list" id="list"></div>
+  </section>
+
+  <!-- ───────────────────────── 阅读区 -->
+  <main class="reader" id="reader"></main>
+
+  <!-- ───────────────────────── 整页视图（看板 / 设置） -->
+  <main class="page" id="page"></main>
+</div>
+
+<!-- 划词工具条 -->
+<div class="sel-toolbar" id="sel-toolbar">
+  <button data-color="yellow" title="黄色高亮"><i style="background:#ffe08a"></i></button>
+  <button data-color="green" title="绿色高亮"><i style="background:#b7ebc6"></i></button>
+  <button data-color="pink" title="粉色高亮"><i style="background:#ffc2d6"></i></button>
+  <button data-color="blue" title="蓝色高亮"><i style="background:#b9dcff"></i></button>
+  <span class="sel-sep"></span>
+  <button id="sel-note" title="高亮并写批注">✎</button>
+  <button id="sel-copy" title="复制">⧉</button>
+</div>
+
+<div class="modal-root" id="modal-root"></div>
+<div class="toast-root" id="toast-root"></div>
+<input type="file" id="file-input" accept=".pdf,.txt,.md,.markdown" hidden>
+<div class="drop-hint" id="drop-hint">松开即导入 PDF / TXT / Markdown</div>
+
+<script src="app.js?v=2"></script>
+</body>
+</html>

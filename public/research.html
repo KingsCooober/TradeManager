@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="研报库 - 订阅式抓取公开研报、AI 摘要要点、划词高亮与批注、按行业标签归档">
+<title>研报库 - Trade Manager</title>
+<link rel="stylesheet" href="css/main.css?v=16">
+<style>
+  /* 研报库页专用样式（独立内联，避免污染 main.css）
+     研报库本身是独立的 Python 服务（/research/），这里用 iframe 内嵌，
+     样式与脚本完全隔离，不会和交易台的 main.css / 全局变量互相影响。 */
+  body.research-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  .rs-frame-wrap {
+    flex: 1;
+    min-height: 0;
+    padding: 12px 18px 16px;
+  }
+  .rs-frame {
+    width: 100%;
+    height: 100%;
+    display: block;
+    border: 1px solid var(--border-card);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+  }
+  /* 移动端 / 窄屏：去掉外边距，让内容尽量宽 */
+  @media (max-width: 900px) {
+    .rs-frame-wrap { padding: 8px; }
+    .rs-frame { border-radius: var(--radius-sm); }
+  }
+</style>
+</head>
+<body class="research-page">
+
+<header class="app-header" id="appHeader"></header>
+
+<!-- ===== 页面引导提示 ===== -->
+<div class="page-intro">
+  <div class="page-intro-text">
+    <strong>📑 研报库</strong> — 订阅式自动获取公开研报，AI 提炼核心观点，划词高亮与批注，按行业 / 标签归档。
+    <span class="page-intro-hint">研报库随交易台自动启动，本页内嵌展示；批量删除在左侧列表工具栏的「🗑 批量」。</span>
+  </div>
+  <div class="page-intro-steps">
+    <span class="page-intro-step">① 研报抓取 / 订阅</span>
+    <span class="page-intro-step-arrow">→</span>
+    <span class="page-intro-step">② 阅读与高亮</span>
+    <span class="page-intro-step-arrow">→</span>
+    <span class="page-intro-step">③ AI 摘要要点</span>
+    <span class="page-intro-step-arrow">→</span>
+    <span class="page-intro-step">④ 归档与导出</span>
+  </div>
+</div>
+
+<!-- ===== 研报库内嵌区 ===== -->
+<div class="rs-frame-wrap">
+  <iframe
+    class="rs-frame"
+    id="researchFrame"
+    src="/research/?v=2"
+    title="研报库"
+    allow="clipboard-write; clipboard-read"
+    referrerpolicy="same-origin"></iframe>
+</div>
+
+<script src="js/utils.js?v=7"></script>
+<script src="js/header.js?v=7"></script>
+<script>renderAppHeader('research');</script>
+</body>
+</html>

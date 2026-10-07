@@ -235,6 +235,9 @@ body {
 .header-tab[data-page="index"] { background: #3b82f6; }
 .header-tab[data-page="daily"] { background: #10b981; }
 .header-tab[data-page="diary"] { background: #f59e0b; }
+/* 修：backtest 页一直漏了配色，浅色主题下白字配白底 → 只剩 emoji 看得见 */
+.header-tab[data-page="backtest"] { background: #ef4444; }
+.header-tab[data-page="research"] { background: #7c3aed; }
 
 .header-right {
   display: flex;

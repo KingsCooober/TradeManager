@@ -12,7 +12,73 @@
 - 📝 **复盘总结** — 独立日记页面，记录交易心得
 - ☁️ **云端同步** — 通过后端 API 多设备同步数据
 - 🌓 **主题切换** — 支持明暗主题
+- 📑 **研报库** — 集成独立的研报阅读整理服务，顶部导航一键进入（详见下文）
 - 🌐 **中文 UI** — 全中文界面，硬编码字符串
+
+## 📑 研报库（集成功能）
+
+顶部导航栏的 **📑 研报库** 入口指向 `research.html`，**和「每日复盘」「回测练习」一样在当前标签页内切换**，
+页内用 iframe 内嵌 `/research/`（由 `server/research-proxy.js` 反向代理到 `research-hub/` 那个独立 Python 服务）。
+
+用 iframe 而不是直接把研报库的页面拼进来，是为了让两套样式与脚本完全隔离：
+研报库自己的 `style.css` / `app.js` 里有 `.btn`、`.card`、`.modal` 这类通用类名，
+和交易台的 `main.css` 会互相覆盖；iframe 一次规避了所有冲突，也省掉了改造那边布局的成本。
+
+![导航入口](research-hub/docs/10-trademanager-entry.png)
+
+![研报库界面](research-hub/docs/11-trademanager-embedded.png)
+
+**能力**：订阅式自动抓取公开研报（东方财富 / 新浪财经双源）、按行业/主题批量回填、
+AI 摘要与核心观点、划词高亮与批注、按行业标签归档、**批量删除**（按时间 / 按阅读状态）、Markdown/JSON 导出。
+
+**批量删除**：列表工具栏的「🗑 批量」按钮。支持按报告日期或入库时间删除、按阅读状态删除，
+可限定「仅抓取入库的」或「仅手动新建的」，**星标研报默认受保护**（需显式勾选才会一起删）。
+弹窗里会实时显示"将删除 N 篇"及来源/状态明细，确认后二次确认才真正执行，删除会连同高亮与笔记。
+
+**启动方式：没有额外步骤，跟着交易台一起起。**
+
+`npm start`（或 `node server/server.js`）启动交易台时，会自动把研报库作为**子进程**拉起来：
+
+- 已经在跑就复用，不重复启动；
+- 进程意外挂掉会在 5 秒后自动重启（最多 5 次）；
+- 交易台退出（Ctrl+C / `kill`）时子进程一并结束，不留孤儿进程；
+- 首次启动若缺 Python 依赖，会自动 `pip install`，日志在 `server/research.log`；
+- 万一没起来，`/research/` 会显示引导页并自动重试，页面上也有「🚀 启动研报库」按钮。
+
+> 想关掉这个行为：`RESEARCH_AUTOSTART=0 npm start`。单独调试研报库可跑
+> `bash scripts/start-research.sh`（前台运行，直接看日志）。
+> 重启接口 `POST /api/research/start` **只接受本机请求**：非回环 IP（含反代场景下的
+> `X-Forwarded-For` / `X-Real-IP`）一律 403，公网访客无法触发服务器上的进程启动。
+
+**设计要点**：
+
+- 代理只挂在 `/research` 前缀下，不碰任何既有路由（`/api/*` 与静态资源原样不变）；
+- 上游不可用时返回 503：页面请求给引导页，`/research/api/*` 给 JSON，绝不抛异常拖垮主站；
+- 研报库数据存在 `research-hub/data/`（已 gitignore），与交易台的 `server/data.db` 互不相干；
+- 端口可用 `RESEARCH_PORT` 改，挂载前缀可用 `RESEARCH_PATH` 改。
+
+### 部署到服务器
+
+`scripts/deploy.sh` 重启交易台后，研报库会由交易台自动拉起，无需额外配置。前提与注意事项：
+
+| 项 | 说明 |
+| --- | --- |
+| Python | 服务器需要 Python 3.9+。`scripts/start-research.sh` 会自动装依赖，并依次尝试：常规 pip → `--break-system-packages`（新版 Ubuntu 的 PEP 668 限制）→ 独立 `.venv`。全部失败时只影响 `/research/`，交易台照常运行，`server/research.log` 里能看到原因。 |
+| 代码 | `git push` 会带上 `research-hub/` 全部代码（41 个文件）。 |
+| **数据** | ⚠️ **不会同步**。`research-hub/data/` 在 `.gitignore` 里，所以服务器部署完是**空库，只有 3 篇内置示例研报**。好消息是部署也不会覆盖服务器上已有的数据。 |
+| AI Key | 存在研报库自己的数据库里（`data/research.db` 的 settings 表），服务器上是空的，需要在服务器页面的「设置」里重新填一次——或者用下面的方式把本地库整体推上去。 |
+
+**首次部署后是空库**：库里只有 3 篇内置示例研报。本地库只是开发测试用，**不与服务器同步**
+（研报库的数据本来就该以服务器那份为准）。在服务器上这样把库填起来：
+
+1. 进「研报库 → 设置」，填一次 AI 的 Base URL / API Key（Key 存在服务器自己的库里，不会跟随代码走）；
+2. 进「研报库 → 研报抓取」：
+   - 想一次性回填历史：「按行业 / 主题批量导入」选好主题与天数，开始即可；
+   - 想持续更新：打开「自动获取研报」开关，两条内置订阅会按小时自动抓新研报；
+3. 抓完的研报在左侧「全部研报」里，可按行业 / 机构 / 标签筛选。
+
+> 本地想验证部署效果，可以只拷 git 会推送的文件（不含 `research-hub/data/`）另起一份跑，
+> 用 `PORT=3100 RESEARCH_PORT=8865 node server/server.js` 避开端口冲突。
 
 ## 📁 项目结构
 
@@ -42,11 +108,18 @@ TradeManager/
 │       └── test_delete.html
 ├── server/                       # 后端
 │   ├── server.js                 # Express + SQLite 服务器
+│   ├── research-proxy.js         # 研报库反向代理（/research/* → 127.0.0.1:8765）
 │   ├── package.json              # 后端依赖
 │   ├── package-lock.json
 │   ├── start.bat                 # Windows 启动脚本
 │   ├── data.db                   # SQLite 数据库（运行时生成，gitignore）
 │   └── node_modules/             # 后端依赖
+├── research-hub/                 # 研报库（独立 Python 服务，被 /research/ 代理）
+│   ├── server.py                 # FastAPI 入口
+│   ├── researchhub/              # 数据层 / 抓取 / AI / 回填
+│   ├── web/                      # 前端（原生 JS，无构建）
+│   └── data/                     # 研报库数据（运行时生成，gitignore）
+├── scripts/                      # 启动与部署脚本
 ├── tests/                        # 测试用例
 │   ├── helpers/
 │   │   └── browser-mock.js       # 浏览器环境模拟器

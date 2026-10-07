@@ -44,6 +44,7 @@ function renderAppHeader(page) {
         '<a href="daily-review.html" class="header-tab' + (page === 'daily' ? ' active' : '') + '" data-page="daily" title="每日盘后总结：纪律 / 大盘 / 心态 / 复盘笔记">📋 每日复盘</a>' +
         '<a href="diary2.html" class="header-tab' + (page === 'diary' ? ' active' : '') + '" data-page="diary" title="历史交易深度复盘：筛选 / 排序 / 单笔分析">📖 复盘总结</a>' +
         '<a href="backtest.html" class="header-tab' + (page === 'backtest' ? ' active' : '') + '" data-page="backtest" title="看着历史 K 线手动模拟买卖的练习工具">🎯 回测练习</a>' +
+        '<a href="research.html" class="header-tab' + (page === 'research' ? ' active' : '') + '" data-page="research" title="研报库：订阅式抓取公开研报、AI 摘要要点、划词高亮与批注、按行业标签归档">📑 研报库</a>' +
       '</nav>' +
     '</div>' +
     '<div class="header-right">' +
@@ -76,8 +77,7 @@ function renderAppHeader(page) {
     '</div>';
 }
 
-// ===== 全局搜索逻辑 =====
-// 各页面可通过定义 window.performGlobalSearch(query) 覆盖搜索行为
+// ===== 全局搜索逻辑 =====// 各页面可通过定义 window.performGlobalSearch(query) 覆盖搜索行为
 // 该函数应返回一个数组，每项格式：{ label, sublabel, onClick }
 function setupGlobalSearch() {
   // 延迟绑定以等待 DOM 渲染完成
