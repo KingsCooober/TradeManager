@@ -646,7 +646,7 @@ def _sf_search(*, type_key: str, page: int) -> dict:
 
 
 def _sf_html_to_markdown(page: str) -> str:
-    """把正文资源（<h4>/<p>/<img> 片段）转成 Markdown。"""
+    """把正文资源（<h4>/<p>/<ul>/<li>/<img> 片段）转成 Markdown。"""
     soup = _soup(page)
     parts: list[str] = []
     for node in soup.find_all(("h2", "h3", "h4", "p", "li", "table")):
@@ -658,6 +658,18 @@ def _sf_html_to_markdown(page: str) -> str:
         if node.find_parent("table") is not None:
             continue
         text = re.sub(r"[ \t\u00a0\u3000]+", " ", node.get_text(" ", strip=True)).strip()
+        if node.name == "p":
+            # 容器型 <p>（里面还包着列表）交给子节点处理，避免同一段文字重复输出
+            if node.find(["ul", "ol", "table"]) or node.find_parent("li") is not None:
+                continue
+            if text:
+                parts.append(text)
+                continue
+            for img in node.find_all("img"):     # 纯配图段落，保留成链接
+                src = (img.get("src") or "").strip()
+                if src.startswith("https://"):
+                    parts.append(f"[📊 图表]({src})")
+            continue
         if not text:
             continue
         if node.name in ("h2", "h3", "h4"):
@@ -673,16 +685,29 @@ def _sf_html_to_markdown(page: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n\n".join(deduped)).strip()
 
 
-def _sf_fetch_body(content_url: str) -> str:
-    """正文是独立的静态资源（COS 上的 HTML 片段），只认允许的域名。"""
+def _sf_body_urls(content_url: str) -> list[str]:
+    """正文资源：完整版 content 优先，回退到精简版 trim_content。"""
     url = (content_url or "").strip()
     if not url.startswith("https://") or "myqcloud.com" not in url:
-        return ""
-    try:
-        page = _fetch(url, referer=SF_HOME)
-    except FeedError:
-        return ""
-    return _sf_html_to_markdown(page)
+        return []
+    urls: list[str] = []
+    if url.endswith("/trim_content"):
+        urls.append(url[: -len("/trim_content")] + "/content")
+    urls.append(url)
+    return urls
+
+
+def _sf_fetch_body(content_url: str) -> str:
+    """正文是独立的静态资源（COS 上的 HTML 片段），只认允许的域名。"""
+    for url in _sf_body_urls(content_url):
+        try:
+            page = _fetch(url, referer=SF_HOME)
+        except FeedError:
+            continue
+        body = _sf_html_to_markdown(page)
+        if body:
+            return body
+    return ""
 
 
 def _sf_fetch_content(item: dict) -> dict:
