@@ -265,6 +265,7 @@ def run_subscription(sub: dict, trigger: str = "auto", daily_remaining: int | No
                 try:
                     fetched = feeds.fetch_content(item)
                     content, url = fetched["content"], fetched["url"]
+                    item.update({k: v for k, v in (fetched.get("extra") or {}).items() if v})
                     if not content:
                         note = "来源页面未提供公开正文"
                 except feeds.FeedError as exc:

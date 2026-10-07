@@ -348,12 +348,24 @@ def _run(job: dict) -> None:
 # 来源站确实没有文字正文的标记 —— 这类重试也没用，不再反复抓
 NO_BODY_MARK = "没有公开的文字版全文"
 
+# 各来源在 source_url 上的域名特征（用于按来源筛选 / 反查来源）
+SOURCE_DOMAIN = {"sina": "sina.com.cn", "eastmoney": "eastmoney.com", "sfconnect": "sfconnect.cn"}
+
+
+def _source_of(url: str) -> str:
+    url = url or ""
+    for key, domain in SOURCE_DOMAIN.items():
+        if domain in url:
+            return key
+    return "eastmoney"
+
 
 def _domain_clause(sources: list[str]) -> str:
     parts = []
     for source in sources:
-        parts.append("source_url LIKE '%sina.com.cn%'" if source == "sina"
-                     else "source_url LIKE '%eastmoney.com%'")
+        domain = SOURCE_DOMAIN.get(source)
+        if domain:
+            parts.append(f"source_url LIKE '%{domain}%'")
     return " OR ".join(parts)
 
 
@@ -379,7 +391,7 @@ def count_missing(sources: list[str] | None = None) -> dict:
         (f"%{NO_BODY_MARK}%",)).fetchone()["n"]
     by_source = []
     for source in sources:
-        like = "%sina.com.cn%" if source == "sina" else "%eastmoney.com%"
+        like = f"%{SOURCE_DOMAIN.get(source, 'eastmoney.com')}%"
         n = conn.execute(
             f"SELECT COUNT(*) n FROM reports WHERE {_retryable_where()} AND source_url LIKE ?",
             (like,)).fetchone()["n"]
@@ -400,7 +412,7 @@ def _stale_without_content(sources: list[str], existing_ids: set) -> list[tuple[
     for row in rows:
         if str(row["id"]) in existing_ids:
             continue
-        source = "sina" if "sina.com.cn" in (row["source_url"] or "") else "eastmoney"
+        source = _source_of(row["source_url"])
         out.append((source, str(row["id"])))
     return out
 
@@ -409,7 +421,8 @@ def _scan_combo(job, source: str, type_key: str, begin: str, end: str,
                 patterns, pending: list) -> None:
     params = job["params"]
     page_size = 50 if source == "eastmoney" else 40
-    max_pages = MAX_PAGES_PER_COMBO if source == "eastmoney" else 1   # 新浪按天深挖，一次拿完
+    # 新浪按天深挖一次拿完；脱水研报靠翻页积累，跟东财一样多翻几页
+    max_pages = MAX_PAGES_PER_COMBO if source in ("eastmoney", "sfconnect") else 1
     conn = db.connect()
     for page in range(1, max_pages + 1):
         if _should_stop(job):
@@ -457,7 +470,7 @@ def _scan_combo(job, source: str, type_key: str, begin: str, end: str,
             return
         if page >= (outcome.get("total_pages") or MAX_PAGES_PER_COMBO):
             return
-        time.sleep(feeds.REQUEST_GAP if source == "eastmoney" else feeds.SINA_GAP * 1.5)
+        time.sleep(feeds.SINA_GAP * 1.5 if source == "sina" else feeds.REQUEST_GAP)
 
 
 def _insert_meta(conn, item: dict) -> int:
@@ -492,8 +505,11 @@ def _fetch_one_content(job: dict, source: str, report_id: str) -> None:
     item = {
         "source": source, "id": row["source_file"], "kind": "",
         "title": row["title"], "url": row["source_url"],
+        "org": row["org"], "date": row["report_date"], "type_label": "",
     }
-    if source == "sina":
+    if source == "sfconnect":
+        item["kind"] = ""
+    elif source == "sina":
         match = re.search(r"/kind/(\w+)/rptid/", row["source_url"] or "")
         item["kind"] = match.group(1) if match else "lastest"
     else:
@@ -503,6 +519,7 @@ def _fetch_one_content(job: dict, source: str, report_id: str) -> None:
     for attempt in range(2):          # 偶发的限流/超时会返回空，隔一下重试一次
         try:
             fetched = feeds.fetch_content(item)
+            item.update({k: v for k, v in (fetched.get("extra") or {}).items() if v})
             content = fetched.get("content") or ""
             if content:
                 reason = ""
@@ -528,7 +545,7 @@ def _fetch_one_content(job: dict, source: str, report_id: str) -> None:
              db.now(), report_id),
         )
         conn.commit()
-        time.sleep(feeds.REQUEST_GAP if source == "eastmoney" else feeds.SINA_GAP)
+        time.sleep(feeds.SINA_GAP if source == "sina" else feeds.REQUEST_GAP)
     except feeds.FeedError:
         _bump(job, "content_failed")
     except Exception:  # noqa: BLE001

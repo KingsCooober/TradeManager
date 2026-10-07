@@ -11,6 +11,8 @@
   机构下拉来自来源公开列表；支持个股 / 行业 / 策略 / 宏观 / 券商晨会。
 - sina：新浪财经研究报告，HTML 列表，覆盖头部券商（中信建投、华泰、中金、国泰海通等），
   支持最新 / 行业 / 策略 / 宏观，以及按机构全称检索。
+- sfconnect：脱水研报（21财经 / 南方财经），腾讯自选股内嵌页的公开接口，
+  提供机构调研 / 行业风口两类「脱水」解读，含调研要点与关联标的。
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -41,6 +43,18 @@ EM_HOME = "https://data.eastmoney.com/report/"
 SINA_LIST = "https://vip.stock.finance.sina.com.cn/q/go.php/vReport_List/kind/"
 SINA_HOME = SINA_LIST + "lastest/index.phtml"
 SINA_ORG_JS = "http://finance.sina.com.cn/stock/reaserchyjbg/report/report_orgname_juyuan.js"
+
+# 脱水研报（21财经 / 南方财经）—— 腾讯自选股内嵌 H5 的公开接口，无需登录
+SF_BASE = "https://vip.sfconnect.cn/news/research_report"
+SF_HOME = "https://vip.sfconnect.cn/third-party-report/"
+SF_GUID = "6f1e2c3a-9b4d-4e7a-8c5f-0d1a2b3c4d5e"   # 接口不做校验，仅作埋点占位
+SF_PAGE_SIZE = 10                                   # 接口固定每页 10 条
+SF_TYPES = [
+    {"key": "0", "label": "全部"},
+    {"key": "1", "label": "机构调研"},
+    {"key": "2", "label": "行业风口"},
+]
+SF_TYPE_LABEL = {"1": "机构调研", "2": "行业风口"}
 
 EM_TYPES = [
     {"key": "stock", "label": "个股研报"},
@@ -89,6 +103,15 @@ SOURCES = [
         "coverage": "支持按机构全称检索；该站点偶发返回空列表，本工具会自动重试一次。",
         "org_filter": "name",
         "types": SINA_TYPES,
+    },
+    {
+        "key": "sfconnect",
+        "label": "脱水研报 · 21财经",
+        "home": SF_HOME,
+        "note": "21财经出品的研报「脱水」解读（机构调研 / 行业风口），接口公开、无需登录。",
+        "coverage": "每篇是 21财经对券商研报的浓缩整理，含调研要点与关联标的；不是券商原文全文，列表每页固定 10 条。",
+        "org_filter": "none",
+        "types": SF_TYPES,
     },
 ]
 SOURCE_BY_KEY = {s["key"]: s for s in SOURCES}
@@ -176,7 +199,10 @@ def list_orgs(source: str = "eastmoney", force: bool = False) -> list[dict]:
         cached = _org_cache.get(source) or {}
         if cached.get("data") and not force and time.time() - cached.get("at", 0) < ORG_TTL:
             return cached["data"]
-        orgs = _list_orgs_eastmoney() if source == "eastmoney" else _list_orgs_sina()
+        if source == "sfconnect":
+            orgs = []        # 脱水研报没有「机构」这个维度
+        else:
+            orgs = _list_orgs_eastmoney() if source == "eastmoney" else _list_orgs_sina()
         _org_cache[source] = {"at": time.time(), "data": orgs}
         return orgs
 
@@ -558,7 +584,156 @@ def _sina_parse_page(page: str) -> str:
 
 # ------------------------------------------------------------------ 对外接口
 
+# ------------------------------------------------------------------ 脱水研报（21财经）
+
+def _sf_detail_url(report_id: str) -> str:
+    return f"{SF_HOME}#/detail?id={report_id}"
+
+
+def _sf_date(value) -> str:
+    """接口给的是毫秒时间戳，按北京时间转成 YYYY-MM-DD。"""
+    try:
+        ts = int(str(value).strip()) / 1000
+    except (TypeError, ValueError):
+        return ""
+    if ts <= 0:
+        return ""
+    moment = datetime.fromtimestamp(ts, timezone.utc) + timedelta(hours=8)
+    return moment.strftime("%Y-%m-%d")
+
+
+def _sf_normalize(row: dict) -> dict:
+    report_id = str(row.get("id") or "").strip()
+    kind = str(row.get("type") or "").strip()
+    return {
+        "source": "sfconnect",
+        "id": report_id,
+        "kind": kind,
+        "title": html.unescape(str(row.get("title") or "").strip()),
+        "org": "21财经",
+        "authors": "",
+        "rating": "",
+        "industry": "",
+        "stock_name": "",
+        "stock_code": "",
+        "date": _sf_date(row.get("publish_time")),
+        "pages": 0,
+        "type_label": SF_TYPE_LABEL.get(kind, "脱水研报"),
+        "url": _sf_detail_url(report_id),
+    }
+
+
+def _sf_search(*, type_key: str, page: int) -> dict:
+    if type_key not in {t["key"] for t in SF_TYPES}:
+        raise FeedError(f"不支持的研报类型：{type_key}")
+    current = max(1, int(page or 1))
+    params = {
+        "page": current, "type": type_key,
+        "user_type": "4", "channel": "0", "guid": SF_GUID,
+        "openid": "", "login_type": "",
+    }
+    payload = _fetch_json(f"{SF_BASE}/list?{urllib.parse.urlencode(params)}", referer=SF_HOME)
+    if "list" not in payload:
+        raise FeedError(payload.get("retmsg") or "脱水研报接口返回异常")
+    items = [_sf_normalize(row) for row in payload.get("list") or []]
+    has_more = bool(payload.get("has_more"))
+    return {
+        # 接口不返回总数，只能按已翻到的页数给出下界
+        "total": current * SF_PAGE_SIZE if has_more else (current - 1) * SF_PAGE_SIZE + len(items),
+        "total_pages": current + 1 if has_more else current,
+        "items": items,
+    }
+
+
+def _sf_html_to_markdown(page: str) -> str:
+    """把正文资源（<h4>/<p>/<img> 片段）转成 Markdown。"""
+    soup = _soup(page)
+    parts: list[str] = []
+    for node in soup.find_all(("h2", "h3", "h4", "p", "li", "table")):
+        if node.name == "table":
+            block = _table_to_markdown(node)
+            if block:
+                parts.append(block)
+            continue
+        if node.find_parent("table") is not None:
+            continue
+        text = re.sub(r"[ \t\u00a0\u3000]+", " ", node.get_text(" ", strip=True)).strip()
+        if not text:
+            continue
+        if node.name in ("h2", "h3", "h4"):
+            parts.append(f"### {text}")
+        elif node.name == "li":
+            parts.append(f"- {text}")
+        else:
+            parts.append(text)
+    deduped: list[str] = []
+    for part in parts:
+        if not deduped or deduped[-1] != part:
+            deduped.append(part)
+    return re.sub(r"\n{3,}", "\n\n", "\n\n".join(deduped)).strip()
+
+
+def _sf_fetch_body(content_url: str) -> str:
+    """正文是独立的静态资源（COS 上的 HTML 片段），只认允许的域名。"""
+    url = (content_url or "").strip()
+    if not url.startswith("https://") or "myqcloud.com" not in url:
+        return ""
+    try:
+        page = _fetch(url, referer=SF_HOME)
+    except FeedError:
+        return ""
+    return _sf_html_to_markdown(page)
+
+
+def _sf_fetch_content(item: dict) -> dict:
+    report_id = str(item.get("id") or "").strip()
+    url = _sf_detail_url(report_id)
+    params = {
+        "id": report_id, "user_type": "4", "channel": "0", "guid": SF_GUID,
+        "openid": "", "login_type": "",
+    }
+    payload = _fetch_json(f"{SF_BASE}/detail?{urllib.parse.urlencode(params)}", referer=SF_HOME)
+    data = payload.get("data") or {}
+    if not data:
+        return {"content": "", "url": url, "info_code": report_id, "reason": "empty"}
+
+    blocks: list[str] = []
+    summary = str(data.get("summary") or "").strip()
+    if summary:
+        blocks += ["## 摘要", "", summary, ""]
+
+    points = [str(p).strip() for p in (data.get("invest_points") or []) if str(p).strip()]
+    if points:
+        blocks += ["## 调研要点", ""] + [f"- {p}" for p in points] + [""]
+
+    targets = [t for t in (data.get("target") or []) if isinstance(t, dict)]
+    if targets:
+        rows = ["| 名称 | 代码 | 现价 | 涨跌幅 |", "| --- | --- | --- | --- |"]
+        for t in targets:
+            rows.append("| {} | {} | {} | {} |".format(
+                str(t.get("name") or "").strip(), str(t.get("symbol") or "").strip(),
+                str(t.get("price") or "").strip(), str(t.get("zdf") or "").strip()))
+        blocks += ["## 关联标的", ""] + rows + [""]
+
+    body = _sf_fetch_body(data.get("content_url") or "")
+    if body:
+        blocks += ["## 正文", "", body, ""]
+
+    content = "\n".join(blocks).strip()
+    first = targets[0] if targets else {}
+    extra = {
+        "org": str(data.get("author") or "").strip() or item.get("org") or "",
+        "date": _sf_date(data.get("time")) or item.get("date") or "",
+        "stock_name": str(first.get("name") or "").strip(),
+        "stock_code": str(first.get("symbol") or "").strip(),
+    }
+    return {"content": content, "url": url, "info_code": report_id,
+            "reason": "" if content else "empty", "extra": extra}
+
+
 def detail_url(source: str, item_id: str, kind: str = "") -> str:
+    if source == "sfconnect":
+        return _sf_detail_url(item_id)
     if source == "sina":
         return _sina_detail_url(item_id, kind)
     return _em_detail_url(item_id, kind or "industry")
@@ -583,7 +758,10 @@ def search(
     page = max(1, int(page or 1))
     page_size = max(5, min(int(page_size or 20), 50))
 
-    if source == "sina":
+    if source == "sfconnect":
+        result = _sf_search(type_key=type_key, page=page)
+        result["type_label"] = next((t["label"] for t in SF_TYPES if t["key"] == type_key), "脱水研报")
+    elif source == "sina":
         if deep and begin and end:
             result = _sina_day_search(begin=begin, end=end, keyword=keyword,
                                       page=page, page_size=page_size)
@@ -609,12 +787,14 @@ def search(
 
 
 def fetch_content(item: dict) -> dict:
-    """抓取单篇研报的公开正文。返回 {content, url, info_code}。"""
+    """抓取单篇研报的公开正文。返回 {content, url, info_code, reason[, extra]}。"""
     source = item.get("source") or "eastmoney"
     item_id = str(item.get("id") or "").strip()
     kind = str(item.get("kind") or "")
     if not item_id:
         raise FeedError("缺少研报编号，无法定位正文页")
+    if source == "sfconnect":
+        return _sf_fetch_content(item)
     url = detail_url(source, item_id, kind)
     if source == "sina":
         page = _fetch_with_retry(lambda: _fetch(url, referer=SINA_HOME))

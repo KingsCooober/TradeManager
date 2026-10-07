@@ -950,7 +950,9 @@
   }
 
   function orgOptions(selected) {
-    const orgs = currentSource().orgs || [];
+    const src = currentSource();
+    const orgs = src.orgs || [];
+    if (src.key === 'sfconnect') return '<option value="">该来源不区分机构</option>';
     const groups = {};
     orgs.forEach((o) => {
       const letter = (o.letter || '#').toUpperCase();
@@ -1393,6 +1395,9 @@
     if (!types.some((t) => t.key === f.type)) f.type = types[0]?.key || 'stock';
     const typeOptions = types.map((t) => `<option value="${esc(t.key)}" ${f.type === t.key ? 'selected' : ''}>${esc(t.label)}</option>`).join('');
     const isSina = src.key === 'sina';
+    // 脱水研报只支持「类型 + 页码」，机构 / 时间 / 关键词 / 每页条数都无效
+    const isSf = src.key === 'sfconnect';
+    const noStockFilter = isSina || isSf;
 
     $('#page').innerHTML = `<div class="page-inner">
       <div class="page-head"><h1>研报抓取</h1><p>订阅式自动获取公开研报，也可以手动检索指定条件</p></div>
@@ -1417,20 +1422,25 @@
                 <div class="hint">${esc(src.note || '')}</div></div>
               <div class="field"><label>研报类型</label><select id="fd-type">${typeOptions}</select>
                 <div class="hint">${esc(src.coverage || '')}</div></div>
-              <div class="field"><label>机构（券商，共 ${(src.orgs || []).length} 家）</label><select id="fd-org">${orgOptions(f.org_code)}</select>
-                <div class="hint"><button class="link" id="fd-refresh-orgs" style="color:var(--accent)">刷新机构列表</button>${isSina ? ' · 机构表来自来源站点，若找不到新合并券商，可在关键词里直接填简称' : ''}</div></div>
+              <div class="field"><label>机构${isSf ? '' : `（券商，共 ${(src.orgs || []).length} 家）`}</label>
+                <select id="fd-org" ${isSf ? 'disabled' : ''}>${orgOptions(f.org_code)}</select>
+                <div class="hint">${isSf
+                  ? '脱水研报按「机构调研 / 行业风口」分类，不区分具体券商。'
+                  : `<button class="link" id="fd-refresh-orgs" style="color:var(--accent)">刷新机构列表</button>${isSina ? ' · 机构表来自来源站点，若找不到新合并券商，可在关键词里直接填简称' : ''}`}</div></div>
             </div>
             <div class="field-row-3">
               <div class="field"><label>时间范围</label>
-                <select id="fd-days">${[[7, '近 7 天'], [30, '近 30 天'], [90, '近 90 天'], [180, '近 180 天'], [365, '近 1 年']]
+                <select id="fd-days" ${isSf ? 'disabled' : ''}>${[[7, '近 7 天'], [30, '近 30 天'], [90, '近 90 天'], [180, '近 180 天'], [365, '近 1 年']]
                   .map(([v, l]) => `<option value="${v}" ${Number(f.days) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-                ${isSina ? '<div class="hint">新浪按发布时间倒序返回，本工具会多翻几页再按日期过滤。</div>' : ''}</div>
-              <div class="field"><label>股票代码（可选${isSina ? '，该来源不支持' : ''}）</label><input id="fd-code" value="${esc(f.stock_code)}" placeholder="600519 / 300308" ${isSina ? 'disabled' : ''}></div>
-              <div class="field"><label>关键词（可选）</label><input id="fd-keyword" value="${esc(f.keyword)}" placeholder="标题、机构、分析师"></div>
+                ${isSf ? '<div class="hint">该来源按页倒序翻阅，不支持按时间筛选。</div>'
+                  : (isSina ? '<div class="hint">新浪按发布时间倒序返回，本工具会多翻几页再按日期过滤。</div>' : '')}</div>
+              <div class="field"><label>股票代码（可选${noStockFilter ? '，该来源不支持' : ''}）</label><input id="fd-code" value="${esc(f.stock_code)}" placeholder="600519 / 300308" ${noStockFilter ? 'disabled' : ''}></div>
+              <div class="field"><label>关键词（可选${isSf ? '，该来源不支持' : ''}）</label><input id="fd-keyword" value="${esc(f.keyword)}" placeholder="标题、机构、分析师" ${isSf ? 'disabled' : ''}></div>
             </div>
             <div class="field-row-3">
               <div class="field"><label>每页条数</label>
-                <select id="fd-size">${[10, 20, 50].map((v) => `<option value="${v}" ${Number(f.page_size) === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+                <select id="fd-size" ${isSf ? 'disabled' : ''}>${[10, 20, 50].map((v) => `<option value="${v}" ${Number(f.page_size) === v ? 'selected' : ''}>${v}</option>`).join('')}</select>
+                ${isSf ? '<div class="hint">该来源固定每页 10 条，用下方分页翻阅。</div>' : ''}</div>
               <div class="field"><label>导入选项</label>
                 <label class="switch"><input type="checkbox" id="fd-content" ${f.fetch_content ? 'checked' : ''}> 同时抓取公开正文</label>
                 <div class="hint">关闭则只保存标题等元数据。</div></div>
@@ -1603,6 +1613,7 @@
     };
     const orgOpts = (sel, current) => {
       const st = feedsState.sources.find((x) => x.key === sel) || {};
+      if (sel === 'sfconnect') return '<option value="">该来源不区分机构</option>';
       const orgs = st.orgs || [];
       return `<option value="">全部机构（共 ${orgs.length} 家）</option>` + orgs.map((o) =>
         `<option value="${esc(o.code)}" ${o.code === current ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
@@ -1683,7 +1694,8 @@
       feedsState.result = null;
       renderFeeds();
     });
-    $('#fd-refresh-orgs').addEventListener('click', async (ev) => {
+    const refreshOrgs = $('#fd-refresh-orgs');
+    if (refreshOrgs) refreshOrgs.addEventListener('click', async (ev) => {
       ev.preventDefault();
       collectFeedForm();
       await loadFeedSources(true);

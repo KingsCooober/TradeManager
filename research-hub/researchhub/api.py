@@ -798,7 +798,10 @@ def feed_import(payload: dict = Body(...)) -> dict:
         if not isinstance(raw, dict):
             failed.append({"title": "", "reason": "数据格式不正确"})
             continue
-        item = _sanitize_feed_item(raw)
+        raw_item = dict(raw)
+        if not raw_item.get("source"):
+            raw_item["source"] = source        # item 没带来源时，用请求级的来源兜底
+        item = _sanitize_feed_item(raw_item)
         if not item["id"] or not item["title"]:
             failed.append({"title": item["title"], "reason": "缺少研报编号或标题"})
             continue
@@ -818,6 +821,8 @@ def feed_import(payload: dict = Body(...)) -> dict:
             try:
                 fetched = feeds.fetch_content(item)
                 content, url = fetched["content"], fetched["url"]
+                # 脱水研报这类来源的作者 / 日期 / 标的信息只有详情接口才给全，回填到 item 上
+                item.update({k: v for k, v in (fetched.get("extra") or {}).items() if v})
                 if not content:
                     note = "来源页面未提供公开正文，已只保存元数据"
             except feeds.FeedError as exc:
