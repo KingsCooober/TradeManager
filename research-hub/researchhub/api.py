@@ -987,10 +987,13 @@ def backfill_start(payload: dict = Body(...)) -> dict:
 
 
 @router.get("/content/missing")
-def reports_missing_content(source: str = "") -> dict:
-    """有多少抓取进来的研报还没拿到正文（供「一键补全」提示用）。"""
+def reports_missing_content(source: str = "", force: int = 0) -> dict:
+    """有多少抓取进来的研报还没拿到正文（供「一键补全」提示用）。
+
+    force=1 时把已有正文的条目也算进来（用于强制重抓刷新）。
+    """
     sources = [source] if source in feeds.SOURCE_BY_KEY else None
-    return backfill.count_missing(sources)
+    return backfill.count_missing(sources, force=bool(force))
 
 
 @router.post("/content/fill")

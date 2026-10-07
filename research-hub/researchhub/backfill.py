@@ -241,15 +241,16 @@ def start_fill(payload: dict) -> dict:
         raise RuntimeError("已有任务在运行")
     sources = [s for s in (payload.get("sources") or list(feeds.SOURCE_BY_KEY.keys()))
                if s in feeds.SOURCE_BY_KEY] or list(feeds.SOURCE_BY_KEY.keys())
-    missing = count_missing(sources)
+    force = bool(payload.get("force"))
+    missing = count_missing(sources, force=force)
     if not missing["retryable"]:
         raise RuntimeError(
-            "没有可重试的缺正文研报"
+            "没有可重试的正文研报"
             + (f"（另有 {missing['no_body']} 篇来源站本身就没有文字正文）" if missing["no_body"] else ""))
 
     params = {
         "sources": sources, "types": [], "days": 30, "keywords": [],
-        "theme": "", "fetch_content": True, "mode": "fill",
+        "theme": "", "fetch_content": True, "mode": "fill", "force": force,
         "max_items": MAX_CREATE_PER_JOB, "begin_date": "", "end_date": "",
     }
     global JOB
@@ -262,7 +263,7 @@ def start_fill(payload: dict) -> dict:
             "end_date": date.today().isoformat(),
             "begin_date": (date.today() - timedelta(days=30)).isoformat(),
         })
-        _log(job, f"开始补正文：可重试 {missing['retryable']} 篇"
+        _log(job, f"开始补正文：{'强制重抓' if force else '可重试'} {missing['retryable']} 篇"
                   + (f"（另有 {missing['no_body']} 篇来源站无正文，跳过）" if missing["no_body"] else ""))
     _stop_flag.clear()
     _thread = threading.Thread(target=_run, args=(job,), name="backfill-fill", daemon=True)
@@ -311,7 +312,8 @@ def _run(job: dict) -> None:
             _set(job, progress=int((index + 1) / max(len(combos), 1) * 50))
 
         # ---- 补正文阶段：本轮新入库的 + 库内历史遗留没正文的
-        pending += _stale_without_content(job["params"]["sources"], existing_ids=set(pending))
+        pending += _stale_without_content(job["params"]["sources"], existing_ids=set(pending),
+                                          force=bool(job["params"].get("force")))
         if job["params"]["fetch_content"] and pending and not _should_stop(job):
             _set(job, phase="content", content_total=len(pending), message="")
             _log(job, f"[补正文] 共 {len(pending)} 篇待抓")
@@ -369,23 +371,31 @@ def _domain_clause(sources: list[str]) -> str:
     return " OR ".join(parts)
 
 
-def _retryable_where() -> str:
-    """可重试的缺正文条件：没正文，且不是「来源本来就没有正文」那一类。"""
-    return ("source_type IN ('feed', 'auto', 'backfill') AND word_count = 0 "
-            f"AND content NOT LIKE '%{NO_BODY_MARK}%'")
+def _retryable_where(force: bool = False) -> str:
+    """可重试的正文条件。
+
+    默认只挑「没有正文」的条目；force=True 时连已有正文的一起重抓，
+    用于来源改了正文口径、需要整体刷新的场景。
+    """
+    base = "source_type IN ('feed', 'auto', 'backfill')"
+    if force:
+        return base
+    return f"{base} AND word_count = 0 AND content NOT LIKE '%{NO_BODY_MARK}%'"
 
 
-def count_missing(sources: list[str] | None = None) -> dict:
-    """统计缺正文情况：总数 / 可重试 / 来源本来就没有正文。"""
+def count_missing(sources: list[str] | None = None, force: bool = False) -> dict:
+    """统计缺正文情况：总数 / 可重试 / 来源本来就没有正文。
+
+    force=True 时把「已有正文」的条目也算进可重试范围（强制重抓）。
+    """
     sources = sources or list(feeds.SOURCE_BY_KEY.keys())
     domain = _domain_clause(sources)
     if not domain:
         return {"count": 0, "retryable": 0, "no_body": 0, "by_source": []}
     conn = db.connect()
     total = conn.execute(
-        f"SELECT COUNT(*) n FROM reports WHERE source_type IN ('feed','auto','backfill') "
-        f"AND word_count = 0 AND ({domain})").fetchone()["n"]
-    no_body = conn.execute(
+        f"SELECT COUNT(*) n FROM reports WHERE {_retryable_where(force)} AND ({domain})").fetchone()["n"]
+    no_body = 0 if force else conn.execute(
         f"SELECT COUNT(*) n FROM reports WHERE source_type IN ('feed','auto','backfill') "
         f"AND word_count = 0 AND content LIKE ? AND ({domain})",
         (f"%{NO_BODY_MARK}%",)).fetchone()["n"]
@@ -400,13 +410,14 @@ def count_missing(sources: list[str] | None = None) -> dict:
     return {"count": total, "retryable": total - no_body, "no_body": no_body, "by_source": by_source}
 
 
-def _stale_without_content(sources: list[str], existing_ids: set) -> list[tuple[str, str]]:
-    """找出还可重试的缺正文条目，让补正文阶段可以跨任务续跑。"""
+def _stale_without_content(sources: list[str], existing_ids: set,
+                           force: bool = False) -> list[tuple[str, str]]:
+    """找出还可重试的正文条目，让补正文阶段可以跨任务续跑。"""
     domain = _domain_clause(sources)
     if not domain:
         return []
     rows = db.connect().execute(
-        f"SELECT id, source_url FROM reports WHERE {_retryable_where()} AND ({domain}) "
+        f"SELECT id, source_url FROM reports WHERE {_retryable_where(force)} AND ({domain}) "
         f"ORDER BY id DESC LIMIT 4000").fetchall()
     out = []
     for row in rows:
@@ -531,6 +542,10 @@ def _fetch_one_content(job: dict, source: str, report_id: str) -> None:
             time.sleep(1.5)
     try:
         if not content:
+            if job["params"].get("force"):
+                # 强制重抓：没抓到就保留原有正文，绝不把已入库内容覆盖成提示语
+                _bump(job, "content_failed")
+                return
             # 把"来源本来就没正文"和"抓取失败"分别写清楚，方便用户判断要不要重试
             note_md = feeds.build_markdown(item, "", reason)
             conn.execute("UPDATE reports SET content = ?, word_count = 0, updated_at = ? WHERE id = ?",
@@ -539,10 +554,13 @@ def _fetch_one_content(job: dict, source: str, report_id: str) -> None:
             _bump(job, "content_failed")
             return
         markdown = feeds.build_markdown(item, content)
+        # 顺带用详情接口补回机构 / 日期 / 标的（部分来源只有详情里才给全）
         conn.execute(
-            "UPDATE reports SET content = ?, summary = ?, word_count = ?, updated_at = ? WHERE id = ?",
+            "UPDATE reports SET content = ?, summary = ?, word_count = ?, "
+            "org = ?, report_date = ?, stock_code = ?, updated_at = ? WHERE id = ?",
             (markdown, feeds.make_summary(content), len(re.sub(r"\s+", "", markdown)),
-             db.now(), report_id),
+             item.get("org") or row["org"], item.get("date") or row["report_date"],
+             item.get("stock_code") or row["stock_code"], db.now(), report_id),
         )
         conn.commit()
         time.sleep(feeds.SINA_GAP if source == "sina" else feeds.REQUEST_GAP)

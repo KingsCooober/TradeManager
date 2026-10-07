@@ -1137,10 +1137,11 @@
       <div class="auto-head">
         <div class="k" style="font-size:13px;color:var(--text);font-weight:600">正文补全</div>
         <span class="spacer"></span>
+        ${!busy ? '<button class="btn sm" id="cf-force" title="按来源重新抓取正文，覆盖已有内容">强制重抓…</button>' : ''}
         ${m.retryable && !busy ? '<button class="btn sm primary" id="cf-run">一键补全</button>' : ''}
       </div>
       <div style="margin-top:8px">${body}</div>
-      <div class="hint" style="margin-top:6px">抓取时遇到网络波动或来源限流会漏掉正文，「一键补全」会把它们重试一遍；来源站本身没有正文的不会反复重试。</div>
+      <div class="hint" style="margin-top:6px">抓取时遇到网络波动或来源限流会漏掉正文，「一键补全」会把它们重试一遍；来源站本身没有正文的不会反复重试。若某来源调整了正文口径（例如脱水研报补齐完整版），可用「强制重抓」按来源整体刷新。</div>
     </div>`;
   }
 
@@ -1151,6 +1152,8 @@
   }
 
   function bindContentFix() {
+    const forceBtn = $('#cf-force');
+    if (forceBtn) forceBtn.addEventListener('click', () => openForceRefetch());
     const btn = $('#cf-run');
     if (!btn) return;
     btn.addEventListener('click', async () => {
@@ -1164,6 +1167,35 @@
         toast(e.message, 'err');
         btn.disabled = false; btn.textContent = '一键补全';
       }
+    });
+  }
+
+  // 按来源强制重抓正文：用于来源调整了正文口径（如脱水研报补齐完整版）后整体刷新
+  function openForceRefetch() {
+    const sources = feedsState.sources || [];
+    openModal({
+      title: '强制重抓正文',
+      narrow: true,
+      bodyHtml: `
+        <div class="field"><label>选择来源（该来源下已入库的正文会重新抓取）</label>
+          <div class="check-row">${sources.map((s) =>
+            `<label class="switch sm"><input type="checkbox" data-cf-pick="${esc(s.key)}"> ${esc(s.label)}</label>`).join('') || '加载中…'}</div></div>
+        <div class="notice warn" style="margin-top:10px"><b>说明</b><span>重抓会覆盖已有正文；某一篇如果抓取失败，会<b>保留它原来的正文</b>，不会被清空。任务可随时停止。</span></div>`,
+      footHtml: `<button class="btn" data-close>取消</button>
+        <button class="btn primary" id="cf-force-go">开始重抓</button>`,
+      onMount(root) {
+        root.querySelector('#cf-force-go').addEventListener('click', async () => {
+          const picked = $$('[data-cf-pick]', root).filter((cb) => cb.checked).map((cb) => cb.dataset.cfPick);
+          if (!picked.length) { toast('请至少选择一个来源', 'err'); return; }
+          try {
+            feedsState.bf = await api('/api/content/fill', { method: 'POST', body: { sources: picked, force: true } });
+            closeModal();
+            startAutoPoll(3000);
+            toast(`开始强制重抓 ${feedsState.bf.content_total || 0} 篇的正文`);
+            renderFeeds();
+          } catch (e) { toast(e.message, 'err'); }
+        });
+      },
     });
   }
 
