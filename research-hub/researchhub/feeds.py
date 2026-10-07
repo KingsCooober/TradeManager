@@ -628,7 +628,8 @@ def _sf_search(*, type_key: str, page: int) -> dict:
         raise FeedError(f"不支持的研报类型：{type_key}")
     current = max(1, int(page or 1))
     params = {
-        "page": current, "type": type_key,
+        # 注意：该接口页码从 0 开始（page=0 才是最新一页），本函数对外统一 1-based，这里换算
+        "page": current - 1, "type": type_key,
         "user_type": "4", "channel": "0", "guid": SF_GUID,
         "openid": "", "login_type": "",
     }
