@@ -261,14 +261,16 @@ async function getFundSnapshot() {
     fetchedAt: new Date().toISOString()
   };
 
+  // ★ 缓存里也要包含 marginHistory，否则 5 分钟内再次调时丢失
+  const cachedData = Object.assign({}, data, { marginHistory: marginHistory });
   // ★ 如果两融数据未发布（接口最新日期 ≠ 最近交易日，如 20:00 前），
   //   不写入 5 分钟长缓存。用短缓存（30 秒）让用户刷新后能较快拿到已发布的数据
   if (marginPending) {
-    setCacheShort(cacheKey, data);
+    setCacheShort(cacheKey, cachedData);
   } else {
-    setCache(cacheKey, data);
+    setCache(cacheKey, cachedData);
   }
-  return Object.assign({}, data, { marginHistory: marginHistory });
+  return cachedData;
 }
 
 module.exports = { getFundSnapshot, scoreFund, fetchNorthbound, fetchMargin };

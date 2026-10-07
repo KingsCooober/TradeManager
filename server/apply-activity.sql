@@ -1,0 +1,1 @@
+UPDATE market_history SET up_count=3000, down_count=2071, flat_count=135, zt_count=96, dt_count=16, zt_dt_diff=80, sample_size=5206, source='baostock-recalc', fetched_at='2026-09-01T13:00:40.010Z' WHERE date='2026-08-31';

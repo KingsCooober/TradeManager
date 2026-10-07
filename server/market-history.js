@@ -115,6 +115,21 @@ function recordFundSnapshot(fund) {
         const rzyeSql       = marginPending ? 'NULL' : 'excluded.rzye';
         const rzrqyeSql     = marginPending ? 'NULL' : 'excluded.rzrqye';
         const changePctSql  = marginPending ? 'NULL' : 'excluded.margin_change_pct';
+        // ★ 修复（2026-08-13）：成交额只有"今天"的记录才写（a.shYi 是当日实时值）
+        //   之前 marginHistory 补写时所有日期都写同一个当前值 → 历史成交额被污染成同一数字
+        //   → 补写历史时 amount 保留原值（自身列名），新行写 NULL
+        // ★ 修复（2026-08-27）：成交额拉取失败（a.shYi=0/null）时 today 记录也保留原值
+        //   避免腾讯接口临时超时把已入库的真实值覆盖成 0（08-13 曾被覆盖为 0）
+        const isToday       = (t.date === today);
+        const amountHasVal  = isToday && (a.shYi || 0) > 0 && (a.totalYi || 0) > 0;
+        const amountShSql   = amountHasVal ? 'excluded.amount_sh_yi'    : 'amount_sh_yi';
+        const amountSzSql   = amountHasVal ? 'excluded.amount_sz_yi'    : 'amount_sz_yi';
+        const amountTotalSql= amountHasVal ? 'excluded.amount_total_yi' : 'amount_total_yi';
+        const northSql      = isToday ? 'excluded.north_net_yi'    : 'north_net_yi';
+        const amountShVal   = amountHasVal ? (a.shYi || 0)    : null;
+        const amountSzVal   = amountHasVal ? (a.szYi || 0)    : null;
+        const amountTotalVal= amountHasVal ? (a.totalYi || 0) : null;
+        const northVal      = isToday ? (n.netInflow || 0) / 1e8 : null;
         db.run(`INSERT INTO market_history
           (date, rzye, rzrqye, margin_change_pct, amount_sh_yi, amount_sz_yi, amount_total_yi, north_net_yi, fetched_at, source)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -122,14 +137,14 @@ function recordFundSnapshot(fund) {
             rzye=${rzyeSql},
             rzrqye=${rzrqyeSql},
             margin_change_pct=${changePctSql},
-            amount_sh_yi=excluded.amount_sh_yi,
-            amount_sz_yi=excluded.amount_sz_yi,
-            amount_total_yi=excluded.amount_total_yi,
-            north_net_yi=excluded.north_net_yi,
+            amount_sh_yi=${amountShSql},
+            amount_sz_yi=${amountSzSql},
+            amount_total_yi=${amountTotalSql},
+            north_net_yi=${northSql},
             fetched_at=excluded.fetched_at`,
           [t.date, rzye, rzrqye, changePct,
-           a.shYi || 0, a.szYi || 0, a.totalYi || 0,
-           (n.netInflow || 0) / 1e8,
+           amountShVal, amountSzVal, amountTotalVal,
+           northVal,
            now, 'eastmoney+sina'],
           function(err) {
             if (err) console.warn('[market-history] fund 记录失败', t.date, err.message);

@@ -620,7 +620,12 @@ function renderDRIndicesMAStatus() {
   var html = '';
   drData.indices.forEach(function(idx, i) {
     html += '<div class="dr-index-card" data-index="' + i + '">';
-    html += '<div class="dr-index-name">' + esc(idx.name) + '</div>';
+    html += '<div class="dr-index-name">';
+    html += '<span class="dr-index-title">' + esc(idx.name) + '</span>';
+    // 当日收盘价 + 涨跌幅：K 线图渲染完成后由 updateDRIndexQuote() 填充
+    // （数据源用 K 线最后一根，保证与图上显示的 K 线完全一致）
+    html += '<span class="dr-index-quote" id="drIdxQuote' + i + '" data-loaded="0">—</span>';
+    html += '</div>';
     html += '<div class="dr-index-fields">';
 
     // K线图区域（默认全部展开，无收起功能）
@@ -1017,7 +1022,7 @@ function applyMarketDataToIndices() {
 // ==================== 历史趋势折线图 ====================
 // 数据源：/api/market/history?days=730（后端从 market_history 表读取近 2 年全量数据）
 // 渲染策略：
-//   - 图表折线：仅显示最近 N 天（默认 60，可选 7/30/60/90）
+//   - 图表折线：仅显示最近 N 天（默认 60，可选 60/90/120/250/500；涨跌停/涨跌家数最多 90 天）
 //   - 历史百分位：基于近 2 年全量数据计算（确保分位数稳定、不受显示范围影响）
 // 三张折线图：
 //   1) 两融余额（亿元）       = 每日 rzrqye
@@ -1044,6 +1049,9 @@ function loadDRHistoryCharts(force) {
   drDisplayDays = displayDays;
   var hintEl = document.getElementById('drHistoryHint');
   if (hintEl) hintEl.textContent = '正在加载…';
+  // 标题同步所选天数（避免切到 90/120/250 天后标题仍写 60 天）
+  var titleEl = document.querySelector('.dr-history-title');
+  if (titleEl) titleEl.textContent = '📈 历史趋势（图表显示近 ' + displayDays + ' 天，百分位基于近 2 年）';
 
   return authFetch('/api/market/history?days=' + DR_HISTORY_API_DAYS, { method: 'GET' })
     .then(function(r) {
@@ -1054,7 +1062,8 @@ function loadDRHistoryCharts(force) {
       drHistoryData = data;
       drHistoryLoadTime = Date.now();
       if (hintEl) {
-        hintEl.textContent = '图表显示近 ' + displayDays + ' 天（共 ' + (data.count || 0) + ' 天历史数据，百分位基于近 2 年）';
+        var lowerNote = displayDays > 90 ? '；涨跌停/涨跌家数最多显示近 90 天' : '';
+        hintEl.textContent = '图表显示近 ' + displayDays + ' 天（共 ' + (data.count || 0) + ' 天历史数据，百分位基于近 2 年' + lowerNote + '）';
       }
       renderDRHistoryCharts();
       // 风险提示系统：历史数据加载后检查成交额/两融余额百分位
@@ -1094,28 +1103,18 @@ function renderDRHistoryCharts() {
     var fullData = drHistoryData.data;
     // 取最近 drDisplayDays 天作为显示数据
     var displayData = fullData.slice(-drDisplayDays);
+    // 下两张图（涨跌停 / 涨跌家数）：数据源较浅 + 展示价值集中在近期，最多只显示 90 天
+    // 选项为 120/250/500 时仅上两张图（两融余额 / 成交额）跟随扩展
+    var DR_LOWER_MAX_DAYS = 90;
+    var displayDataLower = fullData.slice(-Math.min(drDisplayDays, DR_LOWER_MAX_DAYS));
 
-    // ★ 按图分别过滤"关键字段为 0"的当天
-    // 某些天可能只有部分数据发布（例如东财两融通常 20:00 后才发，但成交额 19:00 就有）
-    // 这种"半数据"的天在对应图上不显示（避免折线断在 0）
-    // 全量 fullData 仍保留给百分位计算用（0 值在分位里权重小，可忽略）
-    var marginData = displayData.filter(function(d) {
-      return (d.rzye || 0) > 0 || (d.rzrqye || 0) > 0;
-    });
-    var amountData = displayData.filter(function(d) {
-      return (d.amount_total_yi || 0) > 0;
-    });
-    var lddData = displayData.filter(function(d) {
-      return (d.zt_count || 0) > 0 || (d.dt_count || 0) > 0;
-    });
-    var upDownData = displayData.filter(function(d) {
-      return (d.up_count || 0) > 0 || (d.down_count || 0) > 0;
-    });
-
-    drawDRMarginChart(echarts, marginData, fullData);
-    drawDRAmountChart(echarts, amountData, fullData);
-    drawDRLDDChart(echarts, lddData);
-    drawDRUpDownChart(echarts, upDownData);
+    // ★ 关键：所有 4 张图共用同一份 displayData 作为时间轴（不再各自过滤）
+    //   之前各自 filter 导致 dates 数组长度不一致 → 4 张图时间轴对不齐
+    //   现在在每个 draw 函数内部把缺失日期设为 null → 折线/柱自然断开（视觉上对齐）
+    drawDRMarginChart(echarts, displayData, fullData);
+    drawDRAmountChart(echarts, displayData, fullData);
+    drawDRLDDChart(echarts, displayDataLower);
+    drawDRUpDownChart(echarts, displayDataLower);
   }).catch(function(e) {
     console.warn('[DR] ECharts 加载失败:', e.message);
   });
@@ -1196,42 +1195,43 @@ function getDRCurrentDateMarkLine(idx) {
 }
 
 // 1) 两融余额（亿元）—— 含历史百分位
-// displayData: 用于绘制折线（最近 N 天）
+// displayData: 全量（未过滤）60 天窗口，让 4 张图时间轴对齐；缺失日期设为 null（折线断点）
 // fullData:    用于计算百分位（近 2 年全量）
 function drawDRMarginChart(echarts, displayData, fullData) {
   var el = document.getElementById('drHistoryMarginChart');
   if (!el) return;
   var ts = getEChartsTextStyle();
-  // 显示数据：折线
+  // 显示数据：折线（用 displayData 全量日期，缺失日期设为 null → 折线自然断开）
   var dates = displayData.map(function(d) { return d.date.slice(5); });
-  // ★ 当前日期在图表中的索引（用于高亮标记线）
+  // ★ 当前日期在图表中的索引（用于高亮标记线）—— 用 displayData 的索引
   var currentDateIdx = findDRDateIndex(displayData);
-  var marginArr = displayData.map(function(d) { return Math.round((d.rzrqye || 0) / 1e8); });
-  // 全量数据：百分位
+  var hasValue = function(d) { return (d.rzye || 0) > 0 || (d.rzrqye || 0) > 0; };
+  var marginArr = displayData.map(function(d) { return hasValue(d) ? Math.round((d.rzrqye || 0) / 1e8) : null; });
+  // ★ 用于标记点/Pxx 计算的有效数组（仅含真实有值的点）
+  var validVals = marginArr.filter(function(v) { return v !== null; });
+  // 全量数据：百分位（仍用 fullData）
   var fullMarginArr = (fullData || displayData).map(function(d) { return Math.round((d.rzrqye || 0) / 1e8); });
-  // ★ currentVal/prevVal 改为从 displayData（已过滤）取最后两项
-  //   防止"今天两融还没出"时把 0 当成今日值，导致 P0 + 标题显示 0
-  var currentVal = marginArr.length ? marginArr[marginArr.length - 1] : 0;
-  // 昨日数据：取倒数第二项（如果存在）
-  var prevVal = marginArr.length >= 2 ? marginArr[marginArr.length - 2] : null;
-  var prevDate = dates.length >= 2 ? dates[dates.length - 2] : '';
+  // ★ currentVal 取最后一个有效值（最后一个非 null 的项）
+  var lastIdx = -1;
+  for (var _i = marginArr.length - 1; _i >= 0; _i--) { if (marginArr[_i] !== null) { lastIdx = _i; break; } }
+  var currentVal = lastIdx >= 0 ? marginArr[lastIdx] : 0;
+  // 昨日数据：取最后一个有效值的"前一个有效值"
+  var prevVal = null; var prevDate = ''; var prevIdx = -1;
+  for (var _j = lastIdx - 1; _j >= 0; _j--) { if (marginArr[_j] !== null) { prevIdx = _j; break; } }
+  if (prevIdx >= 0) { prevVal = marginArr[prevIdx]; prevDate = dates[prevIdx]; }
   var percentP = calcPercentile(fullMarginArr, currentVal);
-  // Y 轴范围基于显示数据
-  var maxVal = marginArr.length ? Math.max.apply(null, marginArr) : 0;
-  var minVal = marginArr.length ? Math.min.apply(null, marginArr) : 0;
+  // Y 轴范围基于显示数据（过滤 null）
+  var _validMargin = marginArr.filter(function(v) { return v !== null; });
+  var maxVal = _validMargin.length ? Math.max.apply(null, _validMargin) : 0;
+  var minVal = _validMargin.length ? Math.min.apply(null, _validMargin) : 0;
   var range = maxVal - minVal || maxVal * 0.01;
   var pColor = percentileColor(percentP);
   // P90 历史分位参考值（基于全量数据，Y 轴要能看到这条线）
   var p90Val = calcPercentileValue(fullMarginArr, 90);
-  if (p90Val != null && p90Val > maxVal) maxVal = p90Val;
   if (p90Val != null && p90Val < minVal) minVal = p90Val;
   // P95 / P98 历史分位参考值
   var p95Val = calcPercentileValue(fullMarginArr, 95);
-  if (p95Val != null && p95Val > maxVal) maxVal = p95Val;
-  if (p95Val != null && p95Val < minVal) minVal = p95Val;
   var p98Val = calcPercentileValue(fullMarginArr, 98);
-  if (p98Val != null && p98Val > maxVal) maxVal = p98Val;
-  if (p98Val != null && p98Val < minVal) minVal = p98Val;
   var chart = echarts.init(el);
   chart.setOption({
     backgroundColor: 'transparent',
@@ -1247,12 +1247,14 @@ function drawDRMarginChart(echarts, displayData, fullData) {
       type: 'category',
       data: dates,
       axisLine:  { lineStyle: { color: ts.gridLine } },
-      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 6) - 1) }
+      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 8) - 1) }
     },
     yAxis: {
       type: 'value',
-      min: Math.floor(minVal - range * 0.1),
-      max: Math.ceil(maxVal + range * 0.1),
+      // ★ 两融余额：Y 轴起点 = 数据最小值 × 0.95（比最小值低 5%，与顶部对称）
+      min: Math.floor(Math.max(0, minVal * 0.95)),
+      // ★ Y 轴最大值 = 数据/百分位线最大值 × 1.05（比历史数据最大值高 5%）
+      max: Math.ceil(Math.max(maxVal, p90Val || 0, p95Val || 0, p98Val || 0) * 1.05),
       axisLine:  { lineStyle: { color: ts.gridLine } },
       axisLabel: { color: ts.textColor, fontSize: 10, formatter: function(v) { return v >= 10000 ? (v/10000).toFixed(2) + ' 万亿' : v + ' 亿'; } },
       splitLine: { lineStyle: { color: ts.gridLine, type: 'dashed' } }
@@ -1275,24 +1277,39 @@ function drawDRMarginChart(echarts, displayData, fullData) {
           ]
         }
       },
-      // 历史百分位：标记线（当前位置 = 不显示文字，文字由 markPoint 的 pin 承担）
-      // + P90 / P95 / P98 历史分位水平参考线（颜色从橙到深红，标注分位值）
+      // 历史百分位：标记线（当前位置 + P90 / P95 / P98 历史分位水平参考线）
+      // 关键：ECharts 5 markLine 水平线必须用 [{xAxis:0, yAxis:V}, {xAxis:'max', yAxis:V}] 两端点形式
+      //   用单条 {yAxis:V} 在 5.x 中会被规范化掉
       markLine: {
         silent: true,
         symbol: ['none', 'none'],
         data: [
-          { xAxis: dates.length - 1, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 }, label: { show: false } },
+          // 当前值水平参考线（横跨整个 X 轴）
+          { xAxis: 0, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
+            label: { show: false } },
+          { xAxis: 'max', yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
+            label: { show: false } },
           // 昨日位置垂直参考线
-          ...(prevVal != null ? [{ xAxis: dates.length - 2, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 }, label: { show: true, position: 'start', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []),
-          { yAxis: p90Val, lineStyle: { color: '#ff9f0a', width: 1, type: 'dashed', opacity: 0.55 },
-            label: { show: true, position: 'insideEndTop', formatter: 'P90 · ' + Math.round(p90Val) + ' 亿',
-              color: '#ffffff', backgroundColor: 'rgba(255,159,10,0.85)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } },
-          { yAxis: p95Val, lineStyle: { color: '#ff6b35', width: 1, type: 'dashed', opacity: 0.6 },
-            label: { show: true, position: 'insideEndTop', formatter: 'P95 · ' + Math.round(p95Val) + ' 亿',
-              color: '#ffffff', backgroundColor: 'rgba(255,107,53,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } },
-          { yAxis: p98Val, lineStyle: { color: '#ff453a', width: 1.2, type: 'dashed', opacity: 0.7 },
-            label: { show: true, position: 'insideEndTop', formatter: 'P98 · ' + Math.round(p98Val) + ' 亿',
-              color: '#ffffff', backgroundColor: 'rgba(255,69,58,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }
+          ...(prevVal != null ? [{ xAxis: prevIdx, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 },
+            label: { show: true, position: 'insideStartTop', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []),
+          // P90 历史分位水平参考线（橙色，跨整个 X 轴）
+          [{ xAxis: 0, yAxis: p90Val, lineStyle: { color: '#ff9f0a', width: 1, type: 'dashed', opacity: 0.55 } },
+           { xAxis: 'max', yAxis: p90Val, lineStyle: { color: '#ff9f0a', width: 1, type: 'dashed', opacity: 0.55 },
+             label: { show: true, position: 'insideEndTop', formatter: 'P90 · ' + Math.round(p90Val) + ' 亿',
+               color: '#ffffff', backgroundColor: 'rgba(255,159,10,0.85)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }],
+          // P95 历史分位水平参考线
+          [{ xAxis: 0, yAxis: p95Val, lineStyle: { color: '#ff6b35', width: 1, type: 'dashed', opacity: 0.6 } },
+           { xAxis: 'max', yAxis: p95Val, lineStyle: { color: '#ff6b35', width: 1, type: 'dashed', opacity: 0.6 },
+             label: { show: true, position: 'insideEndTop', formatter: 'P95 · ' + Math.round(p95Val) + ' 亿',
+               color: '#ffffff', backgroundColor: 'rgba(255,107,53,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }],
+          // P98 历史分位水平参考线
+          [{ xAxis: 0, yAxis: p98Val, lineStyle: { color: '#ff453a', width: 1.2, type: 'dashed', opacity: 0.7 } },
+           { xAxis: 'max', yAxis: p98Val, lineStyle: { color: '#ff453a', width: 1.2, type: 'dashed', opacity: 0.7 },
+             label: { show: true, position: 'insideEndTop', formatter: 'P98 · ' + Math.round(p98Val) + ' 亿',
+               color: '#ffffff', backgroundColor: 'rgba(255,69,58,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }],
+          // 当前日期垂直线（蓝色虚线）—— 合并到同一个 markLine.data 否则会被后面的 markLine 键覆盖
+          ...(currentDateIdx >= 0 ? [{ xAxis: currentDateIdx, symbol: 'none', label: { show: false },
+            lineStyle: { color: '#4361ee', type: 'dashed', width: 1.5, opacity: 0.6 } }] : [])
         ]
       },
       markPoint: {
@@ -1305,15 +1322,15 @@ function drawDRMarginChart(echarts, displayData, fullData) {
           fontWeight: 700,
           formatter: percentP != null ? 'P' + percentP : ''
         },
+        // 当前位置 pin：当 currentVal=0（未发布）时不显示，避免被坐标轴遮挡
         data: [
-          { name: '当前位置', value: currentVal, xAxis: dates.length - 1, yAxis: currentVal },
+          ...(currentVal > 0 ? [{ name: '当前位置', value: currentVal, xAxis: lastIdx, yAxis: currentVal }] : []),
           // 昨日位置（如果有）
-          ...(prevVal != null ? [{ name: '昨日', value: prevVal, xAxis: dates.length - 2, yAxis: prevVal,
+          ...(prevVal != null ? [{ name: '昨日', value: prevVal, xAxis: prevIdx, yAxis: prevVal,
             symbol: 'circle', symbolSize: 10, itemStyle: { color: '#94a3b8' },
             label: { show: true, position: 'top', formatter: '昨 ' + prevVal + ' 亿', color: '#94a3b8', fontSize: 9, fontWeight: 600 } }] : [])
         ]
-      },
-      markLine: getDRCurrentDateMarkLine(currentDateIdx)
+      }
     }]
   });
   if (drHistoryECharts.margin) drHistoryECharts.margin.dispose();
@@ -1331,34 +1348,32 @@ function drawDRAmountChart(echarts, displayData, fullData) {
   var dates = displayData.map(function(d) { return d.date.slice(5); });
   // ★ 当前日期在图表中的索引（用于高亮标记线）
   var currentDateIdx = findDRDateIndex(displayData);
-  // 两市总成交额（亿元）
-  var amountArr = displayData.map(function(d) { return Math.round(d.amount_total_yi || 0); });
-  // 全量数据：百分位
+  // 两市总成交额（亿元）—— 缺失日期设为 null（折线断开），让 4 张图时间轴对齐
+  var amountArr = displayData.map(function(d) { return (d.amount_total_yi || 0) > 0 ? Math.round(d.amount_total_yi) : null; });
+  // 全量数据：百分位（仍用 fullData）
   var fullAmountArr = (fullData || displayData).map(function(d) { return Math.round(d.amount_total_yi || 0); });
-  // ★ currentVal/prevVal 改为从 displayData（已过滤）取最后两项
-  //   防止"今天成交额还没出"时把 0 当成今日值
-  var currentVal = amountArr.length ? amountArr[amountArr.length - 1] : 0;
-  // 昨日数据
-  var prevVal = amountArr.length >= 2 ? amountArr[amountArr.length - 2] : null;
-  var prevDate = dates.length >= 2 ? dates[dates.length - 2] : '';
+  // ★ 当前值取最后一个有效项（最后一个非 null）—— 用 lastIdx/prevIdx 避免 08-27 未发布导致错位
+  var lastIdx = -1;
+  for (var _i = amountArr.length - 1; _i >= 0; _i--) { if (amountArr[_i] !== null) { lastIdx = _i; break; } }
+  var currentVal = lastIdx >= 0 ? amountArr[lastIdx] : 0;
+  var prevIdx = -1;
+  for (var _j = lastIdx - 1; _j >= 0; _j--) { if (amountArr[_j] !== null) { prevIdx = _j; break; } }
+  var prevVal = prevIdx >= 0 ? amountArr[prevIdx] : null;
+  var prevDate = prevIdx >= 0 ? dates[prevIdx] : '';
   var percentP = calcPercentile(fullAmountArr, currentVal);
+  // 5日均线：含 null 的数组 calcSimpleMA 会怎么算？要兼容
   var ma5 = calcSimpleMA(amountArr, 5);
-  // Y 轴范围基于显示数据
-  var maxVal = amountArr.length ? Math.max.apply(null, amountArr) : 0;
-  var minVal = amountArr.length ? Math.min.apply(null, amountArr) : 0;
+  // Y 轴范围：基于有效数据
+  var validVals = amountArr.filter(function(v) { return v !== null; });
+  var maxVal = validVals.length ? Math.max.apply(null, validVals) : 0;
+  var minVal = validVals.length ? Math.min.apply(null, validVals) : 0;
   var range = maxVal - minVal || maxVal * 0.01;
   var pColor = percentileColor(percentP);
-  // P90 历史分位参考值（基于全量数据，Y 轴要能看到这条线）
+  // P90 / P95 / P98 历史分位参考值（仅扩展 min，max 由数据×1.05 决定）
   var p90Val = calcPercentileValue(fullAmountArr, 90);
-  if (p90Val != null && p90Val > maxVal) maxVal = p90Val;
   if (p90Val != null && p90Val < minVal) minVal = p90Val;
-  // P95 / P98 历史分位参考值
   var p95Val = calcPercentileValue(fullAmountArr, 95);
-  if (p95Val != null && p95Val > maxVal) maxVal = p95Val;
-  if (p95Val != null && p95Val < minVal) minVal = p95Val;
   var p98Val = calcPercentileValue(fullAmountArr, 98);
-  if (p98Val != null && p98Val > maxVal) maxVal = p98Val;
-  if (p98Val != null && p98Val < minVal) minVal = p98Val;
   var chart = echarts.init(el);
   chart.setOption({
     backgroundColor: 'transparent',
@@ -1373,12 +1388,14 @@ function drawDRAmountChart(echarts, displayData, fullData) {
       type: 'category',
       data: dates,
       axisLine:  { lineStyle: { color: ts.gridLine } },
-      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 6) - 1) }
+      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 8) - 1) }
     },
     yAxis: {
       type: 'value',
-      min: Math.floor(minVal - range * 0.1),
-      max: Math.ceil(maxVal + range * 0.1),
+      // ★ Y 轴起点 = 数据最小值 × 0.95（比最小值低 5%，与顶部对称）
+      min: Math.floor(Math.max(0, minVal * 0.95)),
+      // ★ Y 轴最大值 = 数据/百分位线最大值 × 1.05（比历史数据最大值高 5%）
+      max: Math.ceil(Math.max(maxVal, p90Val || 0, p95Val || 0, p98Val || 0) * 1.05),
       axisLine:  { lineStyle: { color: ts.gridLine } },
       axisLabel: { color: ts.textColor, fontSize: 10, formatter: function(v) { return v >= 10000 ? (v/10000).toFixed(2) + ' 万亿' : v + ' 亿'; } },
       splitLine: { lineStyle: { color: ts.gridLine, type: 'dashed' } }
@@ -1403,21 +1420,36 @@ function drawDRAmountChart(echarts, displayData, fullData) {
           }
         },
         // 历史百分位：标记线（当前位置 + P90 / P95 / P98 历史分位水平参考线）
+        // 关键：ECharts 5 markLine 水平线必须用 [{xAxis:0, yAxis:V}, {xAxis:'max', yAxis:V}] 两端点形式
+        //   用单条 {yAxis:V} 在 5.x 中会被规范化掉
         markLine: {
           silent: true,
           symbol: ['none', 'none'],
           data: [
-            { xAxis: dates.length - 1, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 }, label: { show: false } },
-            ...(prevVal != null ? [{ xAxis: dates.length - 2, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 }, label: { show: true, position: 'start', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []),
-            { yAxis: p90Val, lineStyle: { color: '#ff9f0a', width: 1, type: 'dashed', opacity: 0.55 },
-              label: { show: true, position: 'insideEndTop', formatter: 'P90 · ' + Math.round(p90Val) + ' 亿',
-                color: '#ffffff', backgroundColor: 'rgba(255,159,10,0.85)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } },
-            { yAxis: p95Val, lineStyle: { color: '#ff6b35', width: 1, type: 'dashed', opacity: 0.6 },
-              label: { show: true, position: 'insideEndTop', formatter: 'P95 · ' + Math.round(p95Val) + ' 亿',
-                color: '#ffffff', backgroundColor: 'rgba(255,107,53,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } },
-            { yAxis: p98Val, lineStyle: { color: '#ff453a', width: 1.2, type: 'dashed', opacity: 0.7 },
-              label: { show: true, position: 'insideEndTop', formatter: 'P98 · ' + Math.round(p98Val) + ' 亿',
-                color: '#ffffff', backgroundColor: 'rgba(255,69,58,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }
+            // 当前值水平参考线（横跨整个 X 轴）
+            { xAxis: 0, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
+              label: { show: false } },
+            { xAxis: 'max', yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
+              label: { show: false } },
+            // 昨日位置垂直参考线
+            ...(prevVal != null ? [{ xAxis: prevIdx, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 },
+              label: { show: true, position: 'insideStartTop', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []),
+            // P90 / P95 / P98 历史分位水平参考线（颜色从橙到深红）
+            [{ xAxis: 0, yAxis: p90Val, lineStyle: { color: '#ff9f0a', width: 1, type: 'dashed', opacity: 0.55 } },
+             { xAxis: 'max', yAxis: p90Val, lineStyle: { color: '#ff9f0a', width: 1, type: 'dashed', opacity: 0.55 },
+               label: { show: true, position: 'insideEndTop', formatter: 'P90 · ' + Math.round(p90Val) + ' 亿',
+                 color: '#ffffff', backgroundColor: 'rgba(255,159,10,0.85)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }],
+            [{ xAxis: 0, yAxis: p95Val, lineStyle: { color: '#ff6b35', width: 1, type: 'dashed', opacity: 0.6 } },
+             { xAxis: 'max', yAxis: p95Val, lineStyle: { color: '#ff6b35', width: 1, type: 'dashed', opacity: 0.6 },
+               label: { show: true, position: 'insideEndTop', formatter: 'P95 · ' + Math.round(p95Val) + ' 亿',
+                 color: '#ffffff', backgroundColor: 'rgba(255,107,53,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }],
+            [{ xAxis: 0, yAxis: p98Val, lineStyle: { color: '#ff453a', width: 1.2, type: 'dashed', opacity: 0.7 } },
+             { xAxis: 'max', yAxis: p98Val, lineStyle: { color: '#ff453a', width: 1.2, type: 'dashed', opacity: 0.7 },
+               label: { show: true, position: 'insideEndTop', formatter: 'P98 · ' + Math.round(p98Val) + ' 亿',
+                 color: '#ffffff', backgroundColor: 'rgba(255,69,58,0.9)', padding: [2, 6], borderRadius: 4, fontSize: 10, fontWeight: 600 } }],
+            // 当前日期垂直线（蓝色虚线）—— 合并到同一个 markLine.data 否则会被后面的 markLine 键覆盖
+            ...(currentDateIdx >= 0 ? [{ xAxis: currentDateIdx, symbol: 'none', label: { show: false },
+              lineStyle: { color: '#4361ee', type: 'dashed', width: 1.5, opacity: 0.6 } }] : [])
           ]
         },
         markPoint: {
@@ -1428,14 +1460,15 @@ function drawDRAmountChart(echarts, displayData, fullData) {
             color: '#ffffff',
             fontSize: 10,
             fontWeight: 700,
+            // ★ 用 percentP != null 判断（percentP=0 也算有效，显示 P0）
             formatter: percentP != null ? 'P' + percentP : ''
           },
+          // 当前位置 pin：当 currentVal=0（未发布）时不显示，避免被坐标轴遮挡
           data: [
-            { name: '当前位置', value: currentVal, xAxis: dates.length - 1, yAxis: currentVal },
-            ...(prevVal != null ? [{ name: '昨日', value: prevVal, xAxis: dates.length - 2, yAxis: prevVal, symbol: 'circle', symbolSize: 10, itemStyle: { color: '#94a3b8' }, label: { show: true, position: 'top', formatter: '昨 ' + prevVal + ' 亿', color: '#94a3b8', fontSize: 9, fontWeight: 600 } }] : [])
+            ...(currentVal > 0 ? [{ name: '当前位置', value: currentVal, xAxis: lastIdx, yAxis: currentVal }] : []),
+            ...(prevVal != null ? [{ name: '昨日', value: prevVal, xAxis: prevIdx, yAxis: prevVal, symbol: 'circle', symbolSize: 10, itemStyle: { color: '#94a3b8' }, label: { show: true, position: 'top', formatter: '昨 ' + prevVal + ' 亿', color: '#94a3b8', fontSize: 9, fontWeight: 600 } }] : [])
           ]
         },
-        markLine: getDRCurrentDateMarkLine(currentDateIdx)
       },
       {
         name: '5日均线',
@@ -1453,7 +1486,7 @@ function drawDRAmountChart(echarts, displayData, fullData) {
 }
 
 // 3) 涨跌停比例图 —— 堆叠柱（红=涨停/绿=跌停） + 折线（涨跌比例）
-// 注：涨跌停历史从今天开始累积，之前的日期为 0（公开 API 无历史涨跌停数据），所以不需要全量数据
+// data: 全量 displayData（60 天），缺失日期填 0；让 4 张图时间轴对齐
 function drawDRLDDChart(echarts, data) {
   var el = document.getElementById('drHistoryLDDChart');
   if (!el) return;
@@ -1461,28 +1494,34 @@ function drawDRLDDChart(echarts, data) {
   var dates = data.map(function(d) { return d.date.slice(5); });
   // ★ 当前日期在图表中的索引（用于高亮标记线）
   var currentDateIdx = findDRDateIndex(data);
-  // 跌停数（堆在下半，绿色）/ 涨停数（堆在上半，红色）
-  var dtArr = data.map(function(d) { return d.dt_count || 0; });
-  var ztArr = data.map(function(d) { return d.zt_count || 0; });
-  // 涨跌比例：zt/dt，跌停=0 时用 10 表示 +∞ 强势（与之前行为一致）
+  // 跌停数 / 涨停数（缺失日期用 null，让柱图跳过该位置）
+  var hasValue = function(d) { return (d.zt_count || 0) > 0 || (d.dt_count || 0) > 0; };
+  var dtArr = data.map(function(d) { return hasValue(d) ? (d.dt_count || 0) : null; });
+  var ztArr = data.map(function(d) { return hasValue(d) ? (d.zt_count || 0) : null; });
+  // 涨跌比例：zt/dt；缺失日期返回 null
   var ratioArr = data.map(function(d) {
+    if (!hasValue(d)) return null;
     var zt = d.zt_count || 0;
     var dt = d.dt_count || 0;
     if (dt === 0) return zt > 0 ? 10 : 0;
     return Math.round((zt / dt) * 100) / 100;
   });
-  // 昨值参考（用于标记点）
-  var prevRatio = data.length >= 2 ? ratioArr[ratioArr.length - 2] : null;
-  var prevZt = data.length >= 2 ? (data[data.length - 2].zt_count || 0) : null;
-  var prevDate = dates.length >= 2 ? dates[dates.length - 2] : '';
+  // ★ 取最后一个有值的项作为 currentVal（前一个有效项作为 prevVal），索引用 lastIdx/prevIdx
+  var lastIdx = -1;
+  for (var _i = ratioArr.length - 1; _i >= 0; _i--) { if (ratioArr[_i] !== null) { lastIdx = _i; break; } }
+  var currentVal = lastIdx >= 0 ? ratioArr[lastIdx] : 0;
+  var prevIdx = -1;
+  for (var _j = lastIdx - 1; _j >= 0; _j--) { if (ratioArr[_j] !== null) { prevIdx = _j; break; } }
+  var prevRatio = prevIdx >= 0 ? ratioArr[prevIdx] : null;
+  var prevZt = prevIdx >= 0 ? (data[prevIdx].zt_count || 0) : null;
+  var prevDate = prevIdx >= 0 ? dates[prevIdx] : '';
 
-  // 柱图 Y 轴上限：max(zt+dt) + 15% padding；最少 20 避免空数据时看不到柱
-  var maxStack = 0;
-  for (var _i = 0; _i < data.length; _i++) {
-    var _sum = (data[_i].zt_count || 0) + (data[_i].dt_count || 0);
-    if (_sum > maxStack) maxStack = _sum;
-  }
-  var yMax = Math.max(20, Math.ceil(maxStack * 1.15));
+  // 柱图 Y 轴：上限 = 堆叠总和最大值 × 1.05；下限 = 堆叠总和最小值 × 0.95（clamp ≥0）
+  var _stackSums = ztArr.map(function(z, i) { return (z || 0) + (dtArr[i] || 0); });
+  var maxStack = _stackSums.length ? Math.max.apply(null, _stackSums) : 0;
+  var minStack = _stackSums.length ? Math.min.apply(null, _stackSums) : 0;
+  var yMax = Math.max(20, Math.ceil(maxStack * 1.05));
+  var yMin = Math.max(0, Math.floor(minStack * 0.95));
   var chart = echarts.init(el);
   chart.setOption({
     backgroundColor: 'transparent',
@@ -1521,14 +1560,14 @@ function drawDRLDDChart(echarts, data) {
       type: 'category',
       data: dates,
       axisLine:  { lineStyle: { color: ts.gridLine } },
-      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 6) - 1) }
+      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 8) - 1) }
     },
     yAxis: [
       {
         type: 'value',
         name: '家数',
         position: 'left',
-        min: 0,
+        min: yMin,
         max: yMax,
         axisLine:  { lineStyle: { color: ts.gridLine } },
         axisLabel: { color: ts.textColor, fontSize: 10 },
@@ -1575,7 +1614,7 @@ function drawDRLDDChart(echarts, data) {
         markLine: {
           silent: true,
           symbol: ['none', 'none'],
-          data: prevZt != null ? [{ xAxis: dates.length - 2, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 }, label: { show: true, position: 'start', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []
+          data: prevZt != null ? [{ xAxis: prevIdx, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 }, label: { show: true, position: 'insideStartTop', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []
         }
       },
       // 涨跌比例（折线，浮在柱子上方）
@@ -1594,7 +1633,7 @@ function drawDRLDDChart(echarts, data) {
           symbol: 'circle', symbolSize: 8,
           itemStyle: { color: '#94a3b8' },
           label: { show: true, position: 'top', formatter: '昨比 ' + prevRatio, color: '#94a3b8', fontSize: 9, fontWeight: 600 },
-          data: [{ name: '昨日比例', value: prevRatio, xAxis: dates.length - 2, yAxis: prevRatio }]
+          data: [{ name: '昨日比例', value: prevRatio, xAxis: prevIdx, yAxis: prevRatio }]
         } : { data: [] },
         markLine: getDRCurrentDateMarkLine(currentDateIdx)
       }
@@ -1605,9 +1644,7 @@ function drawDRLDDChart(echarts, data) {
 }
 
 // 4) 涨跌比例图 —— 堆叠柱（红=上涨/绿=下跌家数） + 折线（涨跌比例）
-//   与"涨跌停比例图"结构完全一致，只是把 zt_count→up_count、dt_count→down_count
-//   注意：涨跌家数 = up_count / down_count，比值通常远大于 1（如 6.4 倍 = 4660/725），
-//   右 Y 轴 max 自动取 ratioArr.max * 1.2
+//   data: 全量 displayData（60 天），缺失日期填 null；让 4 张图时间轴对齐
 function drawDRUpDownChart(echarts, data) {
   var el = document.getElementById('drHistoryUpDownChart');
   if (!el) return;
@@ -1615,28 +1652,34 @@ function drawDRUpDownChart(echarts, data) {
   var dates = data.map(function(d) { return d.date.slice(5); });
   // ★ 当前日期在图表中的索引（用于高亮标记线）
   var currentDateIdx = findDRDateIndex(data);
-  // 下跌家数（堆在下半，绿色）/ 上涨家数（堆在上半，红色）
-  var downArr = data.map(function(d) { return d.down_count || 0; });
-  var upArr = data.map(function(d) { return d.up_count || 0; });
-  // 涨跌比例：up/down，下跌=0 时用 10 表示 +∞ 强势（与涨跌停图保持一致）
+  // 下跌家数 / 上涨家数（缺失日期填 null）
+  var hasValue = function(d) { return (d.up_count || 0) > 0 || (d.down_count || 0) > 0; };
+  var downArr = data.map(function(d) { return hasValue(d) ? (d.down_count || 0) : null; });
+  var upArr = data.map(function(d) { return hasValue(d) ? (d.up_count || 0) : null; });
+  // 涨跌比例：up/down
   var ratioArr = data.map(function(d) {
+    if (!hasValue(d)) return null;
     var up = d.up_count || 0;
     var down = d.down_count || 0;
     if (down === 0) return up > 0 ? 10 : 0;
     return Math.round((up / down) * 100) / 100;
   });
-  // 昨值参考（用于标记点）
-  var prevRatio = data.length >= 2 ? ratioArr[ratioArr.length - 2] : null;
-  var prevUp = data.length >= 2 ? (data[data.length - 2].up_count || 0) : null;
-  var prevDate = dates.length >= 2 ? dates[dates.length - 2] : '';
+  // ★ 取最后一个有效项作为 currentVal（前一个有效项作为 prevVal），索引用 lastIdx/prevIdx
+  var lastIdx = -1;
+  for (var _i = ratioArr.length - 1; _i >= 0; _i--) { if (ratioArr[_i] !== null) { lastIdx = _i; break; } }
+  var currentVal = lastIdx >= 0 ? ratioArr[lastIdx] : 0;
+  var prevIdx = -1;
+  for (var _j = lastIdx - 1; _j >= 0; _j--) { if (ratioArr[_j] !== null) { prevIdx = _j; break; } }
+  var prevRatio = prevIdx >= 0 ? ratioArr[prevIdx] : null;
+  var prevUp = prevIdx >= 0 ? (data[prevIdx].up_count || 0) : null;
+  var prevDate = prevIdx >= 0 ? dates[prevIdx] : '';
 
-  // 柱图 Y 轴上限：max(up+down) + 15% padding；最少 100（涨跌家数通常几千）
-  var maxStack = 0;
-  for (var _i = 0; _i < data.length; _i++) {
-    var _sum = (data[_i].up_count || 0) + (data[_i].down_count || 0);
-    if (_sum > maxStack) maxStack = _sum;
-  }
-  var yMax = Math.max(100, Math.ceil(maxStack * 1.15));
+  // 柱图 Y 轴上限：每个位置堆叠总和的最大值 × 1.05（5% 余量）
+  var _stackSums2 = upArr.map(function(u, i) { return (u || 0) + (downArr[i] || 0); });
+  var maxStack = _stackSums2.length ? Math.max.apply(null, _stackSums2) : 0;
+  var minStack = _stackSums2.length ? Math.min.apply(null, _stackSums2) : 0;
+  var yMax = Math.max(100, Math.ceil(maxStack * 1.05));
+  var yMin = Math.max(0, Math.floor(minStack * 0.95));
   var chart = echarts.init(el);
   chart.setOption({
     backgroundColor: 'transparent',
@@ -1679,14 +1722,14 @@ function drawDRUpDownChart(echarts, data) {
       type: 'category',
       data: dates,
       axisLine:  { lineStyle: { color: ts.gridLine } },
-      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 6) - 1) }
+      axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 8) - 1) }
     },
     yAxis: [
       {
         type: 'value',
         name: '家数',
         position: 'left',
-        min: 0,
+        min: yMin,
         max: yMax,
         axisLine:  { lineStyle: { color: ts.gridLine } },
         axisLabel: { color: ts.textColor, fontSize: 10 },
@@ -1733,7 +1776,7 @@ function drawDRUpDownChart(echarts, data) {
         markLine: {
           silent: true,
           symbol: ['none', 'none'],
-          data: prevUp != null ? [{ xAxis: dates.length - 2, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 }, label: { show: true, position: 'start', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []
+          data: prevUp != null ? [{ xAxis: prevIdx, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 }, label: { show: true, position: 'insideStartTop', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []
         }
       },
       // 涨跌比例（折线，浮在柱子上方）
@@ -1752,7 +1795,7 @@ function drawDRUpDownChart(echarts, data) {
           symbol: 'circle', symbolSize: 8,
           itemStyle: { color: '#94a3b8' },
           label: { show: true, position: 'top', formatter: '昨比 ' + prevRatio, color: '#94a3b8', fontSize: 9, fontWeight: 600 },
-          data: [{ name: '昨日比例', value: prevRatio, xAxis: dates.length - 2, yAxis: prevRatio }]
+          data: [{ name: '昨日比例', value: prevRatio, xAxis: prevIdx, yAxis: prevRatio }]
         } : { data: [] },
         markLine: getDRCurrentDateMarkLine(currentDateIdx)
       }
@@ -1764,12 +1807,16 @@ function drawDRUpDownChart(echarts, data) {
 
 // 简单移动平均（用于辅助线）
 function calcSimpleMA(arr, n) {
+  // 兼容 null（缺失日期）：仅对窗口内的有效值求平均，前 n-1 个输出 null
+  //   如果窗口内全 null 也返回 null
   var out = [];
   for (var i = 0; i < arr.length; i++) {
     if (i < n - 1) { out.push(null); continue; }
-    var s = 0;
-    for (var j = i - n + 1; j <= i; j++) s += arr[j];
-    out.push(Math.round(s / n));
+    var s = 0, cnt = 0;
+    for (var j = i - n + 1; j <= i; j++) {
+      if (arr[j] !== null && arr[j] !== undefined) { s += arr[j]; cnt++; }
+    }
+    out.push(cnt > 0 ? Math.round(s / cnt) : null);
   }
   return out;
 }
@@ -3054,13 +3101,74 @@ function loadEcharts() {
 // 存储已初始化的 ECharts 实例（key: index 序号 → echarts instance）
 var drKlineCharts = {};
 
+// ==================== K 线显示窗口配置 ====================
+// 需求：指数 K 线图固定展示 90 根 K 线，且窗口长度不可缩放（滚轮缩放已禁用），
+//       但保留鼠标拖动 —— 因此后端多拉一些历史（250 根），拖动能回看更早的行情。
+var DR_KLINE_FETCH_COUNT = 250;   // 向后端请求的历史 K 线根数
+var DR_KLINE_WINDOW      = 90;    // 固定显示窗口（根数，恒定不变）
+
+// ==================== 4 图指标图例「统一控制」====================
+// 需求：4 个指数的 K 线图（上证/中证A500/创业板50/科创50）图例联动——
+//       在任意一张图上点开/关掉某条指标（MA5/MA10/MA20/DIF/DEA），其余 3 张同步生效。
+// 实现：全局记录每个图例名的开关状态，监听 legendselectchanged → 广播给其他图。
+var drKlineLegendState = {};   // { MA5: true, MA10: false, ... }（false = 已关闭）
+var drKlineSyncing = false;    // 防止 dispatchAction 反向触发造成递归
+
+// 给单张图绑定图例联动（idx 为自身序号，同步时跳过自己）
+function setupDRKlineLegendSync(chart, idx) {
+  chart.on('legendselectchanged', function(params) {
+    if (drKlineSyncing) return;           // 同步广播期间忽略回弹
+    var selected = params.selected || {};
+    drKlineSyncing = true;
+    try {
+      // 1) 记录到全局状态
+      Object.keys(selected).forEach(function(name) {
+        drKlineLegendState[name] = selected[name];
+      });
+      // 2) 广播到其他 3 张图
+      Object.keys(drKlineCharts).forEach(function(otherIdx) {
+        if (String(otherIdx) === String(idx)) return;
+        var c = drKlineCharts[otherIdx];
+        if (!c) return;
+        // 注意：isDisposed 是函数，直接 `c.isDisposed ||` 恒为 truthy 会误跳过，必须先 typeof 判断
+        if (typeof c.isDisposed === 'function' && c.isDisposed()) return;
+        Object.keys(selected).forEach(function(name) {
+          c.dispatchAction({
+            type: selected[name] ? 'legendSelect' : 'legendUnSelect',
+            name: name
+          });
+        });
+      });
+    } finally {
+      drKlineSyncing = false;
+    }
+  });
+}
+
+// 新图渲染完成后，套用已有的全局图例状态（保持 4 图一致）
+function applyDRKlineLegendState(chart) {
+  var names = Object.keys(drKlineLegendState);
+  if (!names.length) return;
+  drKlineSyncing = true;
+  try {
+    names.forEach(function(name) {
+      chart.dispatchAction({
+        type: drKlineLegendState[name] ? 'legendSelect' : 'legendUnSelect',
+        name: name
+      });
+    });
+  } finally {
+    drKlineSyncing = false;
+  }
+}
+
 // 渲染 K线图（异步：先加载 ECharts + 拉数据，再绘图）
 function renderDRKlineChart(idx, key) {
   var container = document.getElementById('drKline' + idx);
   if (container) container.setAttribute('data-loading', '1');
   Promise.all([
     loadEcharts(),
-    authFetch('/api/market/kline/' + key + '?count=120').then(function(r) {
+    authFetch('/api/market/kline/' + key + '?count=' + DR_KLINE_FETCH_COUNT).then(function(r) {
       if (!r.ok) throw new Error('K线接口返回 ' + r.status);
       return r.json();
     })
@@ -3094,6 +3202,12 @@ function drawDRKlineChart(echarts, idx, key, data) {
     return o[1] >= o[0] ? UP_COLOR : DOWN_COLOR;  // close >= open → 红
   });
 
+  // 固定显示窗口：恒为最近 DR_KLINE_WINDOW 根（120 根），只可平移不可缩放
+  var kTotal = (data.dates || []).length;
+  var kWin   = Math.min(DR_KLINE_WINDOW, kTotal);
+  var kStart = Math.max(0, kTotal - kWin);   // 窗口起始索引
+  var kEnd   = Math.max(0, kTotal - 1);      // 窗口结束索引（最后一根）
+
   chart.setOption({
     backgroundColor: 'transparent',
     animation: false,
@@ -3107,7 +3221,87 @@ function drawDRKlineChart(echarts, idx, key, data) {
       axisPointer: { type: 'cross' },
       backgroundColor: 'rgba(26, 26, 46, 0.95)',
       borderColor: '#4361ee',
-      textStyle: { color: '#fff', fontSize: 12 }
+      textStyle: { color: '#fff', fontSize: 12 },
+      // 自定义内容：默认 K 线 tooltip 只有开/收/低/高，这里补上「涨跌额 / 涨跌幅 / 振幅 / 成交额」
+      // 涨跌幅 = (收 - 昨收) / 昨收 × 100%；振幅 = (最高 - 最低) / 昨收 × 100%
+      // （昨收 = 前一根 K 线的收盘价，A 股标准的涨跌幅/振幅口径）
+      formatter: function(params) {
+        if (!params || !params.length) return '';
+        var i = params[0].dataIndex;
+        var o = (data.ohlc || [])[i];
+        if (!o) return '';
+        var open = o[0], close = o[1], low = o[2], high = o[3];
+        if (open == null || close == null) return '';
+
+        // 数值格式化（null / 缺失 → 破折号）
+        function fmt(v, dec) {
+          if (v == null || isNaN(v)) return '—';
+          return Number(v).toFixed(dec == null ? 2 : dec);
+        }
+        function sign(v) { return (v != null && v > 0) ? '+' : ''; }
+
+        var prevClose = (i > 0 && data.ohlc[i - 1]) ? data.ohlc[i - 1][1] : null;
+        var pct = prevClose ? (close - prevClose) / prevClose * 100 : null;
+        var chg = prevClose ? close - prevClose : null;
+        var amp = prevClose ? (high - low) / prevClose * 100 : null;
+        var up  = (pct != null) ? (pct >= 0) : (close >= open);
+        var c   = up ? UP_COLOR : DOWN_COLOR;
+
+        var LBL = 'color:#94a3b8;padding-right:8px;';
+        var VAL = 'text-align:right;font-variant-numeric:tabular-nums;';
+        var GAP = 'padding:0 6px 0 14px;';
+
+        var h = '<div style="font-size:12px;line-height:1.75;">';
+        h += '<div style="font-weight:700;margin-bottom:4px;">' + (data.dates[i] || '') + '</div>';
+        h += '<table style="border-collapse:collapse;font-size:12px;">';
+        h += '<tr><td style="' + LBL + '">开盘</td><td style="' + VAL + '">' + fmt(open) + '</td>' +
+             '<td style="' + LBL + GAP + '">最高</td><td style="' + VAL + '">' + fmt(high) + '</td></tr>';
+        h += '<tr><td style="' + LBL + '">收盘</td><td style="' + VAL + 'color:' + c + ';font-weight:700;">' + fmt(close) + '</td>' +
+             '<td style="' + LBL + GAP + '">最低</td><td style="' + VAL + '">' + fmt(low) + '</td></tr>';
+        h += '</table>';
+
+        // 涨跌 / 涨幅 / 振幅 / 成交额
+        h += '<div style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.15);">';
+        h += '<table style="border-collapse:collapse;font-size:12px;">';
+        h += '<tr><td style="' + LBL + '">涨跌</td><td style="' + VAL + 'color:' + c + ';">' +
+             (pct == null ? '—' : sign(chg) + fmt(chg)) + '</td>' +
+             '<td style="' + LBL + GAP + '">涨幅</td><td style="' + VAL + 'color:' + c + ';font-weight:700;">' +
+             (pct == null ? '—' : sign(pct) + fmt(pct) + '%') + '</td></tr>';
+        h += '<tr><td style="' + LBL + '">振幅</td><td style="' + VAL + '">' +
+             (amp == null ? '—' : fmt(amp) + '%') + '</td>' +
+             '<td style="' + LBL + GAP + '">成交额</td><td style="' + VAL + '">' +
+             fmt(((data.volumes || [])[i] || 0) / 10000, 1) + ' 亿</td></tr>';
+        h += '</table></div>';
+
+        // MA / DIF / DEA / MACD —— 跟随图例开关：只显示当前可见的指标
+        var vis = {};
+        params.forEach(function(p) { vis[p.seriesName] = true; });
+        var rows = [];
+        if (vis['MA5'])  rows.push(['MA5',  (data.ma5  || [])[i], MA5_COLOR]);
+        if (vis['MA10']) rows.push(['MA10', (data.ma10 || [])[i], MA10_COLOR]);
+        if (vis['MA20']) rows.push(['MA20', (data.ma20 || [])[i], MA20_COLOR]);
+        if (vis['DIF'])  rows.push(['DIF',  (data.macd && data.macd.dif  || [])[i], '#ffa726']);
+        if (vis['DEA'])  rows.push(['DEA',  (data.macd && data.macd.dea  || [])[i], '#29b6f6']);
+        if (vis['MACD']) rows.push(['MACD', (data.macd && data.macd.macd || [])[i], null]);
+        if (rows.length) {
+          h += '<div style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.15);">';
+          h += '<table style="border-collapse:collapse;font-size:12px;">';
+          for (var r = 0; r < rows.length; r += 2) {
+            h += '<tr>';
+            for (var q = 0; q < 2; q++) {
+              var it = rows[r + q];
+              if (!it) continue;
+              var st = it[2] ? 'color:' + it[2] + ';' : LBL;
+              h += '<td style="' + st + (q === 1 ? 'padding-left:14px;' : '') + '">' + it[0] + '</td>' +
+                   '<td style="' + VAL + '">' + fmt(it[1]) + '</td>';
+            }
+            h += '</tr>';
+          }
+          h += '</table></div>';
+        }
+        h += '</div>';
+        return h;
+      }
     },
     axisPointer: {
       link: [{ xAxisIndex: 'all' }],
@@ -3144,7 +3338,16 @@ function drawDRKlineChart(echarts, idx, key, data) {
         axisLabel: { fontSize: 10, color: '#9090a8' } }
     ],
     dataZoom: [
-      { type: 'inside', xAxisIndex: [0, 1, 2], start: 60, end: 100 }
+      {
+        type: 'inside',
+        xAxisIndex: [0, 1, 2],
+        startValue: kStart,
+        endValue: kEnd,
+        zoomLock: true,           // 锁定窗口长度 = 固定 120 根，只能平移不能缩放
+        zoomOnMouseWheel: false,  // ❌ 禁用滚轮缩放
+        moveOnMouseWheel: false,  // ❌ 禁用滚轮平移
+        moveOnMouseMove: true     // ✅ 保留鼠标按住拖动（平移）
+      }
     ],
     series: [
       {
@@ -3172,10 +3375,46 @@ function drawDRKlineChart(echarts, idx, key, data) {
     ]
   });
 
+  // 4 图图例联动：绑定同步事件，并套用已有的全局开关状态
+  setupDRKlineLegendSync(chart, idx);
+  applyDRKlineLegendState(chart);
+
   // 自适应窗口大小
   var resizeHandler = function() { chart.resize(); };
   window.addEventListener('resize', resizeHandler);
   chart._resizeHandler = resizeHandler;
+
+  // 卡片标题栏显示「当日收盘价 + 涨跌幅」（数据源 = K 线最后一根，与图上 K 线一致）
+  updateDRIndexQuote(idx, data);
+}
+
+// 更新指数卡片标题栏的当日行情（收盘价 / 涨跌幅 / 涨跌点数 / 日期）
+// 数据源用 K 线最后一根的收盘价 vs 前一根收盘价，保证与 K 线图显示完全一致
+// （不用 quote.changePct：那是实时行情，与 K 线图的最新交易日可能不同步）
+function updateDRIndexQuote(idx, data) {
+  var el = document.getElementById('drIdxQuote' + idx);
+  if (!el) return;
+  var ohlc = (data && data.ohlc) || [];
+  var dates = (data && data.dates) || [];
+  if (ohlc.length < 2) { el.textContent = '—'; return; }
+
+  var n = ohlc.length;
+  var lastClose = ohlc[n - 1][1];   // ohlc 项格式：[open, close, low, high]
+  var prevClose = ohlc[n - 2][1];
+  if (!lastClose || !prevClose) { el.textContent = '—'; return; }
+
+  var pct  = (lastClose - prevClose) / prevClose * 100;
+  var chg  = lastClose - prevClose;
+  var up   = pct >= 0;
+  var cls  = up ? 'dr-q-up' : 'dr-q-down';
+  var sign = up ? '+' : '';
+
+  el.innerHTML =
+    '<span class="dr-q-price ' + cls + '">' + lastClose.toFixed(2) + '</span>' +
+    '<span class="dr-q-chg ' + cls + '">' + sign + chg.toFixed(2) + '</span>' +
+    '<span class="dr-q-pct ' + cls + '">' + sign + pct.toFixed(2) + '%</span>' +
+    '<span class="dr-q-date">' + esc(dates[n - 1] || '') + '</span>';
+  el.setAttribute('data-loaded', '1');
 }
 
 // ==================== 实时风险提示系统 ====================

@@ -312,6 +312,48 @@
   margin-bottom: 12px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border-divider);
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 指数卡片标题右侧：当日收盘价 + 涨跌点数 + 涨跌幅 + 日期
+   A 股配色：涨=红(#ef476f)、跌=绿(#2d9f7f)，与 K 线图保持一致 */
+.dr-index-quote {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.dr-index-quote[data-loaded="0"] {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.dr-q-price { font-size: 13px; font-weight: 700; }
+.dr-q-chg   { font-weight: 500; opacity: 0.85; }
+
+.dr-q-pct {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 4px);
+  font-weight: 700;
+}
+
+.dr-q-up   { color: #ef476f; }
+.dr-q-down { color: #2d9f7f; }
+
+.dr-q-pct.dr-q-up   { background: rgba(239, 71, 111, 0.12); }
+.dr-q-pct.dr-q-down { background: rgba(45, 159, 127, 0.12); }
+
+.dr-q-date {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .dr-index-fields {
@@ -1372,7 +1414,7 @@
   border: 1px solid var(--border-card, #e8e8ed);
   border-radius: 8px;
   padding: 10px 12px 4px;
-  min-height: 180px;
+  min-height: 240px;
 }
 .dr-history-chart-label {
   font-size: 12px;
@@ -1382,7 +1424,7 @@
 }
 .dr-history-chart {
   width: 100%;
-  height: 180px;
+  height: 240px;
 }
 
 .dr-fund-card-header {
