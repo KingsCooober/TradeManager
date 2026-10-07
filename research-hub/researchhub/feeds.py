@@ -627,8 +627,24 @@ def fetch_content(item: dict) -> dict:
             "reason": "" if content else "empty"}
 
 
+def _em_pdf_url(url: str, info_code: str = "") -> str:
+    """东方财富研报的原文 PDF 直链（该来源有稳定规律：H3_<infocode>_1.pdf）。"""
+    if "eastmoney.com" not in (url or ""):
+        return ""
+    code = str(info_code or "").strip()
+    if not code:
+        m = (re.search(r"infocode=([A-Za-z0-9]+)", url or "")
+             or re.search(r"/report/info/([A-Za-z0-9]+)\.html", url or ""))
+        code = m.group(1) if m else ""
+    if not code:
+        return ""
+    return f"https://pdf.dfcfw.com/pdf/H3_{code}_1.pdf"
+
+
 def build_markdown(item: dict, content: str, reason: str = "") -> str:
     """把元信息 + 正文拼成一篇完整的 Markdown。"""
+    url = (item.get("url") or "").strip()
+    pdf_url = _em_pdf_url(url, item.get("id"))
     meta = [
         ("机构", item.get("org")),
         ("分析师", item.get("authors")),
@@ -637,8 +653,10 @@ def build_markdown(item: dict, content: str, reason: str = "") -> str:
         ("标的", " ".join(x for x in [item.get("stock_name"), item.get("stock_code")] if x)),
         ("评级", item.get("rating")),
         ("发布日期", item.get("date")),
-        ("原文页", item.get("url")),
+        ("原文页", f"[{url}]({url})" if url else ""),
     ]
+    if pdf_url:
+        meta.append(("原文 PDF", f"[{pdf_url}]({pdf_url})"))
     lines = [f"# {item.get('title') or '未命名研报'}", ""]
     lines += [f"- **{k}**：{v}" for k, v in meta if v]
     lines.append("")

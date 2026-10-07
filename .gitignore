@@ -18,6 +18,7 @@ deploy.zip
 
 # 工作区配置（个人数据）
 .workbuddy/
+.workbuddy-ai/
 .env
 .mimocode/
 .trae/

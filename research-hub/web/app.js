@@ -83,7 +83,17 @@
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[\s（(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // Markdown 链接优先：先转成占位符，避免 URL 部分被下面的「裸链接」规则二次包裹
+    const links = [];
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (m, label, url) => {
+      links.push(`<a href="${url}" target="_blank" rel="noopener">${label}</a>`);
+      return `\u0000${links.length - 1}\u0000`;
+    });
+    // 裸 URL 自动变成可点击链接（如正文里的「原文页：https://…」）
+    s = s.replace(/(https?:\/\/[^\s<>"'()（）\[\]【】，。；、！？]+)/g,
+      '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    // 还原 Markdown 链接
+    s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => links[Number(i)] || '');
     return s;
   }
 
@@ -404,6 +414,18 @@
   }
 
   /* ---------------------------------------------------------- 阅读器 */
+  // 东方财富研报的原文 PDF 直链：https://pdf.dfcfw.com/pdf/H3_<infocode>_1.pdf
+  // infocode 形如 AP202610061830164303，可从原文页地址或 source_file 提取
+  function sourcePdfUrl(r) {
+    const src = String(r.source_url || '');
+    const file = String(r.source_file || '');
+    let code = '';
+    const m = src.match(/infocode=([A-Za-z0-9]+)/) || src.match(/\/report\/info\/([A-Za-z0-9]+)\.html/);
+    if (m) code = m[1];
+    else if (/^AP\d{6,}$/.test(file)) code = file;
+    return code ? `https://pdf.dfcfw.com/pdf/H3_${code}_1.pdf` : '';
+  }
+
   function metaPills(r) {
     const pills = [];
     if (r.org) pills.push(`<span class="meta-pill">${esc(r.org)}</span>`);
@@ -417,6 +439,8 @@
     if (r.word_count) pills.push(`<span class="meta-pill">${fmtWords(r.word_count)}</span>`);
     if (r.source_file) pills.push(`<span class="meta-pill">原件：${esc(r.source_file)}</span>`);
     if (r.source_url) pills.push(`<a class="meta-pill" href="${esc(r.source_url)}" target="_blank" rel="noopener" style="text-decoration:none">🔗 原文页</a>`);
+    const pdfUrl = sourcePdfUrl(r);
+    if (pdfUrl) pills.push(`<a class="meta-pill pdf" href="${esc(pdfUrl)}" target="_blank" rel="noopener" style="text-decoration:none" title="直接打开原文 PDF">📄 原文 PDF</a>`);
     (r.tags || []).forEach((t) => pills.push(`<span class="meta-pill tag">#${esc(t)}</span>`));
     if (r.ai_updated_at) pills.push(`<span class="meta-pill">AI 整理于 ${esc(fmtDate(r.ai_updated_at))}</span>`);
     return pills.join('');
