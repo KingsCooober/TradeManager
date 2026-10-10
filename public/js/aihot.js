@@ -320,14 +320,27 @@
   async function translateBlocks(blocks) {
     var texts = blocks.map(function (block) { return block.text; });
     var translations = new Array(texts.length).fill('');
+    var failed = 0;
+    var lastError = '';
+    var anySuccess = false;
     var BATCH = 12;
     for (var i = 0; i < texts.length; i += BATCH) {
       var slice = texts.slice(i, i + BATCH);
-      var data = await apiPost('/api/aihot/translate', { texts: slice });
-      var list = data.translations || [];
-      for (var j = 0; j < slice.length; j++) translations[i + j] = list[j] || '';
+      try {
+        var data = await apiPost('/api/aihot/translate', { texts: slice });
+        var list = data.translations || [];
+        for (var j = 0; j < slice.length; j++) translations[i + j] = list[j] || '';
+        failed += Number(data.failed) || 0;
+        anySuccess = true;
+      } catch (error) {
+        // 单批失败不再中断整篇：记下来，继续翻后面的段落
+        failed += slice.length;
+        lastError = error.message || '';
+      }
     }
-    return translations;
+    // 一段都没翻出来，说明是真的失败了（多半是配置问题），把原因抛给用户
+    if (texts.length && !anySuccess) throw new Error(lastError || '翻译失败，请稍后重试。');
+    return { translations: translations, failed: failed, lastError: lastError };
   }
 
   // 展开/收起中文对照；首次点击才真正发起翻译
@@ -346,10 +359,14 @@
     button.disabled = true;
     button.textContent = '翻译中…';
     try {
-      var translations = await translateBlocks(data.blocks);
-      panel._translations = translations;
+      var result = await translateBlocks(data.blocks);
+      panel._translations = result.translations;
       panel._showTrans = true;
-      panel.innerHTML = renderArticle(data, translations);
+      panel.innerHTML = renderArticle(data, result.translations);
+      if (result.failed) {
+        var tip = panel.querySelector('.ah-article-trans-error');
+        if (tip) tip.textContent = result.failed + ' 段未能翻译，可点「翻译全文」重试。';
+      }
     } catch (error) {
       button.disabled = false;
       button.textContent = '翻译全文';
