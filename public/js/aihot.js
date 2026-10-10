@@ -345,7 +345,9 @@
 
   // 展开/收起中文对照；首次点击才真正发起翻译
   async function toggleTranslate(button) {
-    var card = button.closest('.ah-card');
+    // 按标签找卡片：列表是 .ah-card，热点榜是 .ah-hot-card，
+    // 写死类名会让热点榜的按钮点了没反应（曾踩过）
+    var card = button.closest('article');
     var panel = card ? card.querySelector('.ah-article') : null;
     if (!panel || !panel._articleData) return;
     var data = panel._articleData;
