@@ -62,7 +62,7 @@ function renderAppHeader(page) {
         '<span class="header-user-badge">👤 <span id="headerUsername">-</span></span>' +
         '<button type="button" class="btn btn-sm btn-primary" onclick="handleFullSync()" aria-label="立即同步">🔄 同步</button>' +
         '<button type="button" class="btn btn-sm btn-ghost" onclick="handleToggleAutoSync()" id="headerBtnAutoSync" aria-label="切换自动同步">自动: 关</button>' +
-        '<button type="button" class="btn btn-sm btn-ghost" onclick="openChangePasswordModal()" aria-label="修改密码">🔐 修改密码</button>' +
+        '<button type="button" class="btn btn-sm btn-ghost" onclick="openAppSettings()" aria-label="设置">⚙️ 设置</button>' +
         '<button type="button" class="btn btn-sm btn-ghost-danger" onclick="' + logoutFn + '()" aria-label="退出登录">退出</button>' +
       '</div>' +
       '<div id="headerSyncLoggedOut" style="display:flex;align-items:center;gap:8px">' +
@@ -71,7 +71,7 @@ function renderAppHeader(page) {
       '<div id="adminMenu" style="display:none;align-items:center;gap:8px">' +
         '<span class="header-user-badge admin-badge">🔧 管理员</span>' +
         (page === 'index' ? '<button type="button" class="btn btn-sm btn-warning" onclick="toggleAdminPanel()" aria-label="打开管理面板">管理面板</button>' : '') +
-        '<button type="button" class="btn btn-sm btn-ghost" onclick="openChangePasswordModal()" aria-label="修改密码">🔐 修改密码</button>' +
+        '<button type="button" class="btn btn-sm btn-ghost" onclick="openAppSettings()" aria-label="设置">⚙️ 设置</button>' +
         '<button type="button" class="btn btn-sm btn-ghost-danger" onclick="' + logoutFn + '()" aria-label="退出登录">退出</button>' +
       '</div>' +
       '<div class="theme-divider"></div>' +
@@ -178,3 +178,189 @@ if (typeof window.escapeHtml !== 'function') {
       .replace(/'/g, '&#39;');
   };
 }
+
+// ===== 全局设置弹窗（AI 大模型配置 + 账号安全） =====
+// 6 个页面共用。配置本体存在研报库，通过主站带鉴权的 /api/ai/settings 读写，
+// 研报摘要与 AIHOT 英文翻译共用同一份配置。
+
+function appSettingsToken() {
+  try {
+    return localStorage.getItem('sync_token') || localStorage.getItem('token') || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function appSettingsStyles() {
+  if (document.getElementById('appSettingsStyle')) return;
+  var style = document.createElement('style');
+  style.id = 'appSettingsStyle';
+  style.textContent = [
+    '.app-settings-modal{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;padding:20px}',
+    '.app-settings-modal[hidden]{display:none}',
+    '.app-settings-mask{position:absolute;inset:0;background:var(--bg-overlay,rgba(0,0,0,.45))}',
+    '.app-settings-card{position:relative;width:min(100%,520px);max-height:86vh;overflow:auto;padding:24px 26px;border:1px solid var(--border-card,#e5e5e5);border-radius:var(--radius-lg,12px);background:var(--bg-card,#fff);color:var(--text-primary,#222);box-shadow:0 12px 40px rgba(0,0,0,.25)}',
+    '.app-settings-card h2{margin:0 0 4px;font-size:20px}',
+    '.app-settings-sub{margin:0 0 18px;color:var(--text-secondary,#666);font-size:13px}',
+    '.app-settings-section{padding:16px 0;border-top:1px solid var(--border-divider,#eee)}',
+    '.app-settings-section:first-of-type{border-top:0;padding-top:0}',
+    '.app-settings-section h3{margin:0 0 10px;font-size:15px}',
+    '.app-settings-hint{margin:0 0 12px;color:var(--text-tertiary,#999);font-size:12px;line-height:1.7}',
+    '.app-settings-card label{display:block;margin:10px 0 5px;color:var(--text-secondary,#666);font-size:12px}',
+    '.app-settings-card input{width:100%;box-sizing:border-box;min-height:40px;padding:0 12px;border:1px solid var(--border-input,#ddd);border-radius:8px;background:var(--bg-input,#fff);color:var(--text-primary,#222);font:inherit;font-size:13px}',
+    '.app-settings-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:16px}',
+    '.app-settings-msg{color:var(--text-tertiary,#999);font-size:12px}',
+    '.app-settings-msg.is-ok{color:var(--color-teal,#0f6e56)}',
+    '.app-settings-msg.is-err{color:var(--color-red,#d33)}',
+    '.app-settings-close{position:absolute;top:10px;right:12px;border:0;background:transparent;color:var(--text-secondary,#666);font-size:24px;line-height:1;cursor:pointer}'
+  ].join('');
+  document.head.appendChild(style);
+}
+
+function appSettingsMsg(text, kind) {
+  var el = document.getElementById('appSetMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'app-settings-msg' + (kind === 'ok' ? ' is-ok' : kind === 'err' ? ' is-err' : '');
+}
+
+function appSettingsFetch(method, path, body) {
+  var headers = { Accept: 'application/json' };
+  var token = appSettingsToken();
+  if (token) headers.Authorization = 'Bearer ' + token;
+  var options = { method: method, headers: headers, cache: 'no-store' };
+  if (body) {
+    headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
+  return fetch(path, options).then(function (response) {
+    return response.json().catch(function () { return {}; }).then(function (data) {
+      if (!response.ok) throw new Error(data.error || ('请求失败（HTTP ' + response.status + '）'));
+      return data;
+    });
+  });
+}
+
+function appSettingsKeyPlaceholder(data) {
+  return data.ai_configured
+    ? '已保存：' + (data.ai_api_key_masked || '••••••') + '（留空则不修改）'
+    : 'sk-...';
+}
+
+function appSettingsLoad() {
+  appSettingsMsg('读取中…', '');
+  appSettingsFetch('GET', '/api/ai/settings').then(function (data) {
+    document.getElementById('appSetBase').value = data.ai_base_url || '';
+    document.getElementById('appSetModel').value = data.ai_model || '';
+    var keyInput = document.getElementById('appSetKey');
+    keyInput.value = '';
+    keyInput.placeholder = appSettingsKeyPlaceholder(data);
+    appSettingsMsg(data.ai_configured ? '已配置 API Key' : '尚未配置 API Key', data.ai_configured ? 'ok' : '');
+  }).catch(function (error) {
+    appSettingsMsg(error.message, 'err');
+  });
+}
+
+function appSettingsPayload() {
+  var payload = {
+    ai_base_url: document.getElementById('appSetBase').value.trim(),
+    ai_model: document.getElementById('appSetModel').value.trim()
+  };
+  var key = document.getElementById('appSetKey').value.trim();
+  if (key) payload.ai_api_key = key;
+  return payload;
+}
+
+function appSettingsSave() {
+  appSettingsMsg('保存中…', '');
+  appSettingsFetch('PUT', '/api/ai/settings', appSettingsPayload()).then(function (data) {
+    document.getElementById('appSetKey').value = '';
+    document.getElementById('appSetKey').placeholder = appSettingsKeyPlaceholder(data);
+    appSettingsMsg('已保存', 'ok');
+  }).catch(function (error) {
+    appSettingsMsg(error.message, 'err');
+  });
+}
+
+function appSettingsTest() {
+  appSettingsMsg('测试中…（会真实调用一次模型）', '');
+  appSettingsFetch('POST', '/api/ai/settings/test', appSettingsPayload()).then(function () {
+    appSettingsMsg('连接成功 ✅', 'ok');
+  }).catch(function (error) {
+    appSettingsMsg(error.message, 'err');
+  });
+}
+
+function ensureAppSettingsModal() {
+  appSettingsStyles();
+  var modal = document.getElementById('appSettingsModal');
+  if (modal) return modal;
+
+  modal = document.createElement('div');
+  modal.id = 'appSettingsModal';
+  modal.className = 'app-settings-modal';
+  modal.hidden = true;
+  modal.innerHTML =
+    '<div class="app-settings-mask" data-app-settings-close></div>' +
+    '<div class="app-settings-card" role="dialog" aria-modal="true" aria-labelledby="appSettingsTitle">' +
+      '<button type="button" class="app-settings-close" data-app-settings-close aria-label="关闭">×</button>' +
+      '<h2 id="appSettingsTitle">设置</h2>' +
+      '<p class="app-settings-sub">AI 能力与账号安全</p>' +
+      '<section class="app-settings-section">' +
+        '<h3>AI 大模型</h3>' +
+        '<p class="app-settings-hint">用于研报摘要与 AIHOT 英文翻译，全站共用这一份配置。兼容 OpenAI Chat Completions 协议：DeepSeek、通义千问、Kimi、智谱、OpenAI、本地 Ollama 等。</p>' +
+        '<label for="appSetBase">API Base URL</label>' +
+        '<input id="appSetBase" type="text" placeholder="https://api.deepseek.com/v1" autocomplete="off">' +
+        '<label for="appSetModel">模型名称</label>' +
+        '<input id="appSetModel" type="text" placeholder="deepseek-chat" autocomplete="off">' +
+        '<label for="appSetKey">API Key</label>' +
+        '<input id="appSetKey" type="password" placeholder="sk-..." autocomplete="off">' +
+        '<div class="app-settings-actions">' +
+          '<button type="button" class="btn btn-sm btn-ghost" id="appSetTest">测试连接</button>' +
+          '<button type="button" class="btn btn-sm btn-primary" id="appSetSave">保存</button>' +
+          '<span class="app-settings-msg" id="appSetMsg"></span>' +
+        '</div>' +
+      '</section>' +
+      '<section class="app-settings-section">' +
+        '<h3>账号安全</h3>' +
+        '<div class="app-settings-actions">' +
+          '<button type="button" class="btn btn-sm btn-ghost" id="appSetPassword">🔐 修改密码</button>' +
+        '</div>' +
+      '</section>' +
+    '</div>';
+
+  document.body.appendChild(modal);
+
+  modal.querySelectorAll('[data-app-settings-close]').forEach(function (el) {
+    el.addEventListener('click', closeAppSettings);
+  });
+  document.getElementById('appSetSave').addEventListener('click', appSettingsSave);
+  document.getElementById('appSetTest').addEventListener('click', appSettingsTest);
+  document.getElementById('appSetPassword').addEventListener('click', function () {
+    if (typeof window.openChangePasswordModal === 'function') {
+      closeAppSettings();
+      window.openChangePasswordModal();
+    } else {
+      appSettingsMsg('当前页面不支持修改密码。', 'err');
+    }
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !modal.hidden) closeAppSettings();
+  });
+
+  return modal;
+}
+
+function openAppSettings() {
+  var modal = ensureAppSettingsModal();
+  modal.hidden = false;
+  appSettingsLoad();
+}
+
+function closeAppSettings() {
+  var modal = document.getElementById('appSettingsModal');
+  if (modal) modal.hidden = true;
+}
+
+window.openAppSettings = openAppSettings;
+window.closeAppSettings = closeAppSettings;
