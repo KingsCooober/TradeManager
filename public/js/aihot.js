@@ -268,6 +268,279 @@
     applyReadSize();
   }
 
+  // ============================================================ 朗读（TTS）
+
+  var SPEAK_ICON = '🔊';
+  var SPEAK_LOADING = '⋯';
+  var SPEAK_PLAYING = '⏹';
+  var TTS_URL_CACHE_MAX = 80;
+  var SEL_TEXT_MAX = 600;
+
+  // 段落上的小喇叭：index 指向 data.blocks，kind 区分原文 / 译文
+  function speakButton(index, kind) {
+    var label = kind === 'trans' ? '朗读这段译文' : '朗读这段原文';
+    return '<button type="button" class="ah-speak" data-ah-speak-index="' + index +
+      '" data-ah-speak-kind="' + kind + '" title="' + label + '" aria-label="' + label + '">' + SPEAK_ICON + '</button>';
+  }
+
+  function detectLangClient(text) {
+    var value = String(text || '');
+    var cjk = (value.match(/[\u4e00-\u9fff]/g) || []).length;
+    var latin = (value.match(/[A-Za-z]/g) || []).length;
+    return cjk > latin ? 'zh' : 'en';
+  }
+
+  // 音色偏好由「设置」弹窗维护（header.js 提供，取不到就用默认值）
+  function ttsVoice(lang) {
+    if (typeof window.getTtsVoice === 'function') return window.getTtsVoice(lang);
+    return lang === 'zh' ? '茉莉' : 'Chloe';
+  }
+
+  var speakState = { audio: null, button: null, seq: 0 };
+  var ttsUrlCache = new Map();
+
+  function setSpeakButtonState(button, state) {
+    if (!button) return;
+    button.classList.toggle('is-loading', state === 'loading');
+    button.classList.toggle('is-playing', state === 'playing');
+    var glyph = state === 'loading' ? SPEAK_LOADING : state === 'playing' ? SPEAK_PLAYING : SPEAK_ICON;
+    var icon = button.querySelector('.ah-speak-icon');
+    if (icon) {
+      icon.textContent = glyph;
+      var label = button.querySelector('.ah-speak-label');
+      if (label) label.textContent = state === 'playing' ? '停止' : '朗读';
+    } else {
+      button.textContent = glyph;
+    }
+  }
+
+  function base64ToObjectUrl(base64, format) {
+    try {
+      var binary = window.atob(String(base64 || ''));
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      var type = format === 'wav' ? 'audio/wav' : 'audio/mpeg';
+      return URL.createObjectURL(new Blob([bytes], { type: type }));
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function cacheTtsUrl(key, url) {
+    while (ttsUrlCache.size >= TTS_URL_CACHE_MAX) {
+      var oldest = ttsUrlCache.keys().next().value;
+      var stale = ttsUrlCache.get(oldest);
+      ttsUrlCache.delete(oldest);
+      try { URL.revokeObjectURL(stale); } catch (e) { /* 忽略 */ }
+    }
+    ttsUrlCache.set(key, url);
+  }
+
+  // 同一时刻只播一条；再次点击正在播的按钮 = 停止
+  function stopSpeaking() {
+    speakState.seq += 1;
+    if (speakState.audio) {
+      try { speakState.audio.pause(); } catch (e) { /* 忽略 */ }
+      speakState.audio = null;
+    }
+    if (window.speechSynthesis) {
+      try { window.speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
+    }
+    if (speakState.button) setSpeakButtonState(speakState.button, 'idle');
+    speakState.button = null;
+  }
+
+  function playAudioUrl(url, button, seq) {
+    var audio = new Audio(url);
+    audio.addEventListener('ended', function () { if (speakState.seq === seq) stopSpeaking(); });
+    audio.addEventListener('error', function () { if (speakState.seq === seq) stopSpeaking(); });
+    speakState.audio = audio;
+    setSpeakButtonState(button, 'playing');
+    var played = audio.play();
+    if (played && played.catch) {
+      played.catch(function () { if (speakState.seq === seq) stopSpeaking(); });
+    }
+  }
+
+  // 服务端 TTS 不可用时的兜底：浏览器内置朗读
+  function speakWithBrowser(text, lang, button, seq) {
+    if (!window.speechSynthesis || typeof window.SpeechSynthesisUtterance !== 'function') {
+      setSpeakButtonState(button, 'idle');
+      speakState.button = null;
+      return;
+    }
+    var utterance = new window.SpeechSynthesisUtterance(text);
+    utterance.lang = lang === 'zh' ? 'zh-CN' : 'en-US';
+    utterance.onend = function () { if (speakState.seq === seq) stopSpeaking(); };
+    utterance.onerror = function () { if (speakState.seq === seq) stopSpeaking(); };
+    setSpeakButtonState(button, 'playing');
+    window.speechSynthesis.speak(utterance);
+  }
+
+  async function speak(text, lang, button) {
+    var value = String(text || '').trim();
+    if (!value) return;
+    if (speakState.button === button && button && button.classList.contains('is-playing')) {
+      stopSpeaking();
+      return;
+    }
+    stopSpeaking();
+    var seq = speakState.seq;
+    speakState.button = button;
+
+    var voice = ttsVoice(lang);
+    var cacheKey = voice + '\u0000' + value;
+    var cachedUrl = ttsUrlCache.get(cacheKey);
+    if (cachedUrl) {
+      playAudioUrl(cachedUrl, button, seq);
+      return;
+    }
+
+    setSpeakButtonState(button, 'loading');
+    try {
+      var data = await apiPost('/api/aihot/tts', { text: value, lang: lang, voice: voice });
+      if (speakState.seq !== seq) return;
+      var url = base64ToObjectUrl(data.audio, data.format);
+      if (!url) throw new Error('音频解析失败。');
+      cacheTtsUrl(cacheKey, url);
+      playAudioUrl(url, button, seq);
+    } catch (error) {
+      if (speakState.seq !== seq) return;
+      speakWithBrowser(value, lang, button, seq);
+    }
+  }
+
+  function handleSpeakClick(button) {
+    var panel = button.closest('.ah-article');
+    if (!panel) return;
+    var index = parseInt(button.getAttribute('data-ah-speak-index'), 10);
+    if (!Number.isFinite(index)) return;
+    var kind = button.getAttribute('data-ah-speak-kind') === 'trans' ? 'trans' : 'src';
+    var text = '';
+    if (kind === 'trans') {
+      text = (panel._translations && panel._translations[index]) || '';
+    } else if (panel._articleData && panel._articleData.blocks && panel._articleData.blocks[index]) {
+      text = panel._articleData.blocks[index].text || '';
+    }
+    if (!text) return;
+    speak(text, detectLangClient(text), button);
+  }
+
+  // ============================================================ 划词翻译气泡
+
+  var selBubble = null;
+  var selState = { text: '', lang: 'en', seq: 0 };
+
+  function ensureSelBubble() {
+    if (selBubble && document.body.contains(selBubble)) return selBubble;
+    selBubble = document.createElement('div');
+    selBubble.className = 'ah-sel-bubble';
+    selBubble.hidden = true;
+    selBubble.innerHTML =
+      '<div class="ah-sel-src"></div>' +
+      '<div class="ah-sel-trans"></div>' +
+      '<div class="ah-sel-actions">' +
+        '<button type="button" class="ah-sel-btn" data-ah-sel-speak>' +
+          '<span class="ah-speak-icon">' + SPEAK_ICON + '</span><span class="ah-speak-label">朗读</span>' +
+        '</button>' +
+        '<button type="button" class="ah-sel-btn ah-sel-close" data-ah-sel-close aria-label="关闭">✕</button>' +
+      '</div>';
+    document.body.appendChild(selBubble);
+
+    // 按下时不改变选区，否则选区一塌陷气泡就没了
+    selBubble.addEventListener('mousedown', function (event) { event.preventDefault(); });
+    selBubble.addEventListener('click', function (event) {
+      var target = event.target;
+      if (!target || typeof target.closest !== 'function') return;
+      if (target.closest('[data-ah-sel-close]')) { hideSelBubble(); return; }
+      var speakBtn = target.closest('[data-ah-sel-speak]');
+      if (speakBtn) speak(selState.text, selState.lang, speakBtn);
+    });
+    return selBubble;
+  }
+
+  function positionSelBubble(rect) {
+    if (!selBubble || selBubble.hidden || !rect) return;
+    var margin = 8;
+    var width = selBubble.offsetWidth;
+    var height = selBubble.offsetHeight;
+    var left = rect.left + rect.width / 2 - width / 2;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    var top = rect.top - height - margin;
+    if (top < margin) top = rect.bottom + margin;
+    if (top + height > window.innerHeight - margin) {
+      top = Math.max(margin, window.innerHeight - height - margin);
+    }
+    selBubble.style.left = Math.round(left) + 'px';
+    selBubble.style.top = Math.round(top) + 'px';
+  }
+
+  function hideSelBubble() {
+    if (!selBubble || selBubble.hidden) return;
+    selBubble.hidden = true;
+    selState.seq += 1;
+  }
+
+  function showSelBubble(rect, text) {
+    var bubble = ensureSelBubble();
+    var clipped = text.length > SEL_TEXT_MAX ? text.slice(0, SEL_TEXT_MAX) : text;
+    selState.text = clipped;
+    selState.lang = detectLangClient(clipped);
+
+    bubble.hidden = false;
+    bubble.querySelector('.ah-sel-src').textContent = clipped.length > 140 ? clipped.slice(0, 140) + '…' : clipped;
+    var transEl = bubble.querySelector('.ah-sel-trans');
+    transEl.textContent = '翻译中…';
+    transEl.className = 'ah-sel-trans is-loading';
+    positionSelBubble(rect);
+
+    var seq = ++selState.seq;
+    apiPost('/api/aihot/quick-translate', { text: clipped }).then(function (data) {
+      if (seq !== selState.seq) return;
+      transEl.textContent = data.translation || '（没有返回译文）';
+      transEl.className = 'ah-sel-trans';
+      positionSelBubble(rect);
+    }).catch(function (error) {
+      if (seq !== selState.seq) return;
+      transEl.textContent = error.message;
+      transEl.className = 'ah-sel-trans is-error';
+      positionSelBubble(rect);
+    });
+  }
+
+  function handleSelection(event) {
+    if (!event || !event.target) return;
+    if (selBubble && !selBubble.hidden && selBubble.contains(event.target)) return;
+    var selection = window.getSelection ? window.getSelection() : null;
+    if (!selection || selection.isCollapsed || !selection.rangeCount) { hideSelBubble(); return; }
+    var text = String(selection.toString() || '').replace(/\s+/g, ' ').trim();
+    if (!text) { hideSelBubble(); return; }
+    var node = selection.anchorNode;
+    var el = node && node.nodeType === 3 ? node.parentNode : node;
+    if (!el || typeof el.closest !== 'function' || !el.closest('.ah-article-body')) { hideSelBubble(); return; }
+    var rect = null;
+    try { rect = selection.getRangeAt(0).getBoundingClientRect(); } catch (e) { rect = null; }
+    if (!rect || (!rect.width && !rect.height)) { hideSelBubble(); return; }
+    showSelBubble(rect, text);
+  }
+
+  function bindSpeakEvents() {
+    var container = document.getElementById('ahContent');
+    if (!container || container.dataset.ahSpeakBound === '1') return;
+    container.dataset.ahSpeakBound = '1';
+    // 划词：mouseup 之后再取选区，等浏览器把选区定下来
+    container.addEventListener('mouseup', function (event) {
+      window.setTimeout(function () { handleSelection(event); }, 10);
+    });
+    container.addEventListener('touchend', function (event) {
+      window.setTimeout(function () { handleSelection(event); }, 150);
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') { hideSelBubble(); stopSpeaking(); }
+    });
+    window.addEventListener('scroll', hideSelBubble, true);
+  }
+
   function renderArticle(data, translations) {
     if (!data || !data.blocks || !data.blocks.length) {
       return '<div class="ah-article-note">未能从该页面提取到正文。</div>';
@@ -276,23 +549,26 @@
     var listBuffer = [];
     function flushList() {
       if (!listBuffer.length) return;
-      parts.push('<ul>' + listBuffer.map(function (text) {
-        return '<li>' + escapeHtml(text) + '</li>';
+      parts.push('<ul>' + listBuffer.map(function (item) {
+        return '<li>' + escapeHtml(item.text) + speakButton(item.index, 'src') + '</li>';
       }).join('') + '</ul>');
       listBuffer = [];
     }
     function pushTrans(index) {
       var text = translations && translations[index];
-      if (text) parts.push('<div class="ah-trans">' + escapeHtml(text) + '</div>');
+      if (!text) return;
+      parts.push('<div class="ah-trans">' + escapeHtml(text) + speakButton(index, 'trans') + '</div>');
     }
     data.blocks.forEach(function (block, index) {
-      if (block.type === 'li') { listBuffer.push(block.text); return; }
+      if (block.type === 'li') { listBuffer.push({ index: index, text: block.text }); return; }
       flushList();
-      if (/^h[1-6]$/.test(block.type)) parts.push('<h4 class="ah-article-h">' + escapeHtml(block.text) + '</h4>');
+      // 代码块与引文块不给朗读按钮（读代码没有意义）
+      var speaker = block.type === 'pre' || block.type === 'quote' ? '' : speakButton(index, 'src');
+      if (/^h[1-6]$/.test(block.type)) parts.push('<h4 class="ah-article-h">' + escapeHtml(block.text) + speaker + '</h4>');
       else if (block.type === 'quote') parts.push('<div class="ah-article-quote">' + escapeHtml(block.text) + '</div>');
-      else if (block.type === 'blockquote') parts.push('<blockquote>' + escapeHtml(block.text) + '</blockquote>');
+      else if (block.type === 'blockquote') parts.push('<blockquote>' + escapeHtml(block.text) + speaker + '</blockquote>');
       else if (block.type === 'pre') parts.push('<pre>' + escapeHtml(block.text) + '</pre>');
-      else parts.push('<p>' + escapeHtml(block.text) + '</p>');
+      else parts.push('<p>' + escapeHtml(block.text) + speaker + '</p>');
       pushTrans(index);
     });
     flushList();
@@ -352,6 +628,10 @@
     if (!panel || !panel._articleData) return;
     var data = panel._articleData;
 
+    // 面板即将重绘，先收掉正在播放的音频和划词气泡（旧按钮会失效）
+    stopSpeaking();
+    hideSelBubble();
+
     if (panel._translations) {
       panel._showTrans = !panel._showTrans;
       panel.innerHTML = renderArticle(data, panel._showTrans ? panel._translations : null);
@@ -382,6 +662,8 @@
     var card = button.closest('article');
     var panel = card ? card.querySelector('.ah-article') : null;
     if (!panel) return;
+    stopSpeaking();
+    hideSelBubble();
     if (!panel.hidden) {
       panel.hidden = true;
       button.textContent = '展开原文';
@@ -421,6 +703,12 @@
     container.addEventListener('click', function (event) {
       var target = event.target;
       if (!target || typeof target.closest !== 'function') return;
+      var speakBtn = target.closest('[data-ah-speak-index]');
+      if (speakBtn) {
+        event.preventDefault();
+        handleSpeakClick(speakBtn);
+        return;
+      }
       var fontBtn = target.closest('[data-ah-font]');
       if (fontBtn) {
         event.preventDefault();
@@ -581,6 +869,9 @@
       showAuthGate();
       return;
     }
+    // 列表要整体重绘，先收掉朗读与划词气泡
+    stopSpeaking();
+    hideSelBubble();
     state.requestId += 1;
     state.busy = false;
     var requestId = state.requestId;
@@ -653,6 +944,7 @@
     if (typeof window.renderAppHeader === 'function') window.renderAppHeader('aihot');
     openModalEvents();
     bindArticleEvents();
+    bindSpeakEvents();
     updateHeaderAuth();
 
     document.querySelectorAll('[data-ah-section]').forEach(function (button) {

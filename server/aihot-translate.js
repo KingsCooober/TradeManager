@@ -32,9 +32,17 @@ const MYMEMORY_GAP_MS = 250;
 const MAX_BLOCKS = 40;
 const MAX_TEXT_CHARS = 4000;
 const MAX_TOTAL_CHARS = 60000;
+// 划词翻译：单词、短语、短句都翻，不受 needsTranslation 的「够长才翻」限制
+const QUICK_MAX_CHARS = 600;
 
 const cache = new Map();
 let settingsCache = { at: 0, value: null };
+
+function trimCache() {
+  while (cache.size > CACHE_MAX_ENTRIES) {
+    cache.delete(cache.keys().next().value);
+  }
+}
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -410,6 +418,105 @@ async function translateWithFreeEngine(texts) {
   return out;
 }
 
+// ---------------------------------------------------------------- 划词翻译
+
+// 方向自动判定：汉字多于拉丁字母 → 中译英，否则英译中
+function detectDirection(text) {
+  const value = String(text || '');
+  const cjk = (value.match(/[\u4e00-\u9fff]/g) || []).length;
+  const latin = (value.match(/[A-Za-z]/g) || []).length;
+  return cjk > latin ? 'zh2en' : 'en2zh';
+}
+
+// 去掉模型可能加的外层包装：代码围栏、成对引号
+function stripWrapping(raw) {
+  let value = String(raw == null ? '' : raw).trim();
+  value = value.replace(/^\s*```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim();
+  if (value.length >= 2) {
+    const first = value.charAt(0);
+    const last = value.charAt(value.length - 1);
+    const pairs = [['"', '"'], ['“', '”'], ['「', '」'], ['『', '』'], ["'", "'"]];
+    for (const pair of pairs) {
+      if (first === pair[0] && last === pair[1]) {
+        value = value.slice(1, -1).trim();
+        break;
+      }
+    }
+  }
+  return value;
+}
+
+async function quickTranslateWithLlm(text, engine, direction) {
+  const target = direction === 'zh2en' ? '英文' : '简体中文';
+  const system = [
+    '你是专业译者。请把用户提供的文本翻译成' + target + '。',
+    '要求：',
+    '1. 只输出译文本身，不要原文、不要解释、不要用引号包裹、不要 markdown 代码块；',
+    '2. 专有名词、公司名、模型名、数字、代码片段、URL 保持原样；',
+    '3. 若输入是单词或短语，给出最常见、最自然的译法；',
+    '4. 译文通顺，符合目标语言的表达习惯。'
+  ].join('\n');
+
+  const data = await postJson(engine.base + '/chat/completions', { Authorization: 'Bearer ' + engine.key }, {
+    model: engine.model,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: text }
+    ],
+    temperature: 0.2,
+    stream: false
+  }, LLM_TIMEOUT_MS);
+
+  const choice = data && data.choices && data.choices[0];
+  const raw = choice && choice.message && choice.message.content;
+  if (!raw) throw new Error('模型未返回翻译内容。');
+  const value = stripWrapping(raw);
+  if (!value) throw new Error('模型返回了空译文。');
+  return value;
+}
+
+async function quickTranslateWithFreeEngine(text, direction) {
+  const pair = direction === 'zh2en' ? 'zh-CN|en' : 'en|zh-CN';
+  const parts = [];
+  for (const chunk of splitForFreeEngine(text)) {
+    const url = 'https://api.mymemory.translated.net/get?langpair=' + pair + '&q=' + encodeURIComponent(chunk);
+    const data = await getJson(url, MYMEMORY_TIMEOUT_MS);
+    const translated = data && data.responseData && data.responseData.translatedText;
+    if (!translated) throw new Error('免费翻译服务未返回结果（可能已达每日额度）。');
+    parts.push(String(translated));
+    await delay(MYMEMORY_GAP_MS);
+  }
+  return parts.join('');
+}
+
+// 划词翻译主流程：单词 / 短语 / 短句都能翻
+async function translateOne(text) {
+  const value = String(text == null ? '' : text).trim();
+  if (!value) throw new Error('没有可翻译的内容。');
+  const clipped = value.slice(0, QUICK_MAX_CHARS);
+  const direction = detectDirection(clipped);
+  const engine = await resolveEngine();
+  const key = 'quick\u0000' + direction + '\u0000' + engine.name + '\u0000' + clipped;
+
+  const hit = cache.get(key);
+  if (hit && hit.expiresAt > Date.now()) {
+    cache.delete(key);
+    cache.set(key, hit);
+    return { translation: hit.text, engine: engine.name, direction: direction, cached: true };
+  }
+
+  const translation = engine.name === 'llm'
+    ? await quickTranslateWithLlm(clipped, engine, direction)
+    : await quickTranslateWithFreeEngine(clipped, direction);
+
+  if (translation) {
+    cache.delete(key);
+    cache.set(key, { text: translation, expiresAt: Date.now() + CACHE_TTL_MS });
+    trimCache();
+  }
+  return { translation: translation, engine: engine.name, direction: direction, cached: false };
+}
+
 // ---------------------------------------------------------------- 对外主流程
 
 async function translateTexts(texts) {
@@ -455,9 +562,7 @@ async function translateTexts(texts) {
     cache.delete(key);
     cache.set(key, { text: translations[index], expiresAt: Date.now() + CACHE_TTL_MS });
   }
-  while (cache.size > CACHE_MAX_ENTRIES) {
-    cache.delete(cache.keys().next().value);
-  }
+  trimCache();
 
   return { engine: engine.name, translations, cached: false, failed: result.failed, total: pendingTexts.length };
 }
@@ -486,6 +591,23 @@ function mount(app, auth) {
       res.status(502).json({ error: '翻译失败：' + (error.message || '请稍后重试。') });
     }
   });
+
+  // 划词翻译：单条文本（单词/短语/短句都行），方向自动判定
+  app.post('/api/aihot/quick-translate', auth.authMiddleware, async (req, res) => {
+    const body = req.body || {};
+    const text = String(body.text == null ? '' : body.text);
+    if (!text.trim()) return res.status(400).json({ error: '没有可翻译的内容。' });
+    if (text.length > QUICK_MAX_CHARS * 4) return res.status(413).json({ error: '选中的内容过长，请缩短后再试。' });
+
+    try {
+      const result = await translateOne(text);
+      res.set('Cache-Control', 'private, no-store');
+      res.json(result);
+    } catch (error) {
+      console.error('[aihot] 划词翻译失败:', error.message);
+      res.status(502).json({ error: '翻译失败：' + (error.message || '请稍后重试。') });
+    }
+  });
 }
 
-module.exports = { mount, translateTexts, needsTranslation, resolveEngine };
+module.exports = { mount, translateTexts, translateOne, needsTranslation, resolveEngine, getAiSettings };

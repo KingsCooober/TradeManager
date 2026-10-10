@@ -208,6 +208,10 @@ function appSettingsStyles() {
     '.app-settings-hint{margin:0 0 12px;color:var(--text-tertiary,#999);font-size:12px;line-height:1.7}',
     '.app-settings-card label{display:block;margin:10px 0 5px;color:var(--text-secondary,#666);font-size:12px}',
     '.app-settings-card input{width:100%;box-sizing:border-box;min-height:40px;padding:0 12px;border:1px solid var(--border-input,#ddd);border-radius:8px;background:var(--bg-input,#fff);color:var(--text-primary,#222);font:inherit;font-size:13px}',
+    '.app-settings-card select{width:100%;box-sizing:border-box;min-height:40px;padding:0 12px;border:1px solid var(--border-input,#ddd);border-radius:8px;background:var(--bg-input,#fff);color:var(--text-primary,#222);font:inherit;font-size:13px}',
+    '.app-settings-inline{display:flex;align-items:center;gap:8px}',
+    '.app-settings-inline select{flex:1 1 auto;min-width:0}',
+    '.app-settings-inline .btn{flex:0 0 auto;white-space:nowrap}',
     '.app-settings-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:16px}',
     '.app-settings-msg{color:var(--text-tertiary,#999);font-size:12px}',
     '.app-settings-msg.is-ok{color:var(--color-teal,#0f6e56)}',
@@ -216,6 +220,53 @@ function appSettingsStyles() {
   ].join('');
   document.head.appendChild(style);
 }
+
+// ===== 朗读音色（AIHOT 划词 / 段落小喇叭共用）=====
+// 音色来自小米 MiMo TTS（mimo-v2.5-tts），偏好存本地，请求时带给后端。
+var TTS_VOICES = {
+  en: [
+    { id: 'Chloe', label: 'Chloe · 女声' },
+    { id: 'Mia', label: 'Mia · 女声' },
+    { id: 'Milo', label: 'Milo · 男声' },
+    { id: 'Dean', label: 'Dean · 男声' },
+    { id: 'mimo_default', label: '默认音色' }
+  ],
+  zh: [
+    { id: '茉莉', label: '茉莉 · 女声' },
+    { id: '冰糖', label: '冰糖 · 女声' },
+    { id: '苏打', label: '苏打 · 男声' },
+    { id: '白桦', label: '白桦 · 男声' },
+    { id: 'mimo_default', label: '默认音色' }
+  ]
+};
+var TTS_VOICE_DEFAULT = { en: 'Chloe', zh: '茉莉' };
+var TTS_PREVIEW_TEXT = {
+  en: 'Hello, this is how the English voice sounds.',
+  zh: '你好，这是中文音色的试听效果。'
+};
+
+function ttsVoiceKey(lang) {
+  return lang === 'zh' ? 'zh' : 'en';
+}
+
+function getTtsVoice(lang) {
+  var key = ttsVoiceKey(lang);
+  var saved = '';
+  try { saved = localStorage.getItem('ah_voice_' + key) || ''; } catch (e) { saved = ''; }
+  var list = TTS_VOICES[key] || [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].id === saved) return saved;
+  }
+  return TTS_VOICE_DEFAULT[key];
+}
+
+function setTtsVoice(lang, voice) {
+  try { localStorage.setItem('ah_voice_' + ttsVoiceKey(lang), String(voice || '')); } catch (e) { /* 忽略 */ }
+}
+
+window.getTtsVoice = getTtsVoice;
+window.setTtsVoice = setTtsVoice;
+window.TTS_VOICES = TTS_VOICES;
 
 function appSettingsMsg(text, kind) {
   var el = document.getElementById('appSetMsg');
@@ -291,6 +342,76 @@ function appSettingsTest() {
   });
 }
 
+// ---------- 朗读音色 ----------
+
+function appSettingsVoiceMsg(text, kind) {
+  var el = document.getElementById('appSetVoiceMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'app-settings-msg' + (kind === 'ok' ? ' is-ok' : kind === 'err' ? ' is-err' : '');
+}
+
+function appSettingsFillVoices() {
+  ['en', 'zh'].forEach(function (lang) {
+    var select = document.getElementById(lang === 'zh' ? 'appSetVoiceZh' : 'appSetVoiceEn');
+    if (!select) return;
+    var current = getTtsVoice(lang);
+    select.innerHTML = TTS_VOICES[lang].map(function (voice) {
+      return '<option value="' + voice.id + '">' + voice.label + '</option>';
+    }).join('');
+    select.value = current;
+    select.addEventListener('change', function () {
+      setTtsVoice(lang, select.value);
+      appSettingsVoiceMsg('已保存：' + (lang === 'zh' ? '中文' : '英文') + ' → ' + select.value, 'ok');
+    });
+  });
+}
+
+function appSettingsBase64Url(base64, format) {
+  try {
+    var binary = window.atob(String(base64 || ''));
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return URL.createObjectURL(new Blob([bytes], { type: format === 'wav' ? 'audio/wav' : 'audio/mpeg' }));
+  } catch (e) {
+    return '';
+  }
+}
+
+var appSettingsPreviewAudio = null;
+
+async function appSettingsPreview(lang, button) {
+  var select = document.getElementById(lang === 'zh' ? 'appSetVoiceZh' : 'appSetVoiceEn');
+  var voice = select ? select.value : getTtsVoice(lang);
+  if (appSettingsPreviewAudio) {
+    try { appSettingsPreviewAudio.pause(); } catch (e) { /* 忽略 */ }
+    appSettingsPreviewAudio = null;
+  }
+  if (button) button.disabled = true;
+  appSettingsVoiceMsg('合成中…（首次约 2 秒）', '');
+  try {
+    var data = await appSettingsFetch('POST', '/api/aihot/tts', {
+      text: TTS_PREVIEW_TEXT[lang],
+      lang: lang,
+      voice: voice
+    });
+    var url = appSettingsBase64Url(data.audio, data.format);
+    if (!url) throw new Error('音频解析失败。');
+    var audio = new Audio(url);
+    appSettingsPreviewAudio = audio;
+    audio.addEventListener('ended', function () {
+      try { URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ }
+      appSettingsPreviewAudio = null;
+    });
+    await audio.play();
+    appSettingsVoiceMsg('正在试听：' + voice, 'ok');
+  } catch (error) {
+    appSettingsVoiceMsg(error.message, 'err');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function ensureAppSettingsModal() {
   appSettingsStyles();
   var modal = document.getElementById('appSettingsModal');
@@ -322,6 +443,23 @@ function ensureAppSettingsModal() {
         '</div>' +
       '</section>' +
       '<section class="app-settings-section">' +
+        '<h3>朗读音色</h3>' +
+        '<p class="app-settings-hint">AIHOT 文章里划词、点段落小喇叭时用的发音音色（小米 MiMo TTS）。</p>' +
+        '<label for="appSetVoiceEn">英文音色</label>' +
+        '<div class="app-settings-inline">' +
+          '<select id="appSetVoiceEn"></select>' +
+          '<button type="button" class="btn btn-sm btn-ghost" data-tts-preview="en">🔊 试听</button>' +
+        '</div>' +
+        '<label for="appSetVoiceZh">中文音色</label>' +
+        '<div class="app-settings-inline">' +
+          '<select id="appSetVoiceZh"></select>' +
+          '<button type="button" class="btn btn-sm btn-ghost" data-tts-preview="zh">🔊 试听</button>' +
+        '</div>' +
+        '<div class="app-settings-actions">' +
+          '<span class="app-settings-msg" id="appSetVoiceMsg"></span>' +
+        '</div>' +
+      '</section>' +
+      '<section class="app-settings-section">' +
         '<h3>账号安全</h3>' +
         '<div class="app-settings-actions">' +
           '<button type="button" class="btn btn-sm btn-ghost" id="appSetPassword">🔐 修改密码</button>' +
@@ -336,6 +474,12 @@ function ensureAppSettingsModal() {
   });
   document.getElementById('appSetSave').addEventListener('click', appSettingsSave);
   document.getElementById('appSetTest').addEventListener('click', appSettingsTest);
+  appSettingsFillVoices();
+  modal.querySelectorAll('[data-tts-preview]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      appSettingsPreview(button.getAttribute('data-tts-preview'), button);
+    });
+  });
   document.getElementById('appSetPassword').addEventListener('click', function () {
     if (typeof window.openChangePasswordModal === 'function') {
       closeAppSettings();
@@ -354,6 +498,7 @@ function ensureAppSettingsModal() {
 function openAppSettings() {
   var modal = ensureAppSettingsModal();
   modal.hidden = false;
+  appSettingsVoiceMsg('');
   appSettingsLoad();
 }
 

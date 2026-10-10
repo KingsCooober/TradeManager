@@ -70,6 +70,27 @@
 .ah-read-size button { min-width:30px; min-height:26px; padding:0 7px; border:1px solid var(--border-card); border-radius:6px; background:var(--bg-card); color:var(--text-secondary); font:inherit; font-size:12px; cursor:pointer; }
 .ah-read-size button:hover { border-color:var(--border-input); color:var(--text-primary); }
 .ah-trans { max-width:74ch; margin:-.2em 0 1.15em; padding:10px 14px; border-left:3px solid color-mix(in srgb,var(--color-teal) 35%,transparent); border-radius:0 8px 8px 0; background:color-mix(in srgb,var(--color-teal) 5%,var(--bg-card)); color:var(--text-primary); font-family:'LXGW WenKai','Kaiti SC','KaiTi','Songti SC','SimSun','PingFang SC','Microsoft YaHei',serif; font-size:.88em; line-height:1.85; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* 朗读小喇叭：平时淡出，悬停该段或键盘聚焦时才显形，不干扰阅读 */
+.ah-speak { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; margin-left:6px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--text-tertiary); font-size:13px; line-height:1; vertical-align:middle; cursor:pointer; opacity:0; transition:opacity .15s ease,background .15s ease,color .15s ease; }
+.ah-article-body p:hover > .ah-speak,.ah-article-body li:hover > .ah-speak,.ah-article-body h4:hover > .ah-speak,.ah-article-body blockquote:hover > .ah-speak,.ah-trans:hover > .ah-speak,.ah-speak:focus-visible { opacity:1; }
+.ah-speak:hover { background:var(--bg-hover); color:var(--text-primary); }
+.ah-speak.is-loading { opacity:1; color:var(--text-tertiary); }
+.ah-speak.is-playing { opacity:1; background:color-mix(in srgb,var(--color-teal) 14%,transparent); color:var(--color-teal); }
+@media (hover:none) { .ah-speak { opacity:.5; } }
+
+/* 划词翻译气泡 */
+.ah-sel-bubble { position:fixed; z-index:1300; width:min(360px,calc(100vw - 24px)); padding:11px 13px; border:1px solid var(--border-card); border-radius:11px; background:var(--bg-card); color:var(--text-primary); box-shadow:0 10px 30px rgba(0,0,0,.18); }
+.ah-sel-bubble[hidden] { display:none; }
+.ah-sel-src { color:var(--text-secondary); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
+.ah-sel-trans { margin-top:7px; padding-top:7px; border-top:1px dashed var(--border-divider); color:var(--text-primary); font-family:'LXGW WenKai','Kaiti SC','KaiTi','Songti SC','SimSun','PingFang SC','Microsoft YaHei',serif; font-size:14px; line-height:1.7; overflow-wrap:anywhere; }
+.ah-sel-trans.is-loading { color:var(--text-tertiary); }
+.ah-sel-trans.is-error { color:var(--color-red); font-family:inherit; font-size:12px; }
+.ah-sel-actions { display:flex; align-items:center; gap:8px; margin-top:9px; }
+.ah-sel-btn { display:inline-flex; align-items:center; gap:5px; min-height:26px; padding:0 9px; border:1px solid var(--border-card); border-radius:7px; background:var(--bg-card); color:var(--text-secondary); font:inherit; font-size:12px; cursor:pointer; }
+.ah-sel-btn:hover { border-color:var(--border-input); color:var(--text-primary); }
+.ah-sel-btn.is-playing { border-color:color-mix(in srgb,var(--color-teal) 45%,transparent); color:var(--color-teal); }
+.ah-sel-close { margin-left:auto; padding:0 8px; }
 .ah-article-note { color:var(--text-tertiary); font-size:12px; line-height:1.8; }
 .ah-article-note.is-error { color:var(--color-red); }
 .ah-article-note + .ah-article-note { margin-top:6px; }

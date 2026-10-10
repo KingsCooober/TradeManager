@@ -3,6 +3,7 @@
 const https = require('https');
 const article = require('./aihot-article');
 const translate = require('./aihot-translate');
+const tts = require('./aihot-tts');
 
 const API_BASE = 'https://aihot.news/api/v1';
 const CACHE_MAX_ENTRIES = 64;
@@ -204,6 +205,9 @@ function mount(app, auth) {
 
   // 英文正文段落级翻译：有 API Key 走大模型，否则降级免费接口
   translate.mount(app, auth);
+
+  // 朗读（TTS）：走 MiMo 的 /chat/completions + audio 字段
+  tts.mount(app, auth);
 }
 
 module.exports = { mount, getCachedJson, cacheTtl };
