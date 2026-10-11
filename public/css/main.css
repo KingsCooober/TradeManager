@@ -455,56 +455,8 @@ body {
   50% { opacity: 0.4; }
 }
 
-/* ===== 页面引导提示条 ===== */
-.page-intro {
-  background: linear-gradient(90deg, var(--bg-subtle), var(--bg-card));
-  border-bottom: 1px solid var(--border-divider);
-  padding: 10px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-.page-intro-text {
-  line-height: 1.6;
-}
-.page-intro-text strong {
-  color: var(--text-primary);
-  font-size: 14px;
-  margin-right: 4px;
-}
-.page-intro-hint {
-  color: var(--text-tertiary);
-  font-size: 12px;
-  margin-left: 4px;
-}
-.page-intro-steps {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-.page-intro-step {
-  padding: 3px 9px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-input);
-  border-radius: 14px;
-  white-space: nowrap;
-  color: var(--text-secondary);
-}
-.page-intro-step-arrow {
-  color: var(--color-blue);
-  font-weight: 600;
-}
-@media (max-width: 768px) {
-  .page-intro { padding: 8px 12px; }
-  .page-intro-text { font-size: 12px; }
-  .page-intro-steps { font-size: 10px; gap: 4px; }
-  .page-intro-step { padding: 2px 7px; }
-}
+/* 页面引导提示条（.page-intro*）已随 banner 移除而删除——
+   各页面不再显示顶部引导横幅 */
 
 /* ===== 今日仪表盘小卡片 ===== */
 .today-dashboard {
@@ -881,6 +833,22 @@ h2 {
   box-shadow: 0 0 0 3.5px rgba(67,97,238,0.10), 0 2px 8px rgba(67,97,238,0.08);
   transform: translateY(-1px);
 }
+
+/* ===== 输入框错误态（全站统一）=====
+   校验失败时给输入框挂 .input-error（红边 + 浅红底），
+   修正后摘除。此前校验失败只闪一个 toast，用户不知道哪个字段有问题。
+   适用任意 input/select/textarea，不限于 .field 内。 */
+.input-error,
+.field input.input-error,
+.modal-field input.input-error {
+  border-color: var(--color-red) !important;
+  background: rgba(239, 71, 111, 0.06) !important;
+}
+.input-error:focus {
+  box-shadow: 0 0 0 3.5px rgba(239, 71, 111, 0.14) !important;
+}
+
+/* ===== 输入错误清理辅助：输入时自动摘除错误态（JS 部分见 ui.js） ===== */
 
 .field .val {
   font-size: 13px;

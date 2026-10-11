@@ -774,7 +774,10 @@ function saveDiaryRecord(event) {
   };
   
   if (!record.tradeDate || !record.symbol) {
-    showToast('请填写必填字段', 'error');
+    // 错误态标到具体输入框（红边），用户能直接看到缺哪个字段
+    if (!record.tradeDate) markInputError(document.getElementById('diaryDate'));
+    if (!record.symbol) markInputError(document.getElementById('diarySymbol'));
+    showToast('请填写必填字段（日期、品种）', 'error');
     return;
   }
   

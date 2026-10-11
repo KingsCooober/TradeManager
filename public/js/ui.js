@@ -257,6 +257,32 @@ window.showToast = showToast;
 window.showConfirm = showConfirm;
 window.alertDialog = alertDialog;
 
+// ===== 输入框错误态辅助（配合 main.css 的 .input-error）=====
+// 用法：校验失败时 markInputError(el 或 id, '提示文案')；成功时 clearInputError(el)。
+// 挂上错误态后，用户一输入即自动摘除（下方事件委托），无需手动清理时序。
+function markInputError(target, message) {
+  var el = typeof target === 'string' ? document.getElementById(target) : target;
+  if (!el) return;
+  el.classList.add('input-error');
+  if (message) showToast(message, 'error');
+}
+
+function clearInputError(target) {
+  var el = typeof target === 'string' ? document.getElementById(target) : target;
+  if (!el) return;
+  el.classList.remove('input-error');
+}
+
+// 输入即清理错误态（一次性全局委托）
+(function __installInputErrorAutoClear() {
+  document.addEventListener('input', function (e) {
+    var t = e.target;
+    if (t && t.classList && t.classList.contains('input-error')) {
+      t.classList.remove('input-error');
+    }
+  });
+})();
+
 // ===== 弹窗开关统一辅助（全站 .modal-overlay 只用 classList('show') 一种机制）=====
 // ★ 背景：index.html 曾有 11 个弹窗用 style.display='flex'/'none'，
 //   唯独 equityModal 用 classList('show')（charts.js），两套机制在 CSS 上互斥
@@ -269,6 +295,7 @@ function openModalOverlay(id) {
   if (!el) return;
   el.classList.add('show');
   el.style.removeProperty('display'); // 清除旧机制残留的内联 display
+  __uiSetModalOpen(el, true);
 }
 
 function closeModalOverlay(id) {
@@ -276,6 +303,78 @@ function closeModalOverlay(id) {
   if (!el) return;
   el.classList.remove('show');
   el.style.removeProperty('display');
+  __uiSetModalOpen(el, false);
+}
+
+// ===== 焦点陷阱 + body 滚动锁定（自 daily-review.js 的 setupDRFocusTrap 提升为全站组件）=====
+// 原实现仅在 daily-review 页生效；现挂到 openModalOverlay/closeModalOverlay 上，
+// 走统一开关机制的弹窗自动获得：Tab 循环、打开聚焦、关闭归还焦点、背景滚动锁定。
+var __uiLastFocused = null;
+var __uiFocusTrapHandler = null;
+var __uiModalOpenCount = 0;
+
+function __uiSetModalOpen(modalEl, opening) {
+  if (opening) {
+    __uiModalOpenCount++;
+    __uiSetupFocusTrap(modalEl);
+  } else {
+    __uiModalOpenCount = Math.max(0, __uiModalOpenCount - 1);
+    __uiTeardownFocusTrap(modalEl);
+  }
+  // body 滚动锁定：仅当"没有弹窗打开"时解锁（支持叠开场景）
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.style.overflow = (__uiModalOpenCount > 0) ? 'hidden' : '';
+  }
+}
+
+function __uiSetupFocusTrap(modalEl) {
+  if (!modalEl || modalEl.__uiFocusTrap) return;
+  modalEl.__uiFocusTrap = true;
+
+  // 记录触发元素，关闭时归还
+  __uiLastFocused = document.activeElement;
+
+  // 焦点移入弹窗（优先第一个可聚焦元素，其次弹窗本身）
+  setTimeout(function () {
+    if (!modalEl.classList.contains('show')) return; // 可能已被关闭
+    var focusable = modalEl.querySelector('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    if (focusable) focusable.focus();
+    else modalEl.focus();
+  }, 50);
+
+  // 移除旧处理器（叠开时只保留最上层弹窗的陷阱）
+  if (__uiFocusTrapHandler) {
+    document.removeEventListener('keydown', __uiFocusTrapHandler);
+    __uiFocusTrapHandler = null;
+  }
+
+  // Tab 循环：焦点困在弹窗内，不会逃逸到背景
+  __uiFocusTrapHandler = function (e) {
+    if (e.key !== 'Tab' || !modalEl.classList.contains('show')) return;
+    var focusables = modalEl.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    if (focusables.length === 0) return;
+    var first = focusables[0];
+    var last = focusables[focusables.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
+  document.addEventListener('keydown', __uiFocusTrapHandler);
+}
+
+function __uiTeardownFocusTrap(modalEl) {
+  if (modalEl && modalEl.__uiFocusTrap) modalEl.__uiFocusTrap = false;
+  if (__uiFocusTrapHandler) {
+    document.removeEventListener('keydown', __uiFocusTrapHandler);
+    __uiFocusTrapHandler = null;
+  }
+  // 归还焦点到打开弹窗前的元素
+  if (__uiLastFocused && typeof __uiLastFocused.focus === 'function') {
+    try { __uiLastFocused.focus(); } catch (e) { /* 元素可能已移除 */ }
+    __uiLastFocused = null;
+  }
 }
 
 // Esc 关闭当前打开的弹窗（index 页此前无任何键盘关闭路径）。
@@ -292,7 +391,6 @@ function closeModalOverlay(id) {
     clearConfirmModal: 'closeClearConfirm',
     loginModal: 'closeLoginModal',
     changePasswordModal: 'closeChangePasswordModal',
-    deleteConfirmModal: 'closeDeleteConfirmModal',
     equityModal: 'closeEquityModal'
   };
   document.addEventListener('keydown', function (e) {

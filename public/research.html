@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="description" content="研报库 - 订阅式抓取公开研报、AI 摘要要点、划词高亮与批注、按行业标签归档">
 <title>研报库 - Trade Manager</title>
-<link rel="stylesheet" href="css/main.css?v=18">
+<link rel="stylesheet" href="css/main.css?v=20">
 <style>
   /* 研报库页专用样式（独立内联，避免污染 main.css）
      研报库本身是独立的 Python 服务（/research/），这里用 iframe 内嵌，
@@ -40,23 +40,6 @@
 <body class="research-page">
 
 <header class="app-header" id="appHeader"></header>
-
-<!-- ===== 页面引导提示 ===== -->
-<div class="page-intro">
-  <div class="page-intro-text">
-    <strong>📑 研报库</strong> — 订阅式自动获取公开研报，AI 提炼核心观点，划词高亮与批注，按行业 / 标签归档。
-    <span class="page-intro-hint">研报库随交易台自动启动，本页内嵌展示；批量删除在左侧列表工具栏的「🗑 批量」。</span>
-  </div>
-  <div class="page-intro-steps">
-    <span class="page-intro-step">① 研报抓取 / 订阅</span>
-    <span class="page-intro-step-arrow">→</span>
-    <span class="page-intro-step">② 阅读与高亮</span>
-    <span class="page-intro-step-arrow">→</span>
-    <span class="page-intro-step">③ AI 摘要要点</span>
-    <span class="page-intro-step-arrow">→</span>
-    <span class="page-intro-step">④ 归档与导出</span>
-  </div>
-</div>
 
 <!-- ===== 研报库内嵌区 ===== -->
 <div class="rs-frame-wrap">

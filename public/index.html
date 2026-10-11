@@ -4,29 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Trade Manager - 交易管理</title>
-<link rel="stylesheet" href="css/main.css?v=18">
+<link rel="stylesheet" href="css/main.css?v=20">
 </head>
 <body>
 
 <!-- ===== 顶部导航栏 ===== -->
 <header class="app-header" id="appHeader"></header>
-
-<!-- ===== 页面引导提示 ===== -->
-<div class="page-intro">
-  <div class="page-intro-text">
-    <strong>📊 交易管理</strong> — 实时记录开仓 / 平仓，自动计算仓位与盈亏。
-    <span class="page-intro-hint">盘后请到「📋 每日复盘」做总结，单笔深度分析见「📖 复盘总结」。</span>
-  </div>
-  <div class="page-intro-steps">
-    <span class="page-intro-step">① 设置账户参数</span>
-    <span class="page-intro-step-arrow">→</span>
-    <span class="page-intro-step">② 计算器算仓位</span>
-    <span class="page-intro-step-arrow">→</span>
-    <span class="page-intro-step">③ 添加到交易记录</span>
-    <span class="page-intro-step-arrow">→</span>
-    <span class="page-intro-step">④ 平仓时回填盈亏</span>
-  </div>
-</div>
 
 <!-- ===== 今日仪表盘小卡片 ===== -->
 <div class="today-dashboard" id="todayDashboard">
@@ -649,22 +632,7 @@
   </div>
 </div>
 
-<!-- ===== 删除确认弹窗 ===== -->
-<div id="deleteConfirmModal" class="modal-overlay">
-  <div class="modal-content" style="max-width: 400px;">
-    <h3 style="color:var(--color-red)">🗑️ 确认删除</h3>
-    <p style="color:var(--text-secondary);margin-bottom: 16px;">确定要删除这条交易记录吗？此操作不可撤销。</p>
-    <div id="deleteTradeInfo" style="background: var(--bg-subtle); padding: 12px; border-radius: var(--radius-sm); margin-bottom: 16px; font-size: 13px;">
-      <div>品种: <span id="deleteSymbol">-</span></div>
-      <div>方向: <span id="deleteDir">-</span></div>
-      <div>入场价: <span id="deleteEntry">-</span></div>
-    </div>
-    <div class="modal-buttons">
-      <button class="btn btn-danger" style="flex:1" onclick="confirmDeleteTrade()">确认删除</button>
-      <button class="btn btn-gray" style="flex:1" onclick="closeDeleteConfirmModal()">取消</button>
-    </div>
-  </div>
-</div>
+<!-- 删除确认弹窗已移除：统一走 ui.js 的 showConfirm（见 table.js openDeleteConfirm） -->
 
 <!-- ===== 管理员面板弹窗 ===== -->
 <div id="adminPanel" class="modal-overlay admin-panel">
@@ -787,15 +755,15 @@
 <!-- 模块化 JS -->
 <script src="js/utils.js?v=9"></script>
 <script src="js/header.js?v=11"></script>
-<script src="js/ui.js?v=2"></script>
+<script src="js/ui.js?v=3"></script>
 <script src="js/database.js?v=5"></script>
 <script src="js/sync.js?v=12"></script>
 <script src="js/store.js?v=2"></script>
 <script src="js/storage.js?v=10"></script>
-<script src="js/calculator.js?v=9"></script>
-<script src="js/table.js?v=22"></script>
+<script src="js/calculator.js?v=10"></script>
+<script src="js/table.js?v=23"></script>
 <script src="js/charts.js?v=7"></script>
-<script src="js/main.js?v=21"></script>
+<script src="js/main.js?v=22"></script>
 <script src="js/custom-select.js?v=3"></script>
 <script>
 function toggleSyncPanel() {

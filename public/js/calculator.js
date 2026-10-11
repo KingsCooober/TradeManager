@@ -63,113 +63,14 @@ function setBuyType(buyType) {
       opt.classList.add('selected');
     }
   });
-  
+
   calcPosition();
 }
 
-// 初始化自定义下拉框
-function initCustomSelect() {
-  var selectEl = document.getElementById('buyTypeSelect');
-  var optionsEl = document.getElementById('buyTypeOptions');
-  var options = optionsEl ? optionsEl.querySelectorAll('li') : [];
-  var selectedIndex = 0;
-  
-  // 点击下拉框展开/收起
-  if (selectEl) {
-    selectEl.addEventListener('click', function(e) {
-      e.stopPropagation();
-      toggleSelect();
-    });
-  }
-  
-  // 点击选项
-  options.forEach(function(option, index) {
-    option.addEventListener('click', function(e) {
-      e.stopPropagation();
-      var value = this.dataset.value;
-      setBuyType(value);
-      closeSelect();
-    });
-    
-    // 鼠标悬停时更新选中索引（用于键盘导航）
-    option.addEventListener('mouseenter', function() {
-      selectedIndex = index;
-    });
-  });
-  
-  // 键盘操作
-  if (selectEl) {
-    selectEl.addEventListener('keydown', function(e) {
-      switch (e.key) {
-        case 'ArrowDown':
-          e.preventDefault();
-          selectedIndex = Math.min(selectedIndex + 1, options.length - 1);
-          updateSelectedHighlight();
-          // 如果下拉框未展开，自动展开
-          if (!optionsEl.classList.contains('open')) {
-            openSelect();
-          }
-          break;
-        case 'ArrowUp':
-          e.preventDefault();
-          selectedIndex = Math.max(selectedIndex - 1, 0);
-          updateSelectedHighlight();
-          break;
-        case 'Enter':
-          e.preventDefault();
-          if (optionsEl.classList.contains('open')) {
-            // 确认选择
-            options[selectedIndex].click();
-          } else {
-            openSelect();
-          }
-          break;
-        case 'Escape':
-          e.preventDefault();
-          closeSelect();
-          break;
-      }
-    });
-  }
-  
-  // 点击外部关闭下拉框
-  document.addEventListener('click', function(e) {
-    if (!e.target.closest('.custom-select-wrapper')) {
-      closeSelect();
-    }
-  });
-  
-  function toggleSelect() {
-    if (optionsEl.classList.contains('open')) {
-      closeSelect();
-    } else {
-      openSelect();
-    }
-  }
-  
-  function openSelect() {
-    selectEl.classList.add('open');
-    optionsEl.classList.add('open');
-    // 聚焦到下拉框以便键盘操作
-    selectEl.focus();
-  }
-  
-  function closeSelect() {
-    selectEl.classList.remove('open');
-    optionsEl.classList.remove('open');
-  }
-  
-  function updateSelectedHighlight() {
-    options.forEach(function(opt, index) {
-      opt.classList.remove('hover-highlight');
-      if (index === selectedIndex) {
-        opt.classList.add('hover-highlight');
-        // 滚动到可见区域
-        opt.scrollIntoView({ block: 'nearest' });
-      }
-    });
-  }
-}
+// 注：此处原有第二个 initCustomSelect()（无参版，100 行）——
+//     它被下方带参版同名覆盖、从未生效，已作为死代码删除。
+//     calculator 的下拉是手写 div/ul 结构（非原生 select），
+//     迁移到 custom-select.js 的 upgradeSelectToCustom 需改 DOM，留待后续。
 
 // 设置方向
 function setDirection(dir) {
@@ -447,6 +348,9 @@ function confirmAddTradeFromCalc() {
   var entry = parseFloat(calcEntryEl.value);
   var stop = parseFloat(calcStopEl.value);
   if (!entry || !stop) {
+    // 错误态标到具体输入框（红边），用户能直接看到缺哪个字段
+    if (!entry) markInputError(calcEntryEl);
+    if (!stop) markInputError(calcStopEl);
     showToast('请填写入场价和止损价', 'error');
     return;
   }
@@ -597,6 +501,8 @@ function buildTradeFromCalc() {
   var entry = parseFloat(calcEntryEl.value);
   var stop = parseFloat(calcStopEl.value);
   if (!entry || !stop) {
+    if (!entry) markInputError(calcEntryEl);
+    if (!stop) markInputError(calcStopEl);
     showToast('请填写入场价和止损价', 'error');
     return null;
   }

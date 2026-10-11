@@ -37,44 +37,39 @@ function getExitTypeSelect(trade) {
   return html;
 }
 
-var pendingDeleteTradeId = null;
-
+// ★ 删除确认已统一到 ui.js 的 showConfirm（原先用页面内 deleteConfirmModal，
+//   与 showConfirm 功能完全重复——双确认弹窗体系已合并为一条通道）
 function openDeleteConfirm(id, symbol, dir, entry) {
-  pendingDeleteTradeId = id;
-  
-  document.getElementById('deleteSymbol').textContent = symbol || '-';
-  document.getElementById('deleteDir').textContent = dir || '-';
-  document.getElementById('deleteEntry').textContent = entry || '-';
-  
-  openModalOverlay('deleteConfirmModal');
+  showConfirm({
+    title: '删除交易',
+    message: '确定删除 ' + (symbol || '该交易') +
+      (dir ? '（' + dir + (entry ? ' @ ' + entry : '') + '）' : '') + '？此操作不可撤销。',
+    type: 'warning',
+    confirmText: '删除'
+  }).then(function (ok) {
+    if (!ok) return;
+    __executeDeleteTrade(id);
+  });
 }
 
-function closeDeleteConfirmModal() {
-  pendingDeleteTradeId = null;
-  closeModalOverlay('deleteConfirmModal');
-}
-
-function confirmDeleteTrade() {
-  if (!pendingDeleteTradeId) return;
-  
-  var id = pendingDeleteTradeId;
-  closeDeleteConfirmModal();
-  
-  // 将ID转为字符串比较，兼容数字和字符串ID
+// 删除交易的实际执行（showConfirm 确认后调用）
+function __executeDeleteTrade(id) {
   var idStr = String(id);
+
+  // 将ID转为字符串比较，兼容数字和字符串ID
   trades = trades.filter(function(t) { return String(t.id) !== idStr; });
-  
+
   // 标记为待删除
   markTradeDeleted(idStr);
-  
+
   // 更新界面
   updateAll();
-  
+
   // 自动保存到数据库（带防抖）
   if (typeof triggerAutoSave === 'function') {
     triggerAutoSave();
   }
-  
+
   // 如果已登录，同时删除服务器上的记录
   if (typeof syncModule !== 'undefined' && syncModule.isLoggedIn()) {
     syncModule.deleteTradeFromServer(idStr).then(function(success) {
@@ -1001,21 +996,13 @@ function deleteTradeFromEditModal() {
   });
 }
 
-// P1-2: 删除交易的实际逻辑（confirm 通过后调用）
+// P1-2: 删除交易的实际逻辑（编辑弹窗内 showConfirm 通过后调用）
 function __proceedDeleteTrade(id) {
   var idStr = String(id);
   // 先关闭编辑弹窗
   closeTradeEditModal();
 
-  // 找到对应 trade 取信息用于删除确认
-  var t = trades.find(function(x) { return String(x.id) === idStr; });
-  var symbol = t ? (t.symbol || '') : '';
-  var dir = t ? (t.dir || '') : '';
-  var entry = t ? (t.entry || '') : '';
-
-  // 复用现有删除流程
-  pendingDeleteTradeId = id;
-  // 直接执行删除（用户已确认）
+  // 直接执行删除（用户已在 showConfirm 确认；确认文案由上层提供）
   trades = trades.filter(function(x) { return String(x.id) !== idStr; });
   markTradeDeleted(idStr);
   updateAll();

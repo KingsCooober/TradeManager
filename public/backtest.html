@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>回测练习 - Trade Manager</title>
-<link rel="stylesheet" href="css/main.css?v=18">
+<link rel="stylesheet" href="css/main.css?v=20">
 <style>
 /* 回测页专用样式（独立内联，避免污染 main.css） */
 .bt-page { padding: 16px; max-width: 1600px; margin: 0 auto; }
@@ -333,13 +333,6 @@
 
 <header class="app-header" id="appHeader"></header>
 
-<div class="page-intro">
-  <div class="page-intro-text">
-    <strong>🎯 回测练习</strong> — 选标的、拉 5 年 K 线、看着图手动模拟买卖，系统帮你算胜率/盈亏比/总收益。
-    <span class="page-intro-hint">数据基于历史真实行情（不复权），纯练习用，不构成投资建议。</span>
-  </div>
-</div>
-
 <main class="bt-page">
 
   <!-- 控制栏：标的 + 均线周期 + MACD/量 开关 + 加载按钮 -->
@@ -575,7 +568,7 @@
 <script src="js/sync.js?v=12"></script>
 <script src="js/store.js?v=2"></script>
 <!-- 统一弹窗/toast 组件（showConfirm/alertDialog/showToast），与其他页面一致 -->
-<script src="js/ui.js?v=1"></script>
+<script src="js/ui.js?v=3"></script>
 
 <!-- 回测专用模块（顺序：交易 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=6"></script>
