@@ -52,16 +52,26 @@ function renderAppHeader(page) {
       '</nav>' +
     '</div>' +
     '<div class="header-right">' +
-      '<span id="syncIndicator" class="sync-indicator sync-indicator-idle" title="从未同步" aria-label="同步状态">●</span>' +
-      '<div id="syncStatus" class="sync-status-inline" aria-live="polite"></div>' +
-      '<div class="header-search-wrapper">' +
-        '<input type="text" id="globalSearchInput" class="header-search-input" placeholder="🔍 搜索..." autocomplete="off" aria-label="全局搜索" />' +
-        '<div id="globalSearchResults" class="header-search-results" style="display:none;"></div>' +
-      '</div>' +
+      // 同步指示灯/状态条只在加载了 sync.js 的页面有意义：
+      // research 页未加载 sync.js（且 aihot 自己隐藏指示灯），渲染成永久 idle 的死点只会误导
+      (page === 'research' ? '' :
+        '<span id="syncIndicator" class="sync-indicator sync-indicator-idle" title="从未同步" aria-label="同步状态">●</span>' +
+        '<div id="syncStatus" class="sync-status-inline" aria-live="polite"></div>') +
+      // 搜索框只在实现了 window.performGlobalSearch 的页面渲染
+      // （index=交易记录 / daily-review / diary2 / backtest=历史回测）；
+      // research（内容在 iframe 内）与 aihot（服务端搜索未实现）渲染出来只会永远"未找到匹配项"
+      (page === 'research' || page === 'aihot' ? '' :
+        '<div class="header-search-wrapper">' +
+          '<input type="text" id="globalSearchInput" class="header-search-input" placeholder="🔍 搜索..." autocomplete="off" aria-label="全局搜索" />' +
+          '<div id="globalSearchResults" class="header-search-results" style="display:none;"></div>' +
+        '</div>') +
       '<div id="headerSyncLoggedIn" style="display:none;align-items:center;gap:8px">' +
         '<span class="header-user-badge">👤 <span id="headerUsername">-</span></span>' +
-        '<button type="button" class="btn btn-sm btn-primary" onclick="handleFullSync()" aria-label="立即同步">🔄 同步</button>' +
-        '<button type="button" class="btn btn-sm btn-ghost" onclick="handleToggleAutoSync()" id="headerBtnAutoSync" aria-label="切换自动同步">自动: 关</button>' +
+        // 同步/自动同步按钮依赖 sync.js 的 handleFullSync/handleToggleAutoSync——
+        // research 页未加载 sync.js，渲染出来点击即 ReferenceError，按页裁剪
+        (page === 'research' ? '' :
+          '<button type="button" class="btn btn-sm btn-primary" onclick="handleFullSync()" aria-label="立即同步">🔄 同步</button>' +
+          '<button type="button" class="btn btn-sm btn-ghost" onclick="handleToggleAutoSync()" id="headerBtnAutoSync" aria-label="切换自动同步">自动: 关</button>') +
         '<button type="button" class="btn btn-sm btn-ghost" onclick="openAppSettings()" aria-label="设置">⚙️ 设置</button>' +
         '<button type="button" class="btn btn-sm btn-ghost-danger" onclick="' + logoutFn + '()" aria-label="退出登录">退出</button>' +
       '</div>' +

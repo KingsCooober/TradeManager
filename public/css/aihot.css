@@ -80,7 +80,7 @@
 @media (hover:none) { .ah-speak { opacity:.5; } }
 
 /* 划词翻译气泡 */
-.ah-sel-bubble { position:fixed; z-index:1300; width:min(360px,calc(100vw - 24px)); padding:11px 13px; border:1px solid var(--border-card); border-radius:11px; background:var(--bg-card); color:var(--text-primary); box-shadow:0 10px 30px rgba(0,0,0,.18); }
+.ah-sel-bubble { position:fixed; z-index:var(--z-popover); width:min(360px,calc(100vw - 24px)); padding:11px 13px; border:1px solid var(--border-card); border-radius:11px; background:var(--bg-card); color:var(--text-primary); box-shadow:0 10px 30px rgba(0,0,0,.18); }
 .ah-sel-bubble[hidden] { display:none; }
 .ah-sel-src { color:var(--text-secondary); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
 .ah-sel-trans { margin-top:7px; padding-top:7px; border-top:1px dashed var(--border-divider); color:var(--text-primary); font-family:'LXGW WenKai','Kaiti SC','KaiTi','Songti SC','SimSun','PingFang SC','Microsoft YaHei',serif; font-size:14px; line-height:1.7; overflow-wrap:anywhere; }
@@ -129,7 +129,7 @@
 .ah-footer { margin-top:22px; padding:14px 4px 0; color:var(--text-tertiary); font-size:11px; line-height:1.8; }
 .ah-footer a { margin-left:6px; font-size:inherit; }
 .ah-modal[hidden],.ah-auth-gate[hidden],.ah-layout[hidden],.ah-footer[hidden] { display:none; }
-.ah-modal { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:20px; }
+.ah-modal { position:fixed; inset:0; z-index:var(--z-modal); display:grid; place-items:center; padding:20px; }
 .ah-modal-mask { position:absolute; inset:0; width:100%; border:0; background:var(--bg-overlay); }
 .ah-modal-card { position:relative; width:min(100%,420px); padding:26px; border:1px solid var(--border-card); border-radius:var(--radius-lg); background:var(--bg-card); color:var(--text-primary); box-shadow:var(--shadow-lg); }
 .ah-modal-card h2 { margin:0 0 6px; font-size:20px; }

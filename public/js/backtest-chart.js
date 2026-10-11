@@ -79,7 +79,15 @@ function BT_calcZoomRange(idx, mode) {
 // 颜色（与项目内其他图表保持一致）
 var BT_COLOR_UP   = '#ef476f';  // A 股红涨
 var BT_COLOR_DOWN = '#2d9f7f';  // A 股绿跌
-var BT_MA_COLORS  = ['#000000', '#FACC15', '#374151', '#94A3B8'];  // MA1~MA4：黑 / 亮黄 / 深灰 / 浅灰
+// ★ MA 色板按主题取值：原先固定 '#000000'，暗色主题下 MA1 线与图例全是黑色不可见。
+//   亮色：黑/亮黄/深灰/浅灰；暗色：白/亮黄/浅灰/中灰（深灰在暗底不可见，一并换掉）。
+//   消费点统一走 BT_maColors()，主题切换时由 BT_applyTheme 触发重绘。
+function BT_maColors() {
+  var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return isDark
+    ? ['#ffffff', '#FACC15', '#CBD5E1', '#94A3B8']
+    : ['#000000', '#FACC15', '#374151', '#94A3B8'];
+}
 
 // 初始化图表实例
 function BT_initChart() {
@@ -256,6 +264,13 @@ function BT_applyTheme() {
     backgroundColor: 'transparent',
     textStyle: { color: isDark ? '#ddd' : '#333' }
   });
+  // ★ MA 线颜色按主题取值（BT_maColors），切换主题后需重画 MA 系列才可见；
+  //   只更新 MA 系列（不重拉数据），代价极小
+  if (BT_klineData && BT_klineData.ohlc && BT_klineData.ohlc.length) {
+    try { BT_renderMAOnly(); } catch (e) { /* 无数据时忽略 */ }
+  }
+  // 右栏 MA 数值文字也按主题换色
+  try { BT_renderMaList('curMa', 'cur'); BT_renderMaList('idxMa', 'idx'); } catch (e) {}
 }
 
 // 基础 option 框架（不依赖具体数据，初始化时调用一次）
@@ -410,7 +425,7 @@ function BT_renderMaList(containerId, prefix) {
     box.appendChild(div);
     // 给 span 上色（dot 颜色与图表 MA 线一致）
     var span = div.querySelector('span');
-    if (span) span.style.color = BT_MA_COLORS[i] || '#666';
+    if (span) span.style.color = BT_maColors()[i] || '#666';
   }
 }
 
@@ -426,7 +441,7 @@ function BT_fillMaValues(containerId, prefix, data, idx) {
     var el = document.getElementById(prefix + 'MaP_' + i);
     if (el) {
       el.textContent = v != null ? v.toFixed(2) : '--';
-      el.style.color = BT_MA_COLORS[i] || '#666';
+      el.style.color = BT_maColors()[i] || '#666';
     }
   }
 }
@@ -468,7 +483,7 @@ function BT_tooltipFormatter(params) {
     var p = BT_maPeriods[i];
     var arr = BT_computeMAFromCloses(BT_klineData.ohlc, p);
     if (arr[idx] != null) {
-      lines.push('<div style="line-height:1.7;"><span style="color:' + BT_MA_COLORS[i] + '">●</span> MA' + p + ': <b>' + arr[idx].toFixed(2) + '</b></div>');
+      lines.push('<div style="line-height:1.7;"><span style="color:' + BT_maColors()[i] + '">●</span> MA' + p + ': <b>' + arr[idx].toFixed(2) + '</b></div>');
     }
   }
 
@@ -665,7 +680,7 @@ function BT_renderKLine(data) {
       type: 'line',
       data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
       smooth: true,
-      lineStyle: { width: 1.5, color: BT_MA_COLORS[i] },
+      lineStyle: { width: 1.5, color: BT_maColors()[i] },
       showSymbol: false,
       z: 5
     });
@@ -1085,7 +1100,7 @@ function BT_setupIndexTooltip() {
       var p = BT_maPeriods[i];
       var arr = BT_computeMAFromCloses(BT_indexData.ohlc, p);
       if (arr[idx] != null) {
-        lines.push('<div style="line-height:1.7;"><span style="color:' + BT_MA_COLORS[i] + '">●</span> MA' + p + ': <b>' + arr[idx].toFixed(2) + '</b></div>');
+        lines.push('<div style="line-height:1.7;"><span style="color:' + BT_maColors()[i] + '">●</span> MA' + p + ': <b>' + arr[idx].toFixed(2) + '</b></div>');
       }
     }
 
@@ -1173,7 +1188,7 @@ function BT_renderMAOnly() {
       type: 'line',
       data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
       smooth: true,
-      lineStyle: { width: 1.5, color: BT_MA_COLORS[i] },
+      lineStyle: { width: 1.5, color: BT_maColors()[i] },
       showSymbol: false,
       z: 5
     });
@@ -1688,7 +1703,7 @@ function BT_renderIndexChart(data, indexName) {
       data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
       smooth: true,
       showSymbol: false,
-      lineStyle: { width: 1.5, color: BT_MA_COLORS[i] },
+      lineStyle: { width: 1.5, color: BT_maColors()[i] },
       z: 5
     });
   }

@@ -71,6 +71,17 @@
   --glow-blue:       0 0 20px rgba(67,97,238,0.25), 0 0 40px rgba(67,97,238,0.10);
   --glow-green:      0 0 20px rgba(6,214,160,0.25), 0 0 40px rgba(6,214,160,0.10);
   --glow-red:        0 0 20px rgba(239,71,111,0.25), 0 0 40px rgba(239,71,111,0.10);
+
+  /* ===== 层级 token（z-index）=====
+     此前 19 处魔法数字散落各文件，且有两处同层冲突
+     （autocomplete 与弹窗同为 1000）。统一分层，新增悬浮层时从这里取值：
+     header(100) < dropdown(200) < modal(1000) < popover(1300) < toast(10000) < dialog(10001) */
+  --z-header:        100;
+  --z-dropdown:      200;
+  --z-modal:         1000;
+  --z-popover:       1300;
+  --z-toast:         10000;
+  --z-dialog:        10001;
 }
 
 /* ===== CSS 变量：暗黑主题 ===== */
@@ -160,7 +171,7 @@ body {
 .app-header {
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: var(--z-header);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -385,7 +396,7 @@ body {
   border: 1px solid var(--border-input);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  z-index: 200;
+  z-index: var(--z-dropdown);
   padding: 6px;
 }
 .search-result-item {
@@ -1302,7 +1313,7 @@ h2 {
   opacity: 0;
   transform: translateY(-8px);
   transition: all 0.26s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 100;
+  z-index: var(--z-dropdown);
   box-shadow: 0 8px 24px rgba(0,0,0,0.12);
 }
 
@@ -1824,7 +1835,7 @@ h2 {
   left: 0;
   right: 0;
   background: var(--bg-card);
-  z-index: 1000;
+  z-index: var(--z-dropdown);
   border: 1px solid var(--border-input);
   border-top: none;
   border-radius: 0 0 var(--radius-sm) var(--radius-sm);
@@ -1836,7 +1847,7 @@ h2 {
   opacity: 0;
   transform: translateY(-6px);
   transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 100;
+  z-index: var(--z-dropdown);
   box-shadow: 0 6px 16px rgba(0,0,0,0.1);
 }
 
@@ -2589,7 +2600,7 @@ tbody td textarea.in-note:focus { outline: none; border-color: var(--color-blue)
   background: var(--bg-overlay);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  z-index: 1000;
+  z-index: var(--z-modal);
   justify-content: center;
   align-items: center;
 }

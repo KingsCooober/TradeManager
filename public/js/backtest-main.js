@@ -16,6 +16,9 @@ function BT_lsKey(k) { return BT_LS_PREFIX + k; }
 // 全局：当前正在回测的标的名称（如「浦发银行」，由后端在 K 线接口中一起返回）
 var BT_currentSymbolName = null;
 
+// 全局：历史回测记录缓存（BT_renderHistory 时刷新），供全局搜索 performGlobalSearch 同步读取
+var BT_historySearchCache = [];
+
 // ===== 持久化：标的/周期/MA/缩放/光标位置 =====
 function BT_saveState() {
   try {
@@ -681,8 +684,12 @@ async function BT_renderHistory() {
   }
   if (!list.length) {
     box.innerHTML = '<tr><td colspan="12" class="bt-empty">还没有历史回测记录，完成一轮回测后会自动保存到这里。</td></tr>';
+    BT_historySearchCache = [];
     return;
   }
+
+  // 缓存一份给全局搜索用（performGlobalSearch 是同步接口，不能 await DataStore）
+  BT_historySearchCache = list;
 
   // ★ 补全名称：老数据可能没存 name → 批量查 /api/market/stock-names 拿到名称
   //   流程：同步渲染（先用 symbol 占位）→ 后台异步查名称 → 查到后局部刷新"标的"列
@@ -1049,3 +1056,33 @@ async function BT_clearAllHistory() {
   BT_renderHistory();
   BT_toast('已清空所有历史记录', 'success');
 }
+
+// ===== 全局搜索（backtest 页：搜索历史回测记录）=====
+// 数据源是 BT_renderHistory 时缓存的 BT_historySearchCache（同步接口，见 header.js doGlobalSearch）。
+// 此前本页搜索框永远显示"未找到匹配项"（header.js 只认 window.performGlobalSearch）。
+window.performGlobalSearch = function(q) {
+  var list = BT_historySearchCache || [];
+  if (!list.length) return [];
+  var ql = String(q).toLowerCase();
+  var results = [];
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    var fields = [s.symbol, s.name, s.finishedAt,
+                  s.totalReturn != null ? s.totalReturn + '%' : '',
+                  s.winRate != null ? s.winRate + '%' : '']
+      .filter(function(v) { return v; }).join(' ');
+    if (fields.toLowerCase().indexOf(ql) !== -1) {
+      results.push({
+        label: (s.finishedAt || '').replace('T', ' ').substring(0, 16) + ' · ' + (s.name || s.symbol || '') + ' · ' +
+               (s.totalReturn >= 0 ? '+' : '') + (s.totalReturn || 0) + '%',
+        sublabel: '胜率 ' + (s.closedCount > 0 ? s.winRate + '%' : '--') + ' · ' + (s.tradeCount || 0) + ' 笔',
+        onClick: (function (id) {
+          return function () {
+            if (typeof BT_viewHistoryRecord === 'function') BT_viewHistoryRecord(id);
+          };
+        })(s.id)
+      });
+    }
+  }
+  return results;
+};

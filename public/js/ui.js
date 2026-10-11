@@ -22,7 +22,7 @@ function __injectUiStyles() {
   style.id = 'ui-component-styles';
   style.textContent = [
     '/* ===== Toast 容器 ===== */',
-    '.ui-toast-container{position:fixed;top:16px;right:16px;z-index:10000;display:flex;flex-direction:column;gap:10px;pointer-events:none;max-width:calc(100vw - 32px);}',
+    '.ui-toast-container{position:fixed;top:16px;right:16px;z-index:var(--z-toast);display:flex;flex-direction:column;gap:10px;pointer-events:none;max-width:calc(100vw - 32px);}',
     '/* ===== Toast 单条 ===== */',
     '.ui-toast{pointer-events:auto;min-width:260px;max-width:380px;padding:12px 16px 12px 14px;border-radius:var(--radius-md,8px);box-shadow:0 6px 20px rgba(0,0,0,0.18);display:flex;align-items:flex-start;gap:10px;font-size:14px;line-height:1.5;background:var(--bg-elevated,#fff);color:var(--text-primary,#222);border-left:4px solid var(--color-primary,#4361ee);opacity:0;transform:translateX(20px);transition:opacity .25s ease,transform .25s ease;word-break:break-word;}',
     '.ui-toast.ui-toast-show{opacity:1;transform:translateX(0);}',
@@ -38,7 +38,7 @@ function __injectUiStyles() {
     '/* 暗色主题适配 */',
     '[data-theme="dark"] .ui-toast{background:var(--bg-elevated,#2a2a2a);color:var(--text-primary,#eee);box-shadow:0 6px 24px rgba(0,0,0,0.4);}',
     '/* ===== ConfirmDialog / Alert 遮罩（复用 .modal-overlay，补一个更高 z-index 的别名） ===== */',
-    '.ui-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:10001;opacity:0;transition:opacity .2s ease;}',
+    '.ui-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:var(--z-dialog);opacity:0;transition:opacity .2s ease;}',
     '.ui-modal-overlay.ui-modal-show{opacity:1;}',
     '.ui-modal-card{background:var(--bg-elevated,#fff);border-radius:var(--radius-md,8px);max-width:420px;width:calc(100vw - 32px);padding:0;box-shadow:0 12px 40px rgba(0,0,0,0.25);overflow:hidden;transform:translateY(-12px) scale(0.98);transition:transform .2s ease;}',
     '.ui-modal-overlay.ui-modal-show .ui-modal-card{transform:translateY(0) scale(1);}',

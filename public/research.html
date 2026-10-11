@@ -56,6 +56,35 @@
 <script>
 renderAppHeader('research');
 
+// ===== 头部登录状态同步 =====
+// ★ 修复：本页此前从不更新 headerSyncLoggedIn/LoggedOut，头部永远显示"未登录"。
+//   本页未加载 sync.js（不需要同步逻辑），因此直接读 localStorage 判定登录态，
+//   与 aihot.js 的 updateHeaderAuth 同一思路（aihot.js:67）。
+function updateResearchHeaderAuth() {
+  var token = null, user = null;
+  try {
+    token = localStorage.getItem('sync_token');
+    user = JSON.parse(localStorage.getItem('sync_user') || 'null');
+  } catch (e) { token = null; user = null; }
+  var loggedIn = !!(token && user);
+
+  var signedIn = document.getElementById('headerSyncLoggedIn');
+  var signedOut = document.getElementById('headerSyncLoggedOut');
+  var name = document.getElementById('headerUsername');
+  if (signedIn) signedIn.style.display = loggedIn ? 'flex' : 'none';
+  if (signedOut) signedOut.style.display = loggedIn ? 'none' : 'flex';
+  if (name) name.textContent = loggedIn ? (user.username || '已登录') : '';
+  return loggedIn;
+}
+updateResearchHeaderAuth();
+
+// 其他标签页登录/退出时同步头部状态（storage 事件跨标签页触发）
+window.addEventListener('storage', function (e) {
+  if (e.key === 'sync_token' || e.key === 'sync_user') updateResearchHeaderAuth();
+});
+// 同页内其他脚本派发的登录事件（main.js 在登录成功后会 dispatch 'user-login'）
+window.addEventListener('user-login', updateResearchHeaderAuth);
+
 // 研报库没有独立账号体系，其访问权限由代理层校验交易台的登录 Cookie。
 // iframe 的导航请求无法携带 Authorization 头，因此这里先用当前 token
 // 换取一次会话 Cookie，再加载 iframe —— 否则已登录用户也会被挡在提示页。
