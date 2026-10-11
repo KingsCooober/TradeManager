@@ -285,11 +285,16 @@ function showNotLoggedIn() {
 function loadFromServer() {
   if (!diary2CurrentUserId) return;
 
-  fetch(`/api/diary/${diary2CurrentUserId}`, {
+  // ★ 必须用 authFetch：/api/diary/:userId 挂了 authMiddleware，
+  //   裸 fetch 不带 Authorization 头会一直返回 401（表现为"同步成功"但数据没变）。
+  authFetch(`/api/diary/${diary2CurrentUserId}`, {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' }
   })
-  .then(res => res.json())
+  .then(res => {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  })
   .then(data => {
     if (data.diary && data.diary.length > 0) {
       var serverDiary = data.diary.map(item => ({
@@ -343,13 +348,17 @@ function loadFromServer() {
 
 function syncToServer() {
   if (!diary2CurrentUserId) return;
-  
-  fetch(`/api/diary/${diary2CurrentUserId}`, {
+
+  // ★ 同样必须带 token，否则写入会 401 失败却仍提示"已同步"
+  authFetch(`/api/diary/${diary2CurrentUserId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ diary: diary2Data })
   })
-  .then(res => res.json())
+  .then(res => {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  })
   .then(data => {
     showSyncStatus('数据已同步', 'success');
   })
@@ -628,7 +637,7 @@ function openAddDiaryModal() {
     document.getElementById('modalTitle').textContent = '📝 新增复盘记录';
     document.getElementById('diaryId').value = '';
     document.getElementById('diaryForm').reset();
-    document.getElementById('diaryDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('diaryDate').value = getToday();
     document.getElementById('diaryModal').classList.add('show');
     // 升级弹窗内所有原生 select 为 custom-select（视觉与"买点类型"统一）
     if (typeof upgradeSelectToCustom === 'function') {
@@ -834,7 +843,7 @@ function exportDiaryData() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `diary2_export_${new Date().toISOString().split('T')[0]}.json`;
+  a.download = `diary2_export_${getToday()}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -873,11 +882,12 @@ function importDiaryData(event) {
   event.target.value = '';
 }
 
+// ★ 统一委托给 utils.js 的 esc()。
+//   原来的实现用 div.textContent → innerHTML，它**不转义双引号**，
+//   而本文件把它用在 title="..." 属性里（如 renderTable），
+//   备注含一个 " 就能闭合属性并注入事件处理器。
 function escapeHtml(text) {
-  if (!text) return '';
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  return esc(text);
 }
 
 function handleFullSync() {

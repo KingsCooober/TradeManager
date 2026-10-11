@@ -185,7 +185,7 @@ function drawPositionPie() {
     var pctL = (values[k] / cap * 100).toFixed(1);
     var item = document.createElement('span');
     item.style.cssText = 'display:flex;align-items:center;gap:4px';
-    item.innerHTML = '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + PIE_COLORS[k % PIE_COLORS.length] + ';flex-shrink:0"></span><span style="color:' + tc.legendText + '">' + labels[k] + '</span><span style="color:' + tc.blue + ';font-weight:600">' + pctL + '%</span><span style="color:' + tc.legendMuted + ';font-size:10px">(' + CNY(values[k]) + ')</span>';
+    item.innerHTML = '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + PIE_COLORS[k % PIE_COLORS.length] + ';flex-shrink:0"></span><span style="color:' + tc.legendText + '">' + esc(labels[k]) + '</span><span style="color:' + tc.blue + ';font-weight:600">' + pctL + '%</span><span style="color:' + tc.legendMuted + ';font-size:10px">(' + CNY(values[k]) + ')</span>';
     legend.appendChild(item);
   }
   var cashItem = document.createElement('span');

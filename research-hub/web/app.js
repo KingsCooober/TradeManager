@@ -2127,9 +2127,21 @@
       const out = $('#s-result');
       out.textContent = '测试中…';
       try {
+        // 出于安全考虑，服务端只使用「已保存」的 base_url 与 api_key 发起测试，
+        // 不接受请求体覆盖地址（否则可把 Key 发往任意服务器）。
+        // 因此这里先保存当前表单，再测试。
+        state.settings = await api('/api/settings', {
+          method: 'PUT',
+          body: {
+            ai_base_url: $('#s-base').value.trim(),
+            ai_model: $('#s-model').value.trim(),
+            ai_temperature: $('#s-temp').value.trim(),
+            ai_api_key: $('#s-key').value.trim(),
+          },
+        });
         const res = await api('/api/settings/test', {
           method: 'POST',
-          body: { settings: { ai_model: $('#s-model').value.trim(), ai_base_url: $('#s-base').value.trim() } },
+          body: { settings: { ai_model: $('#s-model').value.trim() } },
         });
         out.innerHTML = `<span style="color:var(--ok)">连接正常 · ${esc(res.model)} · 返回「${esc(res.reply)}」</span>`;
       } catch (e) {

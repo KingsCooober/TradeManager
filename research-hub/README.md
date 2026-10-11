@@ -231,4 +231,12 @@ pip3 install fastapi uvicorn httpx pypdf beautifulsoup4
 `python3 server.py --port 9000`。
 
 **想推到公网？**
-当前实现是纯本地服务，没有账号体系与鉴权，**不要**直接暴露到公网。需要多人使用时，至少要先加登录鉴权与 HTTPS 反向代理。
+当前实现是纯本地服务，没有账号体系与鉴权，**不要**直接暴露到公网。
+经交易台（`server/research-proxy.js`）访问时，代理层会校验交易台的登录 Cookie，
+未登录访客会被挡在提示页外；但**若把本服务端口直接对外**，就绕过了这层保护。
+需要多人使用时，至少要先加登录鉴权与 HTTPS 反向代理。
+
+> ⚠️ 另注意：`POST /api/settings/test` 与 `POST /api/reports/{id}/summarize`
+> 只使用**库中已保存**的 `ai_base_url` / `ai_api_key`，会忽略请求体里传入的同名字段。
+> 早期版本允许请求体覆盖地址，配合"回传掩码即沿用已保存 key"的逻辑，
+> 可把真实 API Key 发往任意服务器——现已修复，改动这两处时请勿回退。

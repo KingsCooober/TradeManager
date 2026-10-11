@@ -25,7 +25,12 @@ const sqlite3 = require('sqlite3').verbose();
 const DB_PATH = path.join(__dirname, 'data.db');
 let _db = null;
 function getDB() {
-  if (!_db) _db = new sqlite3.Database(DB_PATH);
+  if (!_db) {
+    _db = new sqlite3.Database(DB_PATH);
+    // 与主服务共用同一个 data.db：WAL + busy_timeout 避免并发写 SQLITE_BUSY
+    _db.run('PRAGMA journal_mode = WAL');
+    _db.run('PRAGMA busy_timeout = 5000');
+  }
   return _db;
 }
 

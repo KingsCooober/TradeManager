@@ -11,6 +11,10 @@ pkill -f 'node /var/www/trademanager/server/server.js' 2>/dev/null || true
 sleep 1
 
 echo "[deploy] 启动新服务..."
+# JWT 密钥：优先用环境变量（多机部署/需要共用时在服务器上导出 JWT_SECRET）。
+# 未设置时 server/auth.js 会在 server/.jwt-secret 生成并持久化一份本机专用密钥，
+# 该文件已 gitignore，不会被部署覆盖，因此重启后登录态依然有效。
+# 若站点走 HTTPS，建议同时导出 COOKIE_SECURE=1，让会话 Cookie 带上 Secure 标记。
 nohup node server.js >> out.log 2>&1 < /dev/null &
 sleep 4
 

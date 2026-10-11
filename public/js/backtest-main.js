@@ -12,7 +12,7 @@ var BT_LS_PREFIX = 'bt_state_';
 function BT_lsKey(k) { return BT_LS_PREFIX + k; }
 
 // 全局：当前正在回测的标的代码（sh600000 / sz000001 等）
-var BT_currentSymbol = null;
+// ★ 声明在 backtest-trade.js:22（本文件加载于其后，重复声明会把已恢复的状态清空）
 // 全局：当前正在回测的标的名称（如「浦发银行」，由后端在 K 线接口中一起返回）
 var BT_currentSymbolName = null;
 
@@ -829,8 +829,12 @@ function BT_lookupStockNames(symbols) {
   var result = {};
 
   // ========== 1) 后端接口（自带腾讯+新浪 fallback）==========
+  // ★ token 的键名是 sync_token（见 sync.js 的 getToken）；
+  //   原先读的是 'token'，永远取不到，导致该接口一直 401。
+  var btToken = null;
+  try { btToken = localStorage.getItem('sync_token'); } catch (e) { btToken = null; }
   return fetch('/api/market/stock-names?symbols=' + encodeURIComponent(arr.join(',')), {
-    headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') }
+    headers: btToken ? { 'Authorization': 'Bearer ' + btToken } : {}
   })
     .then(function(r) { return r.ok ? r.json() : { names: {}, missing: arr }; })
     .then(function(resp) {

@@ -136,10 +136,39 @@ test('requireAdmin: token 中的 role=admin 应直接放行', async () => {
   });
 });
 
-test('requireAdmin: 无 token 且无 adminId 应返回 403', async () => {
+test('requireAdmin: 无 token 应返回 401', async () => {
   await new Promise(function(resolve) {
     var req = mockReq({ query: {} });
     req.user = null;  // 无 token
+    var res = mockRes();
+    auth.requireAdmin(req, res, function() {
+      assert.fail('next 不应被调用');
+      resolve();
+    });
+    assert.strictEqual(res._getStatus(), 401);
+    resolve();
+  });
+});
+
+test('requireAdmin: 仅凭 adminId 查询参数不能获得权限（旧兼容分支已移除）', async () => {
+  await new Promise(function(resolve) {
+    // 带 adminId 但没有 token —— 修复前会查库放行，修复后必须拒绝
+    var req = mockReq({ query: { adminId: 'some-admin-uuid' } });
+    req.user = null;
+    var res = mockRes();
+    auth.requireAdmin(req, res, function() {
+      assert.fail('仅凭 adminId 不应放行');
+      resolve();
+    });
+    assert.ok(res._getStatus() === 401 || res._getStatus() === 403);
+    resolve();
+  });
+});
+
+test('requireAdmin: 普通用户 token 应返回 403', async () => {
+  await new Promise(function(resolve) {
+    var req = mockReq({ query: {} });
+    req.user = { userId: 'u1', role: 'user' };
     var res = mockRes();
     auth.requireAdmin(req, res, function() {
       assert.fail('next 不应被调用');

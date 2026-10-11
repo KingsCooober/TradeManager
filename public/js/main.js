@@ -349,13 +349,26 @@ function renderDepositHistory() {
         '<span class="funds-history-date">' + escapeHtml(d.date) + '</span>' +
         '<span class="funds-history-amount glow-red">+' + CNY(d.amount) + '</span>' +
       '</div>' +
-      '<button class="btn btn-sm btn-ghost-danger" onclick="deleteDepositRecord(\'' + escapeHtml(String(d.id)) + '\')" title="删除">🗑️</button>' +
+      '<button class="btn btn-sm btn-ghost-danger" data-action="del-deposit" data-id="' + escapeHtml(String(d.id)) + '" title="删除">🗑️</button>' +
     '</div>';
   }).join('');
+  bindFundsHistoryDelegation(container, 'del-deposit', deleteDepositRecord);
   var statsEl = document.getElementById('depositHistoryStats');
   if (statsEl) {
     statsEl.textContent = '共 ' + deposits.length + ' 笔，累计 ' + CNY(getTotalDeposit());
   }
+}
+
+// 资金历史列表的事件委托：避免把记录 id 拼进 onclick 的 JS 字符串
+// （HTML 实体在属性解析阶段会被还原，escapeHtml 挡不住引号闭合注入）
+function bindFundsHistoryDelegation(container, action, handler) {
+  if (container.dataset.fundsDelegated === action) return;
+  container.dataset.fundsDelegated = action;
+  container.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-action="' + action + '"]');
+    if (!btn) return;
+    handler(btn.dataset.id);
+  });
 }
 
 function deleteDepositRecord(id) {
@@ -424,9 +437,10 @@ function renderWithdrawHistory() {
         '<span class="funds-history-date">' + escapeHtml(d.date) + '</span>' +
         '<span class="funds-history-amount glow-green">-' + CNY(d.amount) + '</span>' +
       '</div>' +
-      '<button class="btn btn-sm btn-ghost-danger" onclick="deleteWithdrawRecord(\'' + escapeHtml(String(d.id)) + '\')" title="删除">🗑️</button>' +
+      '<button class="btn btn-sm btn-ghost-danger" data-action="del-withdraw" data-id="' + escapeHtml(String(d.id)) + '" title="删除">🗑️</button>' +
     '</div>';
   }).join('');
+  bindFundsHistoryDelegation(container, 'del-withdraw', deleteWithdrawRecord);
   var statsEl = document.getElementById('withdrawHistoryStats');
   if (statsEl) {
     statsEl.textContent = '共 ' + withdrawals.length + ' 笔，累计 ' + CNY(getTotalWithdraw());
@@ -553,8 +567,8 @@ function executeClearAction() {
   } else if (type === 'all') {
     clearAllTradesData();
     clearAllFundsData();
-    // 清空账户参数
-    localStorage.removeItem('account_params_v1');
+    // 清空账户参数（★ 键名是 account_v1，见 storage.js 的 saveAccountParams）
+    localStorage.removeItem('account_v1');
     // 重置输入框为默认值
     var initEl = document.getElementById('initCapital');
     if (initEl) initEl.value = 100000;
@@ -721,8 +735,11 @@ function handleLogin() {
       syncModule.showSyncStatus('登录成功', 'success');
       // 关闭登录弹窗
       closeLoginModal();
-      // 清空本地数据后再从服务器下载新用户数据（不上传）
-      clearLocalDataAndRefresh();
+      // ★ 先等 IndexedDB 清空完成，再下载新用户数据（不上传），
+      //   否则清空可能晚于 saveAll 写入，把刚下载的数据抹掉。
+      return clearLocalDataAndRefresh();
+    })
+    .then(() => {
       handleDownloadOnly();
       // 通知其他页面/模块：用户已登录
       try { window.dispatchEvent(new CustomEvent('user-login', { detail: syncModule.getCurrentUser() })); } catch(e) {}
@@ -732,6 +749,8 @@ function handleLogin() {
     });
 }
 
+// ★ 返回 Promise：IndexedDB 清空是异步的，调用方必须 await 后再去服务器拉数据。
+//   否则"清空"可能晚于 syncFromServer → saveAll 的写入完成，把刚下载的数据抹掉。
 function clearLocalDataAndRefresh() {
   try {
     // 清空内存中的数据
@@ -763,9 +782,10 @@ function clearLocalDataAndRefresh() {
     localStorage.removeItem('daily_discipline_rules');
   } catch(e) {}
 
-  // 清空 IndexedDB（异步，完成后刷新UI）
+  // 清空 IndexedDB（异步）
+  var idbDone = Promise.resolve();
   if (typeof clearAllDataFromDB === 'function') {
-    clearAllDataFromDB().then(function() {
+    idbDone = clearAllDataFromDB().then(function() {
       console.log('本地数据已全部清除（含IndexedDB）');
     }).catch(function(err) {
       console.warn('清除IndexedDB数据时出错:', err);
@@ -774,6 +794,7 @@ function clearLocalDataAndRefresh() {
 
   // 立即刷新页面显示
   updateAll();
+  return idbDone;
 }
 
 function handleRegister() {
@@ -809,7 +830,9 @@ function handleRegister() {
           })
         : Promise.resolve();
       uploadPromise.then(function() {
-        clearLocalDataAndRefresh();
+        // ★ 等清空完成后再下载，避免清空晚于 saveAll 写入
+        return clearLocalDataAndRefresh();
+      }).then(function() {
         handleDownloadOnly();
       });
     })
@@ -1019,10 +1042,9 @@ function refreshAdminStats() {
     return;
   }
   
-  var userId = syncModule.getCurrentUser().id;
   var serverUrl = syncModule.getServerUrl();
-  
-  authFetch(serverUrl + '/api/admin/stats?adminId=' + userId)
+
+  authFetch(serverUrl + '/api/admin/stats')
     .then(res => res.json())
     .then(data => {
       document.getElementById('adminStatUsers').textContent = data.user_count || 0;
@@ -1040,10 +1062,9 @@ function refreshAdminUserList() {
     return;
   }
   
-  var userId = syncModule.getCurrentUser().id;
   var serverUrl = syncModule.getServerUrl();
-  
-  authFetch(serverUrl + '/api/admin/users?adminId=' + userId)
+
+  authFetch(serverUrl + '/api/admin/users')
     .then(res => res.json())
     .then(data => {
       adminUserList = data.users || [];
@@ -1063,18 +1084,29 @@ function renderAdminUserList(users) {
   }
   
   var html = users.map(user => `
-    <div class="user-item" onclick="showAdminUserDetail('${user.id}', '${escapeHtml(user.username)}')">
+    <div class="user-item" data-action="admin-user-detail" data-user-id="${escapeHtml(String(user.id))}" data-username="${escapeHtml(user.username)}">
       <div class="user-info">
         <span class="user-name">${escapeHtml(user.username)}</span>
         <span class="user-role ${user.role === 'admin' ? 'role-admin' : 'role-user'}">${user.role === 'admin' ? '管理员' : '普通用户'}</span>
       </div>
       <div class="user-meta">
-        <span class="user-date">${user.created_at}</span>
+        <span class="user-date">${escapeHtml(user.created_at)}</span>
       </div>
     </div>
   `).join('');
   
   listEl.innerHTML = html;
+
+  // 事件委托：避免把用户名拼进 onclick 的 JS 字符串里
+  // （HTML 实体在属性解析阶段会被还原，escapeHtml 挡不住引号闭合注入）
+  if (!listEl.dataset.adminDelegated) {
+    listEl.dataset.adminDelegated = '1';
+    listEl.addEventListener('click', function (e) {
+      var item = e.target.closest('[data-action="admin-user-detail"]');
+      if (!item) return;
+      showAdminUserDetail(item.dataset.userId, item.dataset.username);
+    });
+  }
 }
 
 function filterAdminUserList() {
@@ -1101,11 +1133,10 @@ function closeAdminUserDetail() {
 
 function showUserDetailTab(tab) {
   if (!currentAdminUser) return;
-  
-  var userId = syncModule.getCurrentUser().id;
+
   var serverUrl = syncModule.getServerUrl();
-  
-  authFetch(serverUrl + '/api/admin/user/' + currentAdminUser.id + '?adminId=' + userId)
+
+  authFetch(serverUrl + '/api/admin/user/' + currentAdminUser.id)
     .then(res => res.json())
     .then(data => {
       var contentEl = document.getElementById('adminDetailContent');
@@ -1144,13 +1175,13 @@ function renderAdminTrades(trades) {
       <tbody>
         ${trades.map(t => `
           <tr>
-            <td>${t.open_date || '-'}</td>
+            <td>${escapeHtml(t.open_date || '-')}</td>
             <td>${escapeHtml(t.symbol || '-')}</td>
-            <td>${t.direction || '-'}</td>
-            <td>${t.entry_price || '-'}</td>
-            <td>${t.close_price || '-'}</td>
-            <td>${(t.pnl_amount !== undefined ? (t.pnl_amount >= 0 ? '+' : '') + t.pnl_amount.toLocaleString() : '-')} ￥</td>
-            <td>${t.status || '-'}</td>
+            <td>${escapeHtml(t.direction || '-')}</td>
+            <td>${escapeHtml(t.entry_price != null ? t.entry_price : '-')}</td>
+            <td>${escapeHtml(t.close_price != null ? t.close_price : '-')}</td>
+            <td>${(t.pnl_amount !== undefined && t.pnl_amount !== null ? (t.pnl_amount >= 0 ? '+' : '') + Number(t.pnl_amount).toLocaleString() : '-')} ￥</td>
+            <td>${escapeHtml(t.status || '-')}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -1196,12 +1227,12 @@ function renderAdminDiary(diary2) {
       <tbody>
         ${diary2.map(d => `
           <tr>
-            <td>${d.trade_date || '-'}</td>
+            <td>${escapeHtml(d.trade_date || '-')}</td>
             <td>${escapeHtml(d.symbol || '-')}</td>
-            <td><span style="color: ${parseFloat(d.pnl_percent) > 0 ? '#ef4444' : parseFloat(d.pnl_percent) < 0 ? '#48bb78' : '#6b7280'}">${d.pnl_percent !== undefined ? (d.pnl_percent > 0 ? '+' : '') + d.pnl_percent + '%' : '-'}</span></td>
+            <td><span style="color: ${parseFloat(d.pnl_percent) > 0 ? '#ef4444' : parseFloat(d.pnl_percent) < 0 ? '#48bb78' : '#6b7280'}">${d.pnl_percent !== undefined && d.pnl_percent !== null ? (d.pnl_percent > 0 ? '+' : '') + escapeHtml(d.pnl_percent) + '%' : '-'}</span></td>
             <td class="text-col">${escapeHtml(d.trade_logic || '-')}</td>
             <td class="text-col">${escapeHtml(d.mood || '-')}</td>
-            <td><span style="color: ${d.follow_system === '是' ? '#ef4444' : '#48bb78'}">${d.follow_system || '否'}</span></td>
+            <td><span style="color: ${d.follow_system === '是' ? '#ef4444' : '#48bb78'}">${escapeHtml(d.follow_system || '否')}</span></td>
             <td class="text-col">${escapeHtml(d.lesson || '-')}</td>
             <td class="text-col">${escapeHtml(d.improvement || '-')}</td>
           </tr>
@@ -1291,10 +1322,10 @@ function deleteUserWithConfirm() {
   }).then(function(ok) {
     if (!ok) return;
 
-    var userId = syncModule.getCurrentUser().id;
     var serverUrl = syncModule.getServerUrl();
 
-    authFetch(serverUrl + '/api/admin/user/' + currentAdminUser.id + '?adminId=' + userId, {
+    // 管理员身份由 authFetch 注入的 Bearer token 携带，不再需要 ?adminId=
+    authFetch(serverUrl + '/api/admin/user/' + currentAdminUser.id, {
       method: 'DELETE'
     })
     .then(res => res.json())
@@ -1362,9 +1393,6 @@ function initCalcCardState() {
 
 // ===== 初始化 =====
 document.addEventListener('DOMContentLoaded', function() {
-  // 重置实际手数修改标志
-  userModifiedActualLots = false;
-
   // 初始化同步模块
   syncModule.initSync();
   syncModule.updateSyncUI();

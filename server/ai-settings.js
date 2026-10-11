@@ -94,10 +94,11 @@ function mount(app, auth) {
   app.post('/api/ai/settings/test', auth.authMiddleware, async (req, res) => {
     const body = req.body || {};
     const settings = {};
-    if (typeof body.ai_base_url === 'string' && body.ai_base_url.trim()) settings.ai_base_url = body.ai_base_url.trim();
-    if (typeof body.ai_model === 'string' && body.ai_model.trim()) settings.ai_model = body.ai_model.trim();
-    if (typeof body.ai_api_key === 'string' && body.ai_api_key.trim() && body.ai_api_key.indexOf('•') < 0) {
-      settings.ai_api_key = body.ai_api_key.trim();
+    // ★ 安全：base_url 与 api_key 不转发请求体里的值。
+    //   上游只使用库中已保存的地址与密钥发起测试，
+    //   否则可被用来把真实 API Key 发往攻击者控制的服务器。
+    if (typeof body.ai_model === 'string' && body.ai_model.trim()) {
+      settings.ai_model = body.ai_model.trim();
     }
 
     try {

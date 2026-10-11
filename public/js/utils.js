@@ -16,9 +16,29 @@ function generateUUID() {
   });
 }
 
-// 获取当天日期 YYYY-MM-DD
+// 把 Date 对象格式化为本地时区的 YYYY-MM-DD
+// ★ 不能用 toISOString()：它按 UTC 输出，在 UTC+8 会导致每天 00:00–08:00
+//   期间拿到的还是"昨天"，使今日开仓/盈亏、计算器默认日期、导出文件名全部错位。
+function formatLocalDate(d) {
+  var date = d || new Date();
+  var y = date.getFullYear();
+  var m = String(date.getMonth() + 1).padStart(2, '0');
+  var day = String(date.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + day;
+}
+
+// 解析 YYYY-MM-DD 为本地时区当天 00:00 的 Date
+// （new Date('2024-01-01') 会被当作 UTC 午夜，在东八区实际是当天 08:00，导致天数算错）
+function parseLocalDate(str) {
+  var s = String(str || '').slice(0, 10);
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+// 获取当天日期 YYYY-MM-DD（本地时区）
 function getToday() {
-  return new Date().toISOString().slice(0, 10);
+  return formatLocalDate(new Date());
 }
 
 // 格式化数字（用于收益曲线弹窗）
@@ -118,39 +138,38 @@ function calcPnl(trade) {
 }
 
 // 计算持仓时间（使用出场日期减去开仓日期）
+// ★ 统一用 parseLocalDate 解析，避免 new Date('YYYY-MM-DD') 按 UTC 解析、
+//   而 new Date('YYYY-MM-DD' + 'T23:59:59') 按本地解析造成的一天偏差。
 function calcHoldDuration(t) {
   if (t.status === 'open') {
     if (!t.date) {
       return '<span style="color:#ffd740">持仓中</span>';
     }
-    
-    var openDate = new Date(t.date);
-    var now = new Date();
-    var diffMs = now - openDate;
-    var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    
-    return '<span style="color:#ffd740">持仓中(' + diffDays + '天)</span>';
+
+    var openDateOpen = parseLocalDate(t.date);
+    if (!openDateOpen) return '<span style="color:#ffd740">持仓中</span>';
+    var today = parseLocalDate(getToday());
+    var diffDaysOpen = Math.round((today - openDateOpen) / (1000 * 60 * 60 * 24));
+    if (diffDaysOpen < 0) diffDaysOpen = 0;
+
+    return '<span style="color:#ffd740">持仓中(' + diffDaysOpen + '天)</span>';
   }
-  
+
   if (!t.date) {
     return '-';
   }
-  
-  var openDate = new Date(t.date);
-  var endDate;
-  
-  if (t.exitDate) {
-    endDate = new Date(t.exitDate + 'T23:59:59');
-  } else {
-    endDate = new Date(t.date + 'T23:59:59');
+
+  var openDate = parseLocalDate(t.date);
+  var endDate = parseLocalDate(t.exitDate || t.date);
+  if (!openDate || !endDate) {
+    return '-';
   }
-  
-  var diffMs = endDate - openDate;
-  var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  
+
+  var diffDays = Math.round((endDate - openDate) / (1000 * 60 * 60 * 24));
+
   if (diffDays < 0) {
     return '<span style="color:#ff5252">异常</span>';
   }
-  
+
   return diffDays + '天';
 }

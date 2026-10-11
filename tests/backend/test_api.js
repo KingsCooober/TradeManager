@@ -20,15 +20,17 @@ const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 
 // ===== 测试工具函数 =====
 
-function request(method, urlPath, body) {
+function request(method, urlPath, body, token) {
   return new Promise((resolve, reject) => {
     const url = new URL(urlPath, BASE_URL);
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = 'Bearer ' + token;
     const options = {
       hostname: url.hostname,
       port: url.port,
       path: url.pathname + url.search,
       method: method,
-      headers: { 'Content-Type': 'application/json' }
+      headers: headers
     };
 
     const req = http.request(options, (res) => {
@@ -52,7 +54,9 @@ function request(method, urlPath, body) {
 // 共享测试上下文
 const ctx = {
   testUserId: null,
+  testUserToken: null,
   testAdminId: null,
+  testAdminToken: null,
   testUsername: 'testuser_' + Date.now(),
   testPassword: 'test123456',
   adminUsername: 'testadmin_' + Date.now(),
@@ -61,15 +65,22 @@ const ctx = {
 };
 
 // 同步检查服务器是否可用（在 describe 之前完成，避免 skip 选项提前求值）
+// ★ 用 Node 子进程探测而不是 execSync 调 powershell：
+//   之前 execSync 里嵌套引号会被 PowerShell 再剥一层，URL 变成裸的 http://...
+//   导致 "Invalid URI: The hostname could not be parsed"，探测永远失败 → 集成测试被跳过。
 function checkServerSync() {
-  const url = new URL('/', BASE_URL);
   try {
-    const result = require('node:child_process').execSync(
-      `powershell -NoProfile -Command "(Invoke-WebRequest -Uri '${BASE_URL}/' -UseBasicParsing -TimeoutSec 3).StatusCode"`,
-      { stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }
-    ).toString().trim();
-    const code = parseInt(result, 10);
-    return code >= 200 && code < 500;
+    const { execFileSync } = require('node:child_process');
+    const script = [
+      'const http=require("node:http");',
+      'const u=new URL(process.argv[1]);',
+      'const r=http.request({hostname:u.hostname,port:u.port,path:"/",method:"GET",timeout:3000},x=>{x.resume();process.exit(x.statusCode>=200&&x.statusCode<500?0:1);});',
+      'r.on("timeout",()=>{r.destroy();process.exit(1);});',
+      'r.on("error",()=>process.exit(1));',
+      'r.end();'
+    ].join('');
+    execFileSync(process.execPath, ['-e', script, BASE_URL], { timeout: 6000, stdio: 'ignore' });
+    return true;
   } catch (e) {
     return false;
   }
@@ -110,13 +121,15 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
       assert.ok(res.status >= 400);
     });
 
-    test('普通注册不能创建 admin 角色', async () => {
+    test('注册接口忽略 role 参数，只创建普通用户（防抢注 admin 提权）', async () => {
       const res = await request('POST', '/api/register', {
         username: 'fake_admin_' + Date.now(),
         password: 'password123',
         role: 'admin'
       });
-      assert.equal(res.status, 403);
+      // 不再返回 403，而是照常创建账号，但角色被强制为 user
+      assert.ok(res.status >= 200 && res.status < 300);
+      assert.equal(res.body.role, 'user', '客户端传入的 role 必须被忽略');
     });
 
     test('登录成功', async () => {
@@ -127,6 +140,8 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
       assert.ok(res.status >= 200 && res.status < 300);
       assert.equal(res.body.userId, ctx.testUserId);
       assert.equal(res.body.role, 'user');
+      assert.ok(res.body.token, '登录应返回 JWT token');
+      ctx.testUserToken = res.body.token;
     });
 
     test('密码错误返回 401', async () => {
@@ -157,7 +172,7 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         userId: ctx.testUserId,
         oldPassword: ctx.testPassword,
         newPassword: '123'
-      });
+      }, ctx.testUserToken);
       assert.equal(res.status, 400);
     });
 
@@ -166,7 +181,7 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         userId: ctx.testUserId,
         oldPassword: ctx.testPassword,
         newPassword: '123456'
-      });
+      }, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
     });
 
@@ -183,7 +198,7 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         userId: ctx.testUserId,
         oldPassword: '123456',
         newPassword: ctx.testPassword
-      });
+      }, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
     });
 
@@ -192,14 +207,14 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         userId: ctx.testUserId,
         oldPassword: 'wrongold',
         newPassword: 'newpass123'
-      });
+      }, ctx.testUserToken);
       assert.equal(res.status, 401);
     });
 
     test('缺少字段返回 400', async () => {
       const res = await request('POST', '/api/change-password', {
         userId: ctx.testUserId
-      });
+      }, ctx.testUserToken);
       assert.equal(res.status, 400);
     });
   });
@@ -223,7 +238,7 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         notes: '测试交易1'
       };
 
-      const res = await request('POST', `/api/trades/${ctx.testUserId}`, trade);
+      const res = await request('POST', `/api/trades/${ctx.testUserId}`, trade, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
       assert.equal(res.body.id, 'test_trade_1');
     });
@@ -250,24 +265,24 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         notes: '测试交易2'
       };
 
-      const res = await request('POST', `/api/trades/${ctx.testUserId}`, trade);
+      const res = await request('POST', `/api/trades/${ctx.testUserId}`, trade, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
     });
 
     test('获取所有数据', async () => {
-      const res = await request('GET', `/api/sync/${ctx.testUserId}`);
+      const res = await request('GET', `/api/sync/${ctx.testUserId}`, null, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
       assert.ok(Array.isArray(res.body.trades));
       assert.ok(res.body.trades.length >= 2, `至少2条交易 (实际: ${res.body.trades.length})`);
     });
 
     test('删除交易', async () => {
-      const res = await request('DELETE', `/api/trades/${ctx.testUserId}/test_trade_1`);
+      const res = await request('DELETE', `/api/trades/${ctx.testUserId}/test_trade_1`, null, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
     });
 
     test('确认交易已删除', async () => {
-      const res = await request('GET', `/api/sync/${ctx.testUserId}`);
+      const res = await request('GET', `/api/sync/${ctx.testUserId}`, null, ctx.testUserToken);
       const exists = res.body.trades.some(t => t.id === 'test_trade_1');
       assert.equal(exists, false);
     });
@@ -294,10 +309,10 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         notes: '更新后的备注'
       };
 
-      const res = await request('POST', `/api/trades/${ctx.testUserId}`, updatedTrade);
+      const res = await request('POST', `/api/trades/${ctx.testUserId}`, updatedTrade, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
 
-      const get = await request('GET', `/api/sync/${ctx.testUserId}`);
+      const get = await request('GET', `/api/sync/${ctx.testUserId}`, null, ctx.testUserToken);
       const t = get.body.trades.find(t => t.id === 'test_trade_2');
       assert.equal(t.notes, '更新后的备注');
     });
@@ -308,7 +323,7 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
       const res = await request('POST', `/api/deposits/${ctx.testUserId}`, {
         amount: 50000,
         date: '2024-01-10'
-      });
+      }, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
       assert.ok(res.body.id);
     });
@@ -317,12 +332,12 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
       const res = await request('POST', `/api/withdrawals/${ctx.testUserId}`, {
         amount: 10000,
         date: '2024-01-20'
-      });
+      }, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
     });
 
     test('获取入金/出金数据', async () => {
-      const res = await request('GET', `/api/sync/${ctx.testUserId}`);
+      const res = await request('GET', `/api/sync/${ctx.testUserId}`, null, ctx.testUserToken);
       assert.ok(res.body.deposits.length >= 1);
       assert.ok(res.body.withdrawals.length >= 1);
       const deposit = res.body.deposits.find(d => d.amount === 50000);
@@ -337,12 +352,12 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         riskPct: 3,
         maxRisk: 5,
         feeRate: 0.05
-      });
+      }, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
     });
 
     test('验证设置字段是 snake_case', async () => {
-      const res = await request('GET', `/api/sync/${ctx.testUserId}`);
+      const res = await request('GET', `/api/sync/${ctx.testUserId}`, null, ctx.testUserToken);
       assert.ok(res.body.settings);
       assert.equal(res.body.settings.init_capital, 200000);
       assert.equal(res.body.settings.risk_pct, 3);
@@ -365,13 +380,13 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         lesson: '严格执行止损',
         improvement: '继续保持'
       }];
-      const res = await request('POST', `/api/diary/${ctx.testUserId}`, { diary });
+      const res = await request('POST', `/api/diary/${ctx.testUserId}`, { diary }, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
       assert.equal(res.body.count, 1);
     });
 
     test('获取日记', async () => {
-      const res = await request('GET', `/api/diary/${ctx.testUserId}`);
+      const res = await request('GET', `/api/diary/${ctx.testUserId}`, null, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
       assert.ok(res.body.diary.length >= 1);
       const d = res.body.diary.find(d => d.id === 'diary_test_1');
@@ -380,7 +395,7 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
     });
 
     test('无效日记数据返回 400', async () => {
-      const res = await request('POST', `/api/diary/${ctx.testUserId}`, { diary: 'not_array' });
+      const res = await request('POST', `/api/diary/${ctx.testUserId}`, { diary: 'not_array' }, ctx.testUserToken);
       assert.equal(res.status, 400);
     });
   });
@@ -396,17 +411,24 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
     });
 
     test('非管理员访问用户列表被拒绝', async () => {
-      const res = await request('GET', `/api/admin/users?adminId=${ctx.testUserId}`);
+      // 携带普通用户的 token，应被 403 拒绝
+      const res = await request('GET', '/api/admin/users', null, ctx.testUserToken);
       assert.equal(res.status, 403);
     });
 
+    test('仅凭 adminId 查询参数已无法获得管理员权限（旧兼容分支已移除）', async () => {
+      const res = await request('GET', `/api/admin/users?adminId=${ctx.testAdminId}`);
+      // 无 token → 401；带普通用户 token → 403。都不再放行。
+      assert.ok(res.status === 401 || res.status === 403, '不应放行，实际: ' + res.status);
+    });
+
     test('非管理员访问统计接口被拒绝', async () => {
-      const res = await request('GET', `/api/admin/stats?adminId=${ctx.testUserId}`);
+      const res = await request('GET', '/api/admin/stats', null, ctx.testUserToken);
       assert.equal(res.status, 403);
     });
 
     test('非管理员访问用户详情被拒绝', async () => {
-      const res = await request('GET', `/api/admin/user/${ctx.testUserId}?adminId=${ctx.testUserId}`);
+      const res = await request('GET', `/api/admin/user/${ctx.testUserId}`, null, ctx.testUserToken);
       assert.equal(res.status, 403);
     });
 
@@ -419,15 +441,24 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
           else resolve();
         });
       });
+      db.close();
 
-      const res = await request('GET', `/api/admin/users?adminId=${ctx.testAdminId}`);
+      // 角色改动只影响之后签发的 token，需重新登录拿新 token
+      const login = await request('POST', '/api/login', {
+        username: ctx.adminUsername,
+        password: ctx.adminPassword
+      });
+      assert.ok(login.status >= 200 && login.status < 300, '管理员重新登录');
+      assert.equal(login.body.role, 'admin');
+      ctx.testAdminToken = login.body.token;
+
+      const res = await request('GET', '/api/admin/users', null, ctx.testAdminToken);
       assert.ok(res.status >= 200 && res.status < 300);
       assert.ok(Array.isArray(res.body.users));
-      db.close();
     });
 
     test('管理员获取统计', async () => {
-      const res = await request('GET', `/api/admin/stats?adminId=${ctx.testAdminId}`);
+      const res = await request('GET', '/api/admin/stats', null, ctx.testAdminToken);
       assert.ok(res.status >= 200 && res.status < 300);
       assert.equal(typeof res.body.user_count, 'number');
       assert.equal(typeof res.body.trade_count, 'number');
@@ -436,7 +467,7 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
 
   describe('8. 清空数据', () => {
     test('清空测试用户数据', async () => {
-      const res = await request('DELETE', `/api/clear/${ctx.testUserId}`);
+      const res = await request('DELETE', `/api/clear/${ctx.testUserId}`, null, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
     });
 
@@ -444,7 +475,7 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
       // db.serialize 异步执行 DELETE，可能存在竞态；重试几次以容忍
       let trades = -1, deposits = -1, withdrawals = -1;
       for (let i = 0; i < 10; i++) {
-        const res = await request('GET', `/api/sync/${ctx.testUserId}`);
+        const res = await request('GET', `/api/sync/${ctx.testUserId}`, null, ctx.testUserToken);
         trades = res.body.trades.length;
         deposits = res.body.deposits.length;
         withdrawals = res.body.withdrawals.length;
@@ -458,10 +489,12 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
   });
 
   describe('9. 边界情况', () => {
-    test('不存在的用户返回空数据', async () => {
-      const res = await request('GET', '/api/sync/nonexistent_user_id');
-      assert.ok(res.status >= 200 && res.status < 300);
-      assert.ok(Array.isArray(res.body.trades));
+    test('访问他人 userId 应被 403 拒绝（requireSelfOrAdmin 越权防护）', async () => {
+      // ★ 原断言期望 200，那是无鉴权时代的语义。
+      //   现在该路由挂了 requireSelfOrAdmin：访问非本人 userId 必须被拒绝，
+      //   否则等于知道别人的 UUID 就能读他的全部交易数据。
+      const res = await request('GET', '/api/sync/nonexistent_user_id', null, ctx.testUserToken);
+      assert.ok(res.status === 403 || res.status === 404, '应拒绝越权访问，实际: ' + res.status);
     });
 
     test('特殊字符保存', async () => {
@@ -481,10 +514,10 @@ describe('服务器 API 集成测试', { skip: !ctx.serverAvailable }, () => {
         notes: '包含&<>"特殊字符'
       };
 
-      const res = await request('POST', `/api/trades/${ctx.testUserId}`, trade);
+      const res = await request('POST', `/api/trades/${ctx.testUserId}`, trade, ctx.testUserToken);
       assert.ok(res.status >= 200 && res.status < 300);
 
-      const get = await request('GET', `/api/sync/${ctx.testUserId}`);
+      const get = await request('GET', `/api/sync/${ctx.testUserId}`, null, ctx.testUserToken);
       const t = get.body.trades.find(t => t.id === 'special_trade_1');
       assert.ok(t);
       assert.equal(t.symbol, 'A&B"C');

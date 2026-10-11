@@ -237,6 +237,41 @@ function wantsHtml(req) {
   return !pathOnly.startsWith('/api/');
 }
 
+/**
+ * 未登录时的提示页。
+ * 研报库自身完全没有账号体系（见 research-hub/README.md），
+ * 因此必须在代理层挡住匿名访客，否则等于把「可读写/删除全部研报」的接口公开到公网。
+ */
+function loginRequiredPage() {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>需要登录 · 研报库</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+         background:#0f1115; color:#e6e8ee; }
+  .box { max-width:420px; padding:32px 28px; border:1px solid #262b36; border-radius:14px;
+         background:#161a22; text-align:center; }
+  h1 { margin:0 0 10px; font-size:19px; }
+  p { margin:0 0 18px; font-size:13px; line-height:1.7; color:#98a2b3; }
+  a { display:inline-block; padding:9px 18px; border-radius:9px; background:#4361ee; color:#fff;
+      text-decoration:none; font-size:13px; }
+  a:hover { background:#3a55d9; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>🔒 需要登录</h1>
+  <p>研报库没有独立的账号体系，需要先在交易台登录后才能访问。</p>
+  <a href="/" target="_top">前往交易台登录</a>
+</div>
+</body>
+</html>`;
+}
+
 function fail(req, res, err) {
   const reason = err && err.code === 'ECONNREFUSED' ? '服务未启动' : (err && err.message) || '未知错误';
   console.warn(`[研报库] ${req.method} ${req.originalUrl} -> ${UPSTREAM_HOST}:${UPSTREAM_PORT} 失败：${reason}`);
@@ -308,6 +343,8 @@ function handle(req, res) {
  */
 function mount(app, options) {
   const opts = options || {};
+  // 鉴权模块（可选注入）。不传时退回"仅本机可访问"策略，避免测试环境意外裸奔。
+  const auth = opts.auth || null;
 
   // —— 随交易台一起启动（默认开；被测试 require、或显式关闭时不启动）
   const autostart = opts.autostart !== false && process.env.RESEARCH_AUTOSTART !== '0';
@@ -355,8 +392,25 @@ function mount(app, options) {
     });
   });
 
+  // —— 鉴权闸门：研报库自身没有账号体系，必须在代理层挡住匿名访客。
+  //    iframe 导航带不了 Authorization 头，因此用登录时下发的 httpOnly Cookie 判定。
+  //    没注入 auth 模块时（如单元测试）退回"仅本机可访问"，宁可打不开也不裸奔。
+  app.use(PREFIX, function (req, res, next) {
+    if (auth) {
+      const user = auth.userFromCookie(req);
+      if (user) { req.user = user; return next(); }
+    } else if (isLocalRequest(req)) {
+      return next();
+    }
+    if (wantsHtml(req)) {
+      return res.status(401).type('html').send(loginRequiredPage());
+    }
+    return res.status(401).json({ ok: false, error: '需要登录后才能访问研报库' });
+  });
+
   app.use(PREFIX, handle);   // app.use 已同时覆盖 /research 与 /research/xxx
   console.log(`  研报库入口：http://localhost:${process.env.PORT || 3000}${PREFIX}/  ->  ${UPSTREAM_HOST}:${UPSTREAM_PORT}`);
+  console.log('  研报库已启用登录校验（需先在交易台登录）');
 }
 
 module.exports = { mount, stopService, PREFIX, UPSTREAM_HOST, UPSTREAM_PORT };

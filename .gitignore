@@ -9,6 +9,8 @@ server/node_modules/
 server/data.db
 research-hub/data/
 server/research.log
+# JWT 签名密钥（每台机器独立生成，绝不能进仓库）
+server/.jwt-secret
 
 # 临时文件 & 调试页面
 ~$*.xlsx

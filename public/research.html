@@ -63,14 +63,35 @@
   <iframe
     class="rs-frame"
     id="researchFrame"
-    src="/research/?v=2"
     title="研报库"
     allow="clipboard-write; clipboard-read"
     referrerpolicy="same-origin"></iframe>
 </div>
 
-<script src="js/utils.js?v=7"></script>
-<script src="js/header.js?v=10"></script>
-<script>renderAppHeader('research');</script>
+<script src="js/utils.js?v=8"></script>
+<script src="js/header.js?v=11"></script>
+<script>
+renderAppHeader('research');
+
+// 研报库没有独立账号体系，其访问权限由代理层校验交易台的登录 Cookie。
+// iframe 的导航请求无法携带 Authorization 头，因此这里先用当前 token
+// 换取一次会话 Cookie，再加载 iframe —— 否则已登录用户也会被挡在提示页。
+(function loadResearchFrame() {
+  var frame = document.getElementById('researchFrame');
+  // 本页未加载 sync.js，直接读 localStorage 中的 token（键名见 sync.js 的 getToken）
+  var token = null;
+  try { token = localStorage.getItem('sync_token'); } catch (e) { token = null; }
+
+  function show() { frame.src = '/research/?v=3'; }
+
+  if (!token) { show(); return; }   // 未登录：让代理层给出"需要登录"提示页
+
+  fetch('/api/session', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Authorization': 'Bearer ' + token }
+  }).then(show).catch(show);
+})();
+</script>
 </body>
 </html>

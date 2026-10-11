@@ -335,11 +335,11 @@ function renderTable() {
 
       html += '<tr data-trade-id="' + esc(t.id) + '">' +
       '<td class="col-num" style="color:var(--text-tertiary);text-align:center">' + (i + 1) + '</td>' +
-      '<td class="col-date" style="text-align:center;color:var(--text-primary)">' + (t.date || '-') + '</td>' +
-      '<td class="col-symbol" style="text-align:center;color:var(--text-primary);font-weight:500">' + (t.symbol || '-') + '</td>' +
-      '<td class="col-buytype col-secondary" style="text-align:center;color:var(--color-purple);font-weight:500">' + (t.buyType || '-') + '</td>' +
-      '<td class="col-dir" style="text-align:center;color:' + dC + ';font-weight:600">' + t.dir + '</td>' +
-      '<td class="col-entry" style="text-align:center;color:var(--text-primary);font-weight:500">' + (t.entry || '-') + '</td>' +
+      '<td class="col-date" style="text-align:center;color:var(--text-primary)">' + esc(t.date || '-') + '</td>' +
+      '<td class="col-symbol" style="text-align:center;color:var(--text-primary);font-weight:500">' + esc(t.symbol || '-') + '</td>' +
+      '<td class="col-buytype col-secondary" style="text-align:center;color:var(--color-purple);font-weight:500">' + esc(t.buyType || '-') + '</td>' +
+      '<td class="col-dir" style="text-align:center;color:' + dC + ';font-weight:600">' + esc(t.dir) + '</td>' +
+      '<td class="col-entry" style="text-align:center;color:var(--text-primary);font-weight:500">' + esc(t.entry || '-') + '</td>' +
       '<td class="col-stop col-secondary" style="text-align:center;color:var(--color-green)">' + (t.stop ? parseFloat(t.stop).toFixed(2) : '-') + '</td>' +
       '<td class="col-breakeven col-secondary" style="text-align:center;color:var(--color-purple);font-weight:500">' + (t.breakEvenPrice ? parseFloat(t.breakEvenPrice).toFixed(2) : '-') + '</td>' +
       '<td class="col-target col-secondary" style="text-align:center;color:var(--color-red)">' + (t.target ? parseFloat(t.target).toFixed(2) : '-') + rrL + '</td>' +

@@ -170,42 +170,79 @@ var DataStore = (function() {
   }
 
   // 执行同步：把待处理的变更推送到服务器
+  // ★ 失败的条目必须保留在 _syncPending 里等下次重推。
+  //   之前无论成败都在末尾清空 _syncPending，导致失败项永久丢失（跨设备静默丢数据）。
+  // ★ 处理完的条目按 id 逐个从 _syncPending 摘除，而不是整体替换：
+  //   本函数有 await，期间用户的新编辑会写入 _syncPending，整体替换会把它抹掉。
   async function flushSync() {
     _syncTimer = null;
     if (!isLoggedIn()) return;
 
-    for (var colName in _syncPending) {
-      var pending = _syncPending[colName];
+    // 取快照：只处理本次开始时已存在的条目，避免与进行中的新编辑纠缠
+    var snapshot = {};
+    for (var name in _syncPending) {
+      snapshot[name] = {
+        adds: Object.keys(_syncPending[name].adds),
+        deletes: Object.keys(_syncPending[name].deletes)
+      };
+    }
+
+    var failedCount = 0;
+
+    function dropPending(colName, kind, id) {
+      var bucket = _syncPending[colName];
+      if (!bucket) return;
+      delete bucket[kind][id];
+      if (!Object.keys(bucket.adds).length && !Object.keys(bucket.deletes).length) {
+        delete _syncPending[colName];
+      }
+    }
+
+    for (var colName in snapshot) {
       var col = _collections[colName];
       if (!col) continue;
 
       // 推送新增/修改
-      var addIds = Object.keys(pending.adds);
+      var addIds = snapshot[colName].adds;
       for (var i = 0; i < addIds.length; i++) {
-        var item = col.items[addIds[i]];
-        if (!item) continue;
+        var id = addIds[i];
+        var item = col.items[id];
+        if (!item) { dropPending(colName, 'adds', id); continue; }  // 本地已删除，无需再推
         try {
-          await authFetch('/api/data/' + colName, {
+          var res = await authFetch('/api/data/' + colName, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: item.id, data: item })
           });
+          if (!res || !res.ok) throw new Error('HTTP ' + (res && res.status));
+          dropPending(colName, 'adds', id);
         } catch (e) {
-          console.warn('[DataStore] 同步失败:', colName, addIds[i], e.message);
+          // 保留在 _syncPending 中，等待下次重推
+          console.warn('[DataStore] 同步失败，保留待重试:', colName, id, e.message);
+          failedCount++;
         }
       }
 
       // 推送删除
-      var deleteIds = Object.keys(pending.deletes);
+      var deleteIds = snapshot[colName].deletes;
       for (var j = 0; j < deleteIds.length; j++) {
+        var did = deleteIds[j];
         try {
-          await authFetch('/api/data/' + colName + '/' + deleteIds[j], { method: 'DELETE' });
+          var delRes = await authFetch('/api/data/' + colName + '/' + did, { method: 'DELETE' });
+          if (!delRes || !delRes.ok) throw new Error('HTTP ' + (delRes && delRes.status));
+          dropPending(colName, 'deletes', did);
         } catch (e) {
-          console.warn('[DataStore] 删除同步失败:', colName, deleteIds[j], e.message);
+          console.warn('[DataStore] 删除同步失败，保留待重试:', colName, did, e.message);
+          failedCount++;
         }
       }
     }
-    _syncPending = {};
+
+    if (failedCount > 0) {
+      console.warn('[DataStore] ' + failedCount + ' 项同步失败，5s 后重试');
+      // 仅在期间没有新调度的情况下才安排重试，避免覆盖 scheduleSync 排的 1s 任务
+      if (!_syncTimer) _syncTimer = setTimeout(flushSync, 5000);
+    }
   }
 
   // 通知监听器

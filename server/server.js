@@ -34,12 +34,15 @@ app.use(cors());
 // ★ 必须挂在 express.json() 之前：否则 POST/PATCH 的 JSON body 会先被解析消费，
 //   转发给上游时变成空 body，上游会一直等直到超时 —— 研报库的写操作会全部失效。
 try {
-  require('./research-proxy').mount(app, { autostart: require.main === module });
+  // 注入 auth：代理层要用登录 Cookie 给研报库做鉴权闸门
+  require('./research-proxy').mount(app, { autostart: require.main === module, auth: auth });
 } catch (e) {
   console.warn('  研报库代理未加载（不影响主站）：', e.message);
 }
 
-app.use(express.json());
+// 请求体解析。默认上限只有 100KB，而 /api/sync 会一次性上传用户的全部
+// 交易/入金/出金记录，数据量一大就会 413。这里放宽到 10MB。
+app.use(express.json({ limit: '10mb' }));
 // 静态资源禁用浏览器缓存（避免 JS 修改后用户还得硬刷新）
 app.use(express.static(path.join(__dirname, '../public'), {
   etag: false,
@@ -53,6 +56,16 @@ app.use(express.static(path.join(__dirname, '../public'), {
 
 // 数据库初始化
 const db = new sqlite3.Database(path.join(__dirname, 'data.db'));
+
+// ★ 并发设置：同一个 data.db 还会被 market-history.js（独立连接）、
+//   aihot-translate.js（只读连接）以及 cron-fill / fill-* / apply-activity 等
+//   sqlite3 CLI 脚本并发访问。默认 rollback journal 下极易 SQLITE_BUSY。
+//   WAL 允许读写并发，busy_timeout 让写冲突时等待而不是立刻失败。
+db.serialize(() => {
+  db.run('PRAGMA journal_mode = WAL');
+  db.run('PRAGMA busy_timeout = 5000');
+  db.run('PRAGMA synchronous = NORMAL');
+});
 
 // P0-1: 向 auth 模块注入 db 实例（避免循环依赖）
 auth.setDb(db);
@@ -262,11 +275,17 @@ aiSettings.mount(app, auth);
 
 // 用户注册
 app.post('/api/register', (req, res) => {
-  const { username, password, role = 'user' } = req.body;
+  const { username, password } = req.body;
   const userId = uuidv4();
 
-  if (role === 'admin' && username !== 'admin') {
-    return res.status(403).json({ error: '只有管理员可以创建管理员账户' });
+  // ★ 安全修复：公开注册接口一律创建普通用户，绝不接受客户端传入的 role。
+  //   之前用 `role === 'admin' && username !== 'admin'` 判断，等于"谁抢到 admin 这个
+  //   用户名谁就是管理员"——首次部署用户表为空时，任何人都能直接注册成管理员。
+  //   创建管理员只能走 /api/admin/register（已挂 authMiddleware + requireAdmin）。
+  const role = 'user';
+
+  if (!username || !password) {
+    return res.status(400).json({ error: '请提供用户名和密码' });
   }
 
   const hashedPassword = bcrypt.hashSync(password, 10);
@@ -284,6 +303,7 @@ app.post('/api/register', (req, res) => {
       db.run('INSERT INTO settings (user_id) VALUES (?)', [userId]);
       // P0-1: 注册成功后自动签发 token，实现注册即登录
       const token = auth.sign({ userId: userId, username: username, role: role });
+      auth.setSessionCookie(res, token);
       res.json({ userId, username, role, token, message: '注册成功' });
     }
   );
@@ -305,9 +325,31 @@ app.post('/api/login', (req, res) => {
 
       // P0-1: 登录成功签发 JWT
       const token = auth.sign({ userId: row.id, username: row.username, role: row.role });
+      // 同时下发 httpOnly 会话 Cookie：iframe 内嵌的研报库靠它鉴权
+      auth.setSessionCookie(res, token);
       res.json({ userId: row.id, username: row.username, role: row.role, token, message: '登录成功' });
     }
   );
+});
+
+// 退出登录：清除会话 Cookie（否则退出后 iframe 内嵌的研报库仍能凭旧 Cookie 访问）
+app.post('/api/logout', (req, res) => {
+  auth.clearSessionCookie(res);
+  res.json({ message: '已退出登录' });
+});
+
+// 用当前 Bearer token 换取/刷新会话 Cookie。
+// 用途：登录态存在 localStorage 的老用户，或换了标签页/清过 Cookie 的场景，
+// 前端在加载内嵌的研报库前先调一次，避免被代理层的鉴权闸门挡在外面。
+app.post('/api/session', auth.authMiddleware, (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (!token) {
+    // 说明本次是靠 Cookie 通过的，无需重新下发
+    return res.json({ ok: true, refreshed: false });
+  }
+  auth.setSessionCookie(res, token);
+  res.json({ ok: true, refreshed: true });
 });
 
 // 修改密码（P0-1: 加 token 鉴权）
@@ -1239,6 +1281,22 @@ app.delete('/api/data/:collection', auth.authMiddleware, (req, res) => {
       res.json({ message: '已清空', affected: this.changes });
     }
   );
+});
+
+// ===== 全局错误处理（必须放在所有路由之后）=====
+// 没有这个中间件时，express.json() 抛出的 413/400 会返回 HTML 错误页，
+// 前端 await res.json() 解析失败，报出与真实原因无关的报错。
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = err.status || err.statusCode || 500;
+  if (status === 413) {
+    return res.status(413).json({ error: '请求体过大，请减少单次提交的数据量' });
+  }
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: '请求体不是合法的 JSON' });
+  }
+  console.error('[server] 未处理的错误:', err.message);
+  res.status(status).json({ error: status >= 500 ? '服务器内部错误' : err.message });
 });
 
 // 启动服务器

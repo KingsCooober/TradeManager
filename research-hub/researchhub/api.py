@@ -387,12 +387,34 @@ def batch_mark_read(payload: dict = Body(...)) -> dict:
 
 # ------------------------------------------------------------------ AI
 
+def _ai_settings_for_request(payload: dict) -> dict:
+    """构造调用 AI 用的配置。
+
+    ★ 安全要点（凭据泄露防护）：
+    只能使用**库中已保存**的 ai_base_url 与 ai_api_key。
+    请求体最多允许覆盖 ai_model / ai_temperature / ai_language 这类非敏感参数。
+
+    历史上这里会把请求体里的 settings 整体合并进来，于是任何人都能：
+      1) 传 ai_base_url 指向自己的服务器；
+      2) 再传一个含 "•" 的假 key，触发"沿用已保存 key"分支；
+    最终把库中真实 API Key 以 Authorization: Bearer 发到攻击者服务器。
+    而 /research/api/* 经主站反向代理是对公网可达的，等于密钥可被任意访客读走。
+    """
+    settings = dict(db.get_settings())
+    override = payload.get("settings") or {}
+    if isinstance(override, dict):
+        for key in ("ai_model", "ai_temperature", "ai_language"):
+            value = override.get(key)
+            if value is not None and str(value).strip():
+                settings[key] = str(value).strip()
+    # ai_base_url / ai_api_key 一律忽略请求体，只认已保存的配置
+    return settings
+
+
 @router.post("/reports/{rid}/summarize")
 def summarize_report(rid: int, payload: dict = Body(default={})) -> dict:
     report = fetch_report(rid)
-    settings = db.get_settings()
-    if payload.get("settings"):
-        settings = {**settings, **payload["settings"]}
+    settings = _ai_settings_for_request(payload or {})
     try:
         result = ai.summarize(report["title"], report["content"], settings)
     except ai.AIError as exc:
@@ -682,12 +704,9 @@ def write_settings(payload: dict = Body(...)) -> dict:
 
 @router.post("/settings/test")
 def test_settings(payload: dict = Body(default={})) -> dict:
-    settings = db.get_settings()
-    override = payload.get("settings") or {}
-    settings = {**settings, **override}
-    key_input = str(settings.get("ai_api_key") or "")
-    if "•" in key_input:  # 前端回传的是掩码，用已保存的 key
-        settings["ai_api_key"] = db.get_settings().get("ai_api_key", "")
+    # 只允许覆盖 model / temperature，base_url 与 api_key 必须来自已保存配置，
+    # 否则可被用来把真实 Key 发往攻击者指定的地址（详见 _ai_settings_for_request）。
+    settings = _ai_settings_for_request(payload or {})
     try:
         return ai.test_connection(settings)
     except ai.AIError as exc:

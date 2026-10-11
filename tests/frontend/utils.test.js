@@ -51,10 +51,55 @@ describe('utils.js 纯函数测试', () => {
       assert.match(today, /^\d{4}-\d{2}-\d{2}$/);
     });
 
-    test('日期等于当前日期', () => {
+    test('日期等于本地时区的当前日期', () => {
       const today = getToday();
-      const expected = new Date().toISOString().slice(0, 10);
+      // ★ 期望值必须按本地时区计算：getToday 之前用 toISOString()（UTC），
+      //   在 UTC+8 每天 00:00–08:00 会返回前一天，属于已修复的 bug。
+      const now = new Date();
+      const expected = now.getFullYear() + '-' +
+        String(now.getMonth() + 1).padStart(2, '0') + '-' +
+        String(now.getDate()).padStart(2, '0');
       assert.equal(today, expected);
+    });
+  });
+
+  describe('formatLocalDate() / parseLocalDate()', () => {
+    test('formatLocalDate 使用本地时区而非 UTC', () => {
+      // 本地时间 2026-01-01 00:30：UTC+8 下 toISOString() 会给出 2025-12-31
+      const d = new Date(2026, 0, 1, 0, 30, 0);
+      assert.equal(formatLocalDate(d), '2026-01-01');
+    });
+
+    test('parseLocalDate 解析为本地午夜，可与 formatLocalDate 往返', () => {
+      const parsed = parseLocalDate('2026-03-15');
+      assert.ok(parsed instanceof Date);
+      assert.equal(parsed.getFullYear(), 2026);
+      assert.equal(parsed.getMonth(), 2);   // 0-based
+      assert.equal(parsed.getDate(), 15);
+      assert.equal(formatLocalDate(parsed), '2026-03-15');
+    });
+
+    test('parseLocalDate 对非法输入返回 null', () => {
+      assert.equal(parseLocalDate(''), null);
+      assert.equal(parseLocalDate('not-a-date'), null);
+      assert.equal(parseLocalDate(null), null);
+    });
+  });
+
+  describe('calcHoldDuration()', () => {
+    test('同日开平仓为 0 天', () => {
+      const html = calcHoldDuration({ status: 'win', date: '2026-01-01', exitDate: '2026-01-01' });
+      assert.equal(html, '0天');
+    });
+
+    test('跨日持仓天数按本地日期计算', () => {
+      const html = calcHoldDuration({ status: 'win', date: '2026-01-01', exitDate: '2026-01-04' });
+      assert.equal(html, '3天');
+    });
+
+    test('出场早于开仓显示异常', () => {
+      const html = calcHoldDuration({ status: 'loss', date: '2026-01-05', exitDate: '2026-01-01' });
+      assert.match(html, /异常/);
     });
   });
 

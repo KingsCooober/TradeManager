@@ -138,9 +138,24 @@ function refreshSyncIndicatorTooltip() {
 }
 
 // 已删除记录的ID列表（用于同步删除操作）
-let pendingDeletedTrades = JSON.parse(localStorage.getItem('pending_deleted_trades') || '[]');
-let pendingDeletedDeposits = JSON.parse(localStorage.getItem('pending_deleted_deposits') || '[]');
-let pendingDeletedWithdrawals = JSON.parse(localStorage.getItem('pending_deleted_withdrawals') || '[]');
+// ★ 必须容错：这三行在模块顶层执行，localStorage 内容一旦损坏（非 JSON），
+//   整个 sync.js 会加载失败，导致登录/同步/authFetch 全部不可用。
+function safeParseArray(key) {
+  try {
+    var raw = localStorage.getItem(key);
+    if (!raw) return [];
+    var parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn('[sync] ' + key + ' 内容损坏，已重置为空数组:', e.message);
+    try { localStorage.removeItem(key); } catch (e2) {}
+    return [];
+  }
+}
+
+let pendingDeletedTrades = safeParseArray('pending_deleted_trades');
+let pendingDeletedDeposits = safeParseArray('pending_deleted_deposits');
+let pendingDeletedWithdrawals = safeParseArray('pending_deleted_withdrawals');
 
 // ===== 用户认证 =====
 
@@ -247,6 +262,13 @@ function logout() {
   localStorage.removeItem('sync_user');
   // P0-1: 退出登录时清除 token
   clearToken();
+  // 通知服务器清除会话 Cookie，否则退出后内嵌的研报库仍可凭旧 Cookie 访问
+  try {
+    fetch((SYNC_CONFIG.serverUrl || '') + '/api/logout', {
+      method: 'POST',
+      credentials: 'same-origin'
+    }).catch(function() { /* 失败不影响本地登出 */ });
+  } catch (e) { /* 忽略 */ }
   // 通知 DataStore 停止同步（保留本地缓存）
   if (typeof DataStore !== 'undefined') DataStore.onLogout();
   stopAutoSync();
@@ -254,8 +276,14 @@ function logout() {
 
 function getCurrentUser() {
   if (!currentUser) {
-    const saved = localStorage.getItem('sync_user');
-    if (saved) currentUser = JSON.parse(saved);
+    try {
+      const saved = localStorage.getItem('sync_user');
+      if (saved) currentUser = JSON.parse(saved);
+    } catch (e) {
+      console.warn('[sync] sync_user 内容损坏，已清除:', e.message);
+      try { localStorage.removeItem('sync_user'); } catch (e2) {}
+      currentUser = null;
+    }
   }
   return currentUser;
 }
@@ -296,6 +324,14 @@ function tradeToServerFormat(trade) {
 }
 
 // 后端格式 -> 前端交易记录
+// ★ 数值字段用 numOrEmpty 而不是 `|| ''`：
+//   价格/盈亏真实为 0（如平局单 pnl=0）时，`0 || ''` 会变成空串，
+//   导致 0 与"未填写"无法区分，往返同步后数据显示异常。
+function numOrEmpty(v) {
+  if (v === null || v === undefined || v === '') return '';
+  return v;
+}
+
 function tradeFromServerFormat(t) {
   return {
     id: t.id,
@@ -304,17 +340,17 @@ function tradeFromServerFormat(t) {
     symbol: t.symbol || '',
     buyType: t.type || '',
     dir: t.direction || '多',
-    entry: t.entry_price || '',
-    stop: t.stop_loss || '',
-    breakEvenPrice: t.break_even_price || '',
-    target: t.take_profit || '',
-    posSize: t.position_size || '',
-    actualLots: t.actual_lots || null,
-    riskAmount: t.r_amount || '',
-    exit: t.close_price || '',
+    entry: numOrEmpty(t.entry_price),
+    stop: numOrEmpty(t.stop_loss),
+    breakEvenPrice: numOrEmpty(t.break_even_price),
+    target: numOrEmpty(t.take_profit),
+    posSize: numOrEmpty(t.position_size),
+    actualLots: numOrEmpty(t.actual_lots),
+    riskAmount: numOrEmpty(t.r_amount),
+    exit: numOrEmpty(t.close_price),
     exitType: t.exit_type || '',
-    pnl: t.pnl_amount || '',
-    pnlR: t.pnl_r || '',
+    pnl: numOrEmpty(t.pnl_amount),
+    pnlR: numOrEmpty(t.pnl_r),
     status: t.status || 'open',
     note: t.notes || '',
     followedPlan: '是',
@@ -501,12 +537,24 @@ async function _doSyncTick() {
   let ok = true;
   try {
     // 1. 先推送本地修改
-    await syncToServer();
+    // ★ syncToServer 失败时是 return false（不抛异常），必须检查返回值，
+    //   否则 ok 恒为 true、退避重试永远不会触发。
+    const pushOk = await syncToServer();
+    if (pushOk === false) {
+      ok = false;
+      _scheduleSyncRetry();
+      return ok;
+    }
     // 2. 拉取服务器最新（但避免覆盖未同步的本地编辑）
     if (typeof hasUnsyncedChanges === 'function' && hasUnsyncedChanges()) {
       console.log('[sync] 本地有未同步变更，跳过 pull');
     } else {
-      await syncFromServer();
+      const pullOk = await syncFromServer();
+      if (pullOk === false) {
+        ok = false;
+        _scheduleSyncRetry();
+        return ok;
+      }
     }
     _resetSyncRetry();
   } catch (e) {

@@ -1128,78 +1128,6 @@ function BT_setupIndexTooltip() {
   BT_indexChart.on('globalout', function() { tt.style.display = 'none'; });
 }
 
-// 用绝对定位的 DOM 浮层渲染当前窗口的 max/min 标签
-// 优势：完全可控样式、不受 ECharts markLine 渲染 bug 影响
-function BT_renderWindowExtremaDOM(extrema) {
-  // 移除旧标签
-  var old = document.querySelectorAll('.bt-extrema-label');
-  for (var i = 0; i < old.length; i++) old[i].remove();
-  if (!extrema || !BT_chart) return;
-
-  var chartDom = document.getElementById('btChart');
-  if (!chartDom) return;
-  // chart 内坐标 → 像素坐标
-  var ptMax = BT_chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 },
-                                      [extrema.maxIdx, BT_klineData.ohlc[extrema.maxIdx][3]]);
-  var ptMin = BT_chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 },
-                                      [extrema.minIdx, BT_klineData.ohlc[extrema.minIdx][2]]);
-  if (!ptMax || !ptMin || isNaN(ptMax[0])) return;
-
-  var rect = chartDom.getBoundingClientRect();
-  var offsetX = rect.left;  // chart 相对视口的位置
-  var offsetY = rect.top;
-
-  function createLabel(text, x, y, color) {
-    var el = document.createElement('div');
-    el.className = 'bt-extrema-label';
-    el.textContent = text;
-    el.style.cssText = [
-      'position: fixed',
-      'left: ' + (offsetX + x - 28) + 'px',
-      'top: ' + (offsetY + y - 10) + 'px',
-      'background: ' + color,
-      'color: #fff',
-      'padding: 2px 6px',
-      'border-radius: 3px',
-      'font-size: 11px',
-      'font-weight: bold',
-      'pointer-events: none',
-      'z-index: 1000',
-      'box-shadow: 0 1px 3px rgba(0,0,0,0.3)',
-      'white-space: nowrap'
-    ].join(';');
-    document.body.appendChild(el);
-  }
-
-  createLabel('高 ' + BT_klineData.ohlc[extrema.maxIdx][3].toFixed(2), ptMax[0], ptMax[1] - 12, '#ef476f');
-  createLabel('低 ' + BT_klineData.ohlc[extrema.minIdx][2].toFixed(2), ptMin[0], ptMin[1] + 8, '#2d9f7f');
-}
-
-// 计算当前可见窗口（dataZoom）的最高 / 最低价
-// 返回 { maxIdx, minIdx, maxPrice, minPrice } 或 null（数据不足）
-function BT_calcWindowExtrema() {
-  if (!BT_chart || !BT_klineData) return null;
-  var opt = BT_chart.getOption();
-  if (!opt.dataZoom || !opt.dataZoom[1]) return null;
-  var z = opt.dataZoom[1];
-  var total = BT_klineData.dates.length;
-  if (total < 2) return null;
-  // 百分比 → idx 范围
-  var startIdx = Math.max(0, Math.floor((z.start || 0) / 100 * (total - 1)));
-  var endIdx   = Math.min(total - 1, Math.ceil((z.end || 100) / 100 * (total - 1)));
-  if (endIdx <= startIdx) return null;
-  var maxIdx = startIdx, minIdx = startIdx;
-  var maxPrice = BT_klineData.ohlc[startIdx][3]; // high
-  var minPrice = BT_klineData.ohlc[startIdx][2]; // low
-  for (var i = startIdx + 1; i <= endIdx; i++) {
-    var hi = BT_klineData.ohlc[i][3];
-    var lo = BT_klineData.ohlc[i][2];
-    if (hi > maxPrice) { maxPrice = hi; maxIdx = i; }
-    if (lo < minPrice) { minPrice = lo; minIdx = i; }
-  }
-  return { maxIdx: maxIdx, minIdx: minIdx, maxPrice: maxPrice, minPrice: minPrice };
-}
-
 // 切换 MA 周期后重画（从输入框读）
 // 修改 MA 周期：保留空 slot（用户可清空），但**不**重画整个图，只更新 MA 系列 → 不动 xAxis/dataZoom/grid
 function BT_updateMAPeriods() {
@@ -1894,11 +1822,4 @@ function BT_syncIndexCursor(idx) {
   if (typeof idx !== 'number' || idx < 0 || idx >= BT_indexData.dates.length) return;
   // dispatchAction 触发指数图的 axisPointer 显示（与主图共享 xAxis idx 范围）
   BT_indexChart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: idx });
-}
-
-// 同步主图 + 指数图的可见根数（当主图 visibleBars 变化时）
-// 调用方：BT_applyVisibleBars、用户拖动 slider
-function BT_syncIndexVisibleBars() {
-  if (!BT_indexChart) return;
-  BT_indexChart.resize();
 }

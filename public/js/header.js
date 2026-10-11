@@ -335,7 +335,15 @@ function appSettingsSave() {
 
 function appSettingsTest() {
   appSettingsMsg('测试中…（会真实调用一次模型）', '');
-  appSettingsFetch('POST', '/api/ai/settings/test', appSettingsPayload()).then(function () {
+  // 出于安全考虑，服务端只用「已保存」的 base_url / api_key 发起测试，
+  // 不接受请求体覆盖地址（否则可把 Key 发往任意服务器）。故先保存表单再测试。
+  appSettingsFetch('PUT', '/api/ai/settings', appSettingsPayload()).then(function (data) {
+    document.getElementById('appSetKey').value = '';
+    document.getElementById('appSetKey').placeholder = appSettingsKeyPlaceholder(data);
+    return appSettingsFetch('POST', '/api/ai/settings/test', {
+      ai_model: document.getElementById('appSetModel').value.trim()
+    });
+  }).then(function () {
     appSettingsMsg('连接成功 ✅', 'ok');
   }).catch(function (error) {
     appSettingsMsg(error.message, 'err');

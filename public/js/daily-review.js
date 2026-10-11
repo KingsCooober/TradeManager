@@ -431,9 +431,12 @@ function onDRDateChange() {
 
 function navigateDRDate(delta) {
   autoSaveDR();
-  var d = new Date(drCurrentDate);
+  // ★ 用本地时间解析/格式化：drCurrentDate 是 'YYYY-MM-DD'，
+  //   new Date('2026-01-01') 会按 UTC 解析，再 toISOString() 又按 UTC 输出，
+  //   在东八区会导致"上一天/下一天"在早 8 点前跳错日期。
+  var d = parseLocalDate(drCurrentDate) || new Date();
   d.setDate(d.getDate() + delta);
-  drCurrentDate = d.toISOString().slice(0, 10);
+  drCurrentDate = formatLocalDate(d);
   document.getElementById('drDate').value = drCurrentDate;
   loadTradesForDate(drCurrentDate);
   loadReviewForDate(drCurrentDate);
