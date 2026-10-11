@@ -199,12 +199,11 @@ function BT_init() {
   var showMA = document.getElementById('showMA');
   var showMACD = document.getElementById('showMACD');
   var showVol = document.getElementById('showVol');
-  var showEquity = document.getElementById('showEquity');
   var showIndex = document.getElementById('showIndex');
   if (showMA)     showMA.addEventListener('change', BT_toggleShowMA);
   if (showMACD)   showMACD.addEventListener('change', BT_toggleShowMACD);
   if (showVol)    showVol.addEventListener('change', BT_toggleShowVol);
-  if (showEquity) showEquity.addEventListener('change', BT_toggleShowEquity);
+  // 「资金」开关已移除（资金曲线按用户要求删除）
   if (showIndex)  showIndex.addEventListener('change', function() { BT_toggleShowIndex(); BT_saveState(); });
 
   // 5.5) 指数下拉 → 重新加载指数图

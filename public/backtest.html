@@ -57,7 +57,7 @@
   padding: 8px;
   margin-bottom: 12px;
 }
-#btChart { width: 100%; height: 970px; min-width: 0; }  /* K线 500 + 量 100 + MACD 150 + 资金 150 + slider = 970px */
+#btChart { width: 100%; height: 638px; min-width: 0; }  /* K线 400 + 量 80 + MACD 120 + 间距/滑块 ≈ 638px */
 
 /* 大盘指数窗口 */
 .bt-index-body {
@@ -387,7 +387,6 @@
       <label><input type="checkbox" id="showMA" checked> MA</label>
       <label><input type="checkbox" id="showMACD" checked> MACD</label>
       <label><input type="checkbox" id="showVol" checked> 量</label>
-      <label><input type="checkbox" id="showEquity" checked> 资金</label>
       <label><input type="checkbox" id="showIndex" checked> 指数</label>
     </div>
     <div class="bt-group">
@@ -576,8 +575,8 @@
 
 <!-- 回测专用模块（顺序：交易 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=8"></script>
-<script src="js/backtest-chart.js?v=81"></script>
-<script src="js/backtest-main.js?v=27"></script>
+<script src="js/backtest-chart.js?v=82"></script>
+<script src="js/backtest-main.js?v=28"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

@@ -315,10 +315,12 @@ function BT_getBaseOption() {
       label: { backgroundColor: 'transparent', color: 'transparent', borderWidth: 0 }
     },
     grid: [
-      { left: 60, right: 30, top: 18,   height: 500 },   // K线 500px（+200px，按用户要求）
-      { left: 60, right: 30, top: 523,  height: 100 },   // 成交量 100px
-      { left: 60, right: 30, top: 628,  height: 150 },   // MACD 150px
-      { left: 60, right: 30, top: 783,  height: 150 }    // 资金曲线 150px
+      { left: 60, right: 30, top: 18,   height: 400 },   // K线 400px
+      { left: 60, right: 30, top: 423,  height: 80 },    // 成交量 80px
+      { left: 60, right: 30, top: 508,  height: 120 },   // MACD 120px
+      // 资金曲线已移除：保留第 4 个 grid 占位（height 0）以维持 series/yAxis 索引稳定
+      // （指数图复用本 option，删掉这一项会导致其 grid/yAxis 错位）
+      { left: 60, right: 30, top: 628,  height: 0 }
     ],
     xAxis: [
       { type: 'category', data: [], gridIndex: 0, scale: true, boundaryGap: false,
@@ -348,17 +350,10 @@ function BT_getBaseOption() {
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
         axisLabel: { color: isDark ? '#aaa' : '#666', fontSize: 10 },
         splitLine: { show: false } },
-      { gridIndex: 3, scale: true, splitNumber: 3,
-        position: 'left',
-        // 资金曲线 0轴从初始资金开始：通过 min 函数保证 Y 轴下界 ≤ 初始资金，下方留少量空隙
-        min: function(value) {
-          var initCap = (typeof BT_initCapital === 'number' && BT_initCapital > 0) ? BT_initCapital : 100000;
-          var dataMin = (value && typeof value.min === 'number') ? value.min : initCap;
-          return Math.min(dataMin, initCap) * 0.95;
-        },
+      // 第 4 个 yAxis 原属资金曲线，现已隐藏（保留占位维持索引稳定）
+      { gridIndex: 3, show: false,
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
-        axisLabel: { color: isDark ? '#aaa' : '#666', fontSize: 10,
-                     formatter: function(v) { return v >= 10000 ? (v/10000).toFixed(1) + '万' : v.toFixed(0); } },
+        axisLabel: { color: isDark ? '#aaa' : '#666', fontSize: 10 },
         splitLine: { show: false } }
     ],
     dataZoom: [
@@ -542,19 +537,8 @@ function BT_tooltipFormatter(params) {
     );
   }
 
-  // 资金曲线（可选）：显示当日总资金 + 累计收益率
-  if (BT_klineData._equity && BT_klineData._equity[idx] != null) {
-    var eq = BT_klineData._equity[idx];
-    var initCap2 = (typeof BT_initCapital === 'number' && BT_initCapital > 0) ? BT_initCapital : 100000;
-    var eqPct = (eq - initCap2) / initCap2 * 100;
-    var eqCol = eqPct >= 0 ? colUp : colDown;
-    lines.push(
-      '<div style="border-top:1px dashed rgba(128,128,128,0.3);margin-top:4px;padding-top:4px;line-height:1.7;font-size:12px;">' +
-        '<span style="color:#7c5cff;">●</span> 资金 <b>¥' + eq.toLocaleString() + '</b>　' +
-        '<span style="color:#999;">收益率</span> <b style="color:' + eqCol + '">' + (eqPct >= 0 ? '+' : '') + eqPct.toFixed(2) + '%</b>' +
-      '</div>'
-    );
-  }
+  // 资金曲线已移除（原此处显示"当日总资金 + 累计收益率"）。
+  //   资金数据本身仍可用（统计卡里显示当前资金/收益率），只是不再进 tooltip。
   return lines.join('');
 }
 
@@ -589,93 +573,21 @@ function BT_computeMAFromCloses(ohlc, n) {
   return result;
 }
 
-// 按时间模拟所有交易，生成资金曲线（每日总资金 = 现金 + 持仓股数 × 当日收盘价）
-// 入参：ohlc = [[open, close, low, high], ...]，dates = [dateStr, ...]，trades = [{date, action, price, volume, fee?}, ...]
-// 出参：equity[i] = 第 i 天结束时总资金（保留 2 位小数）
-function BT_buildEquityCurve(ohlc, dates, trades) {
-  var initCap = (typeof BT_initCapital === 'number' && BT_initCapital > 0) ? BT_initCapital : 100000;
-  var cash = initCap;
-  var posVol = 0, posCost = 0;
-  var equity = new Array(dates.length);
+// BT_buildEquityCurve 已移除（资金曲线按用户要求删除）。
+//   注：收益率/最大回撤的计算在 backtest-trade.js 的 BT_computeStats /
+//   BT_computeRiskFromTrades 中独立实现，不依赖本函数。
 
-  // 拷贝并按日期升序排序（防止 trades 乱序）
-  var sortedTrades = (trades || []).slice().sort(function(a, b) {
-    return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
-  });
-
-  var ti = 0;
-  for (var i = 0; i < dates.length; i++) {
-    // 处理"日期 <= dates[i]"的所有交易
-    while (ti < sortedTrades.length && sortedTrades[ti].date <= dates[i]) {
-      var t = sortedTrades[ti];
-      if (t.action === 'buy') {
-        cash -= t.price * t.volume + (t.fee || 0);
-        var nv = posVol + t.volume;
-        if (nv > 0) posCost = (posVol * posCost + t.volume * t.price) / nv;
-        posVol = nv;
-      } else {
-        var sv = Math.min(t.volume, posVol);
-        if (sv > 0) {
-          cash += t.price * sv - (t.fee || 0);
-          posVol -= sv;
-          if (posVol === 0) posCost = 0;
-        }
-      }
-      ti++;
-    }
-    // 当日总资金 = 现金 + 持仓股数 × 收盘价
-    var close = ohlc[i][1];
-    equity[i] = +(cash + posVol * close).toFixed(2);
-  }
-  return equity;
-}
-
-// 增量刷新资金曲线（买卖后调用，不重画整个 K线）
-// 重新计算 equity 数组 → 更新 data._equity + ECharts series + tooltip
+// 买卖/清空/撤销后的图表与统计刷新入口。
+// ★ 资金曲线已按用户要求移除，本函数不再重绘任何 series，
+//   只保留"刷新统计卡 + 当前 tooltip"的职责。
+//   函数名与签名保持不变——backtest-trade.js 有 5 处调用，改名会牵动多处。
 function BT_refreshEquityCurve() {
   if (!BT_chart || !BT_klineData) return;
-  var ohlc = BT_klineData.ohlc;
-  var dates = BT_klineData.dates;
-  if (!ohlc || !dates) return;
-  // ★ 修复：此前 `if (!BT_showFlags.equity) return;` 让"资金"开关关闭时连数据都不重算，
-  //   勾回来后曲线仍是旧值。现在始终重算数据，只把"是否重绘"交给显示开关。
-  var newEquity = BT_buildEquityCurve(ohlc, dates, BT_trades || []);
-  BT_klineData._equity = newEquity;
-  if (!BT_showFlags.equity) {
-    // 未显示资金曲线：数据已更新，无需重绘
-    if (typeof BT_renderStats === 'function') BT_renderStats();
-    return;
-  }
-  // 更新 ECharts 的"资金" series。
-  // ★★ 重要教训：ECharts 的 setOption({series:[...]}) 是**按数组下标**合并的，不是按 name 匹配。
-  //    主图 series 顺序为 [K线, MA..., 成交, VOL5, DIF, DEA, MACD, 资金]，
-  //    若直接传 [{name:'资金',data:...}]，它会被合并到 series[0] = **K线**，
-  //    把资金曲线的数字数组灌进 candlestick 的 data —— K 线会直接画坏（曾误引入此问题）。
-  //    这里用 getOption() 取出真实 series，按下标改对位置再回灌，保证位置绝对正确。
-  //    代价是每次买卖多一次 option 深拷贝，但买卖是离散操作（非高频），可以接受。
-  var opt = BT_chart.getOption();
-  var series = opt.series || [];
-  var equityIdx = -1;
-  for (var i = 0; i < series.length; i++) {
-    if (series[i] && series[i].name === '资金') { equityIdx = i; break; }
-  }
-  if (equityIdx < 0) {
-    // 资金 series 尚未渲染（如刚初始化）→ 数据已存入 BT_klineData._equity，等下次整图渲染
-    if (typeof BT_renderStats === 'function') BT_renderStats();
-    return;
-  }
-  series[equityIdx].data = newEquity;
-  _inDataZoomApply = true;
-  try {
-    BT_chart.setOption({ series: series });
-  } finally {
-    setTimeout(function() { _inDataZoomApply = false; }, 0);
-  }
-  // 刷新当前 hover 的 tooltip
-  if (BT_currentIdx != null && BT_renderCustomTooltip) {
+  // 刷新当前 hover 的 tooltip（OHLC/MA/MACD 仍会随交易变化间接更新）
+  if (BT_currentIdx != null && typeof BT_renderCustomTooltip === 'function') {
     BT_renderCustomTooltip(BT_currentIdx);
   }
-  // 刷新 stats 卡片（资金、总资产等）
+  // 刷新 stats 卡片（当前资金、总资产、收益率等仍由 BT_renderStats 计算，与图表无关）
   if (typeof BT_renderStats === 'function') BT_renderStats();
 }
 
@@ -864,44 +776,14 @@ function BT_renderKLine(data) {
 
   // 资金曲线：按时间模拟所有交易，得出每日总资金（现金 + 持仓市值）
   // 视觉：紫色 line + 渐变 area + 初始资金水平线 + 0轴从初始资金开始
-  var equityArr = BT_buildEquityCurve(ohlc, dates, BT_trades);
-  data._equity = equityArr;   // 存到 data 供 tooltip 读取
-  var initCap = (typeof BT_initCapital === 'number' && BT_initCapital > 0) ? BT_initCapital : 100000;
-
-  var equitySeries = {
-    name: '资金',
-    type: 'line',
-    xAxisIndex: 3,
-    yAxisIndex: 3,
-    data: equityArr,
-    smooth: true,
-    showSymbol: false,
-    lineStyle: { color: '#7c5cff', width: 1.8 },
-    itemStyle: { color: '#7c5cff' },
-    areaStyle: {
-      color: {
-        type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-        colorStops: [
-          { offset: 0, color: 'rgba(124, 92, 255, 0.30)' },
-          { offset: 1, color: 'rgba(124, 92, 255, 0.02)' }
-        ]
-      }
-    },
-    markLine: {
-      symbol: 'none',
-      silent: true,
-      label: { show: true, color: '#999', fontSize: 10, position: 'insideEndTop',
-               formatter: '初始资金 ¥' + (initCap / 10000).toFixed(1) + '万' },
-      lineStyle: { color: '#999', type: 'dashed', width: 1 },
-      data: [{ yAxis: initCap }]
-    },
-    z: 3
-  };
+  // 资金曲线已移除（用户要求）：不再构建 equity series。
+  //   注意：grid / xAxis / yAxis 仍保留第 4 个占位（height 0、show false），
+  //   因为指数图复用 BT_getBaseOption() 并按下标访问 yAxis[3]/xAxis[3]，删掉会错位。
 
   // 应用到图表
   BT_chart.setOption({
     xAxis: [{ data: dates }, { data: dates }, { data: dates }, { data: dates }],
-    series: [klineSeries].concat(maLines).concat([volSeries, volMA5Series]).concat(macdSeries).concat([equitySeries])
+    series: [klineSeries].concat(maLines).concat([volSeries, volMA5Series]).concat(macdSeries)
   });
 
   // 显示/隐藏子图（通过 grid 的 height 控制）
@@ -932,32 +814,29 @@ function BT_renderKLine(data) {
 }
 
 // 切换显示/隐藏子图
-// 高度分配：K线 400px（最大，看 K线主体），量 80px / MACD 60px / 资金 60px（紧凑）
+// 高度分配：K线 400px（主体），量 80px，MACD 120px（资金曲线已移除）
 function BT_updateVisibleGrids() {
   if (!BT_chart) return;
   var showVol    = BT_showFlags.vol;
   var showMacd   = BT_showFlags.macd;
-  var showEquity = BT_showFlags.equity;
 
-  // 固定像素高度（与 #btChart { height: 970px } 配套：18+500+5+100+5+150+5+150+18+16 = 967）
-  var KLINE_PX  = 500;   // K线主图（+200px）
-  var VOL_PX    = 100;   // 成交量
-  var MACD_PX   = 150;   // MACD
-  var EQUITY_PX = 150;   // 资金曲线
+  // 固定像素高度（与 #btChart { height: 638px } 配套：18+400+5+80+5+120+16 = 644 ≈ 638+边距）
+  var KLINE_PX  = 400;   // K线主图
+  var VOL_PX    = 80;    // 成交量
+  var MACD_PX   = 120;   // MACD
   var GAP = 5;           // 子图间 gap
   var TOP_PX = 18;       // 顶部 18px 留白（容 Y轴 label）
 
   // 关键：当某个 subplot 隐藏时，下方 grid 要顶上来填空白
-  // 之前 height: 0 不让 grid 下移，量+资金之间留了 ~150px 空白 → 看着像"丢了一块"
   var mainTop = TOP_PX;
   var volTop  = mainTop + KLINE_PX + GAP;
   var macdTop = volTop  + (showVol ? VOL_PX : 0) + GAP;
-  var equityTop = macdTop + (showMacd ? MACD_PX : 0) + GAP;
 
   // 隐藏的 grid：top 直接等于上方 grid 的 bottom（不留 GAP 避免视觉断层），height=0
-  var volGrid    = showVol    ? { left: 60, right: 30, top: volTop,    height: VOL_PX }    : { top: mainTop + KLINE_PX,    height: 0 };
-  var macdGrid   = showMacd   ? { left: 60, right: 30, top: macdTop,   height: MACD_PX }   : { top: showVol ? (volTop + VOL_PX) : (mainTop + KLINE_PX), height: 0 };
-  var equityGrid = showEquity ? { left: 60, right: 30, top: equityTop, height: EQUITY_PX } : { top: macdTop + (showMacd ? MACD_PX : 0), height: 0 };
+  var volGrid  = showVol  ? { left: 60, right: 30, top: volTop,  height: VOL_PX }  : { top: mainTop + KLINE_PX, height: 0 };
+  var macdGrid = showMacd ? { left: 60, right: 30, top: macdTop, height: MACD_PX } : { top: showVol ? (volTop + VOL_PX) : (mainTop + KLINE_PX), height: 0 };
+  // 资金曲线已移除：第 4 个 grid 始终 height 0（保留占位维持 series/yAxis 索引稳定）
+  var equityGrid = { top: macdTop + (showMacd ? MACD_PX : 0), height: 0 };
 
   var grids = [
     { left: 60, right: 30, top: mainTop, height: KLINE_PX },
@@ -1258,10 +1137,7 @@ function BT_toggleShowVol() {
   BT_showFlags.vol = document.getElementById('showVol').checked;
   BT_updateVisibleGrids();
 }
-function BT_toggleShowEquity() {
-  BT_showFlags.equity = document.getElementById('showEquity').checked;
-  BT_updateVisibleGrids();
-}
+// BT_toggleShowEquity 已移除（资金曲线按用户要求删除）
 
 // 显示/隐藏大盘指数走势图（上方窗口）
 // 关闭时：wrapper 隐藏，主图 K 线自动占满空间；同时取消指数数据请求（避免无意义拉数据）
