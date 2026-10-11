@@ -456,10 +456,7 @@ function getUsedRisk() {
 function exportData() {
   if (dbInitialized && db) {
     exportDatabase().then(function(data) {
-      var el = document.getElementById('syncStatus');
-      el.textContent = '已导出 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-      el.style.color = '#00e676';
-      setTimeout(function() { el.textContent = ''; }, 5000);
+      if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) syncModule.showSyncStatus('已导出 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), 'success');
     }).catch(function(err) {
       console.error('导出失败:', err);
       exportFromLocalStorage();
@@ -486,10 +483,7 @@ function exportFromLocalStorage() {
   a.href = URL.createObjectURL(blob);
   a.download = '交易记录备份_' + getToday() + '.json';
   a.click();
-  var el = document.getElementById('syncStatus');
-  el.textContent = '已导出 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-  el.style.color = '#00e676';
-  setTimeout(function() { el.textContent = ''; }, 5000);
+  if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) syncModule.showSyncStatus('已导出 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), 'success');
 }
 
 // 导入数据
@@ -538,10 +532,7 @@ function __proceedImport(data) {
           // 同步更新 localStorage
           localStorage.setItem('trades_v4', JSON.stringify(trades));
           updateAll();
-          var el = document.getElementById('syncStatus');
-          el.textContent = '导入成功，共 ' + data.trades.length + ' 笔';
-          el.style.color = '#00e676';
-          setTimeout(function() { el.textContent = ''; }, 5000);
+          if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) syncModule.showSyncStatus('导入成功，共 ' + data.trades.length + ' 笔', 'success');
         }).catch(function(err) {
           console.error('导入失败:', err);
           importToLocalStorage(data);
@@ -550,18 +541,16 @@ function __proceedImport(data) {
         importToLocalStorage(data);
       }
   } catch (err) {
-    var el = document.getElementById('syncStatus');
-    el.textContent = '解析失败';
-    el.style.color = '#ff5252';
+    if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) {
+      syncModule.showSyncStatus('解析失败', 'error');
+    }
   }
 }
 
 // 导入到localStorage（回退）
 function importToLocalStorage(data) {
   if (!data.trades || !Array.isArray(data.trades)) {
-    var el = document.getElementById('syncStatus');
-    el.textContent = '文件格式无效';
-    el.style.color = '#ff5252';
+    if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) syncModule.showSyncStatus('文件格式无效', 'error');
     return;
   }
   trades = data.trades || [];
@@ -572,8 +561,7 @@ function importToLocalStorage(data) {
   saveAll().then(function() {
     updateAll();
   });
-  var el = document.getElementById('syncStatus');
-  el.textContent = '导入成功，共 ' + trades.length + ' 笔';
-  el.style.color = '#00e676';
-  setTimeout(function() { el.textContent = ''; }, 5000);
+  if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) {
+    syncModule.showSyncStatus('导入成功，共 ' + trades.length + ' 笔', 'success');
+  }
 }

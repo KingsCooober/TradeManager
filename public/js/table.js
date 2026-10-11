@@ -366,33 +366,6 @@ function renderTable() {
   updateFilterCounts();
 }
 
-// 日期选择器变化时更新天数选项
-function onDatePickerChange(prefix, tradeId, field) {
-  var yearId = prefix + '_year_' + tradeId;
-  var monthId = prefix + '_month_' + tradeId;
-  var dayId = prefix + '_day_' + tradeId;
-
-  var year = parseInt(document.getElementById(yearId).value);
-  var month = parseInt(document.getElementById(monthId).value);
-
-  // 更新天数选项
-  var days = getDaysInMonth(year, month);
-  var daySelect = document.getElementById(dayId);
-  var currentDay = parseInt(daySelect.value) || 1;
-  var html = '';
-  for (var i = 1; i <= days; i++) {
-    var val = i < 10 ? '0' + i : i;
-    html += '<option value="' + val + '"' + (i === Math.min(currentDay, days) ? ' selected' : '') + '>' + i + '日</option>';
-  }
-  daySelect.innerHTML = html;
-
-  // 更新交易数据
-  var dateValue = year + '-' + 
-    (month < 10 ? '0' + month : month) + '-' + 
-    (currentDay > days ? (days < 10 ? '0' + days : days) : daySelect.value);
-  updateTrade(tradeId, field, dateValue);
-}
-
 // ===== 表格下拉框交互 =====
 var tableSelectEventsBound = false;
 
@@ -1009,12 +982,9 @@ function saveTradeFromModal() {
     triggerAutoSave();
   }
 
-  // 显示保存成功提示
-  var el = document.getElementById('syncStatus');
-  if (el) {
-    el.textContent = '✓ 已保存交易：' + (tradeData.symbol || '未命名');
-    el.style.color = '#00e676';
-    setTimeout(function() { el.textContent = ''; }, 3000);
+  // 显示保存成功提示（统一走 syncModule.showSyncStatus，不再直写元素+硬编码色值）
+  if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) {
+    syncModule.showSyncStatus('✓ 已保存交易：' + (tradeData.symbol || '未命名'), 'success');
   }
 
   closeTradeEditModal();
@@ -1061,11 +1031,8 @@ function __proceedDeleteTrade(id) {
       console.error('删除服务器记录失败:', err);
     });
   }
-  var el = document.getElementById('syncStatus');
-  if (el) {
-    el.textContent = '✓ 已删除交易：' + (symbol || '未命名');
-    el.style.color = '#ff5252';
-    setTimeout(function() { el.textContent = ''; }, 3000);
+  if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) {
+    syncModule.showSyncStatus('✓ 已删除交易：' + (symbol || '未命名'), 'error');
   }
 }
 

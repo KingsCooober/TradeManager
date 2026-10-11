@@ -1062,27 +1062,8 @@
   font-size: 14px;
 }
 
-/* 保存提示 */
-.dr-save-toast {
-  display: none;
-  position: fixed;
-  top: 80px;
-  right: 20px;
-  padding: 12px 24px;
-  background: var(--color-green);
-  color: white;
-  border-radius: var(--radius-sm);
-  font-size: 14px;
-  font-weight: 600;
-  z-index: 9999;
-  box-shadow: var(--shadow-lg);
-  animation: drToastIn 0.3s ease;
-}
-
-@keyframes drToastIn {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+/* .dr-save-toast 及其 @keyframes drToastIn 已随双提示清理删除——
+   保存反馈统一走 #syncStatus 行内状态（见 daily-review.js 的 showDRStatus） */
 
 
 /* 综合走势判断结果 */

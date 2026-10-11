@@ -823,13 +823,15 @@ async function saveSettingsToServer() {
 function showSyncStatus(message, type) {
   const statusEl = document.getElementById('syncStatus');
   if (!statusEl) return;
-  
+
   statusEl.textContent = message;
-  statusEl.className = 'sync-status ' + type;
-  
+  // ★ 类名必须用 sync-status-inline：CSS 只定义了它及其 success/error/info 变体
+  //   （main.css:309-336），此前写的 'sync-status' 不存在 → 提示变成无样式裸文本
+  statusEl.className = 'sync-status-inline ' + type;
+
   setTimeout(() => {
     statusEl.textContent = '';
-    statusEl.className = 'sync-status';
+    statusEl.className = 'sync-status-inline';
   }, 3000);
 }
 

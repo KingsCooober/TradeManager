@@ -264,25 +264,9 @@ describe('utils.js 纯函数测试', () => {
     });
   });
 
-  describe('getYearRange()', () => {
-    test('返回 11 年（前后 5 年 + 当前）', () => {
-      const years = getYearRange();
-      assert.equal(years.length, 11);
-    });
+  // getYearRange() 的用例已随死代码清理删除——该函数服务于自造年/月/日三联动下拉，
+  // 该方案无调用方，已连同 utils.js 中的实现一并移除（保留原生 type="date" 方案）。
 
-    test('包含当前年', () => {
-      const years = getYearRange();
-      const currentYear = new Date().getFullYear();
-      assert.ok(years.includes(currentYear));
-    });
-
-    test('范围是前后各 5 年', () => {
-      const years = getYearRange();
-      const currentYear = new Date().getFullYear();
-      assert.equal(Math.min(...years), currentYear - 5);
-      assert.equal(Math.max(...years), currentYear + 5);
-    });
-  });
 
   describe('getDaysInMonth()', () => {
     test('1月 31天', () => {

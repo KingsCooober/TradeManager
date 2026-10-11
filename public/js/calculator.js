@@ -580,12 +580,9 @@ function executeAddTradeFromCalc(skipConfirm) {
   // 关闭弹窗
   if (!skipConfirm) {
     closeTradeConfirmModal();
-    // 显示成功提示
-    var el = document.getElementById('syncStatus');
-    if (el) {
-      el.textContent = '✓ 已添加交易：' + (pendingTrade.symbol || '未命名');
-      el.style.color = '#00e676';
-      setTimeout(function() { el.textContent = ''; }, 3000);
+    // 显示成功提示（统一走 syncModule.showSyncStatus）
+    if (typeof syncModule !== 'undefined' && syncModule.showSyncStatus) {
+      syncModule.showSyncStatus('✓ 已添加交易：' + (pendingTrade.symbol || '未命名'), 'success');
     }
   }
 

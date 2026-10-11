@@ -331,13 +331,12 @@ function openDRLoginModal() {
   });
 }
 
+// showDRStatus 已统一到 sync.js（syncModule.showSyncStatus），此副本已删除。
+// 调用方统一改走 showSyncStatus（见下方别名，保持既有调用点无需改动）。
+
+// 别名：保留既有 showDRStatus 调用点（20+ 处）不动，仅委托统一实现
 function showDRStatus(msg, type) {
-  var el = document.getElementById('syncStatus');
-  if (el) {
-    el.textContent = msg;
-    el.className = 'sync-status-inline ' + type;
-    setTimeout(function() { el.textContent = ''; el.className = 'sync-status-inline'; }, 3000);
-  }
+  showSyncStatus(msg, type);
 }
 
 // ===== 本地存储 =====
@@ -2760,16 +2759,9 @@ function saveDRReview() {
   saveDRData();
   drDataDirty = false;
   renderReviewHistory();
+  // ★ 双提示去一：原先同时触发行内状态（showDRStatus）和右上角绿色 toast（showDRSaveToast），
+  //   互相抢注意力。保留行内状态（与全站其他保存提示一致），toast 不再触发。
   showDRStatus('复盘已保存', 'success');
-  showDRSaveToast();
-}
-
-function showDRSaveToast() {
-  var toast = document.getElementById('drSaveToast');
-  if (toast) {
-    toast.style.display = 'flex';
-    setTimeout(function() { toast.style.display = 'none'; }, 2000);
-  }
 }
 
 // ===== 导入导出 =====

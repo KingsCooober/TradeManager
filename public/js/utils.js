@@ -88,20 +88,13 @@ function sqesc(s) {
   return "'" + String(s).replace(/'/g, "\\'") + "'";
 }
 
-// 获取某年某月的天数（被 table.js 的 onDatePickerChange 使用）
+// 获取某年某月的天数（用于日期相关计算）
 function getDaysInMonth(year, month) {
   return new Date(year, month, 0).getDate();
 }
 
-// 获取年份范围（当前年前后各 5 年，共 11 年），用于日期选择器的年份下拉
-function getYearRange() {
-  var currentYear = new Date().getFullYear();
-  var years = [];
-  for (var y = currentYear - 5; y <= currentYear + 5; y++) {
-    years.push(y);
-  }
-  return years;
-}
+// 注：getYearRange() 已删除——它服务于自造年/月/日三联动下拉（onDatePickerChange），
+//     该方案已被原生 type="date" 取代且无任何调用方（连同 table.js 的死代码一并清理）。
 
 function calcTpDist(t) {
   if (!t.entry || !t.target || !parseFloat(t.entry) || !parseFloat(t.target)) return '-';

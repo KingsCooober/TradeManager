@@ -166,7 +166,7 @@ function syncFromTrades() {
 
   if (addedCount > 0) {
     saveDiaryData();
-    showSyncStatus('已从交易记录同步 ' + addedCount + ' 条', 'success');
+    syncModule.showSyncStatus('已从交易记录同步 ' + addedCount + ' 条', 'success');
   }
   return addedCount;
 }
@@ -179,7 +179,7 @@ function manualSyncFromTrades() {
   cleanupDeletedTrades();
   var added = syncFromTrades();
   if (added === 0) {
-    showSyncStatus('没有新交易需要同步', 'info');
+    syncModule.showSyncStatus('没有新交易需要同步', 'info');
   }
   applyFilters();
 }
@@ -335,9 +335,9 @@ function loadFromServer() {
           try { syncToServer(); } catch(e) {}
           diary2Data = backup;
         });
-        showSyncStatus('已增量上传 ' + localOnly.length + ' 条复盘', 'success');
+        syncModule.showSyncStatus('已增量上传 ' + localOnly.length + ' 条复盘', 'success');
       } else {
-        showSyncStatus('同步成功', 'success');
+        syncModule.showSyncStatus('同步成功', 'success');
       }
     }
   })
@@ -360,11 +360,11 @@ function syncToServer() {
     return res.json();
   })
   .then(data => {
-    showSyncStatus('数据已同步', 'success');
+    syncModule.showSyncStatus('数据已同步', 'success');
   })
   .catch(err => {
     console.error('同步失败:', err);
-    showSyncStatus('同步失败', 'error');
+    syncModule.showSyncStatus('同步失败', 'error');
   });
 }
 
@@ -402,17 +402,9 @@ function openLoginModal() {
   });
 }
 
-function showSyncStatus(message, type) {
-  const statusEl = document.getElementById('syncStatus');
-  if (statusEl) {
-    statusEl.textContent = message;
-    statusEl.className = 'sync-status-inline ' + type;
-    setTimeout(() => {
-      statusEl.textContent = '';
-      statusEl.className = 'sync-status-inline';
-    }, 3000);
-  }
-}
+// showSyncStatus 已统一到 sync.js（syncModule.showSyncStatus）。
+// ★ 原先这里有一份同名全局实现，会覆盖 sync.js 的版本（diary2.js 加载顺序在后），
+//   导致 sync.js 内部 13 处调用在 diary2 页被静默劫持——行为恰好兼容纯属侥幸，已删除。
 
 function applyFilters() {
   const quickFilter = document.getElementById('quickFilter')?.value || 'all';
