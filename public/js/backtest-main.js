@@ -197,11 +197,10 @@ function BT_init() {
 
   // 5) 显示开关
   var showMA = document.getElementById('showMA');
-  var showMACD = document.getElementById('showMACD');
   var showVol = document.getElementById('showVol');
   var showIndex = document.getElementById('showIndex');
   if (showMA)     showMA.addEventListener('change', BT_toggleShowMA);
-  if (showMACD)   showMACD.addEventListener('change', BT_toggleShowMACD);
+  // 「MACD」「资金」开关已移除（对应面板按用户要求删除）
   if (showVol)    showVol.addEventListener('change', BT_toggleShowVol);
   // 「资金」开关已移除（资金曲线按用户要求删除）
   if (showIndex)  showIndex.addEventListener('change', function() { BT_toggleShowIndex(); BT_saveState(); });

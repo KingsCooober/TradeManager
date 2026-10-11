@@ -16,7 +16,7 @@ var BT_chart = null;            // ECharts 实例
 var BT_renderCustomTooltip = null;  // 自定义 DOM tooltip 渲染函数（由 BT_setupCustomTooltip 初始化）
 var BT_klineData = null;        // 当前 K 线完整数据 {dates, ohlc, volumes, ma5/10/20, macd, count, ...}
 var BT_maPeriods = [5, 10, 20, 60];  // MA 周期（从输入框实时读取）
-var BT_showFlags = { ma: true, macd: true, vol: true, equity: true };  // 显示开关
+var BT_showFlags = { ma: true, vol: true };  // MACD/资金面板已按用户要求移除  // 显示开关
 // 固定显示窗口：默认只显示最近 60 根 K线（让单根 K线 视觉宽度固定）
 // 数据少于 60 根时显示全部；可在 BT_KLINE_WINDOW 修改
 var BT_KLINE_WINDOW = 60;
@@ -316,11 +316,11 @@ function BT_getBaseOption() {
     },
     grid: [
       { left: 60, right: 30, top: 18,   height: 400 },   // K线 400px
-      { left: 60, right: 30, top: 423,  height: 80 },    // 成交量 80px
-      { left: 60, right: 30, top: 508,  height: 120 },   // MACD 120px
-      // 资金曲线已移除：保留第 4 个 grid 占位（height 0）以维持 series/yAxis 索引稳定
-      // （指数图复用本 option，删掉这一项会导致其 grid/yAxis 错位）
-      { left: 60, right: 30, top: 628,  height: 0 }
+      { left: 60, right: 30, top: 423,  height: 80 },    // 成交量 80px（日期标签显示在其下方）
+      // MACD 与资金曲线均已移除：grid[2]/grid[3] 保留占位（height 0）以维持
+      // series/xAxis/yAxis 索引稳定（指数图复用本 option，按下标访问，删元素会错位）
+      { left: 60, right: 30, top: 503,  height: 0 },
+      { left: 60, right: 30, top: 503,  height: 0 }
     ],
     xAxis: [
       { type: 'category', data: [], gridIndex: 0, scale: true, boundaryGap: false,
@@ -328,11 +328,12 @@ function BT_getBaseOption() {
         axisLabel: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
       { type: 'category', data: [], gridIndex: 1, scale: true, boundaryGap: false,
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
-        axisLabel: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
+        // ★ MACD 移除后成交量是最底部 grid，日期标签移到这里显示
+        axisLabel: { show: true, color: isDark ? '#aaa' : '#666', margin: 6 },
+        axisTick: { show: false }, splitLine: { show: false } },
       { type: 'category', data: [], gridIndex: 2, scale: true, boundaryGap: false,
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
-        axisLabel: { show: true, color: isDark ? '#aaa' : '#666', margin: 4 },   // margin 控制与 grid 底部距离，避免被 slider 挡
-        axisTick: { show: false }, splitLine: { show: false } },
+        axisLabel: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
       { type: 'category', data: [], gridIndex: 3, scale: true, boundaryGap: false,
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
         axisLabel: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
@@ -346,7 +347,8 @@ function BT_getBaseOption() {
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
         axisLabel: { color: isDark ? '#aaa' : '#666', fontSize: 10 },
         splitLine: { show: false } },
-      { gridIndex: 2, scale: true, splitNumber: 2,
+      // 第 3 个 yAxis 原属 MACD，现已隐藏（保留占位维持索引稳定）
+      { gridIndex: 2, show: false,
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
         axisLabel: { color: isDark ? '#aaa' : '#666', fontSize: 10 },
         splitLine: { show: false } },
@@ -365,7 +367,7 @@ function BT_getBaseOption() {
         zoomOnMouseWheel: false,
         start: 0, end: 100
       },
-      { show: true, xAxisIndex: [0, 1, 2, 3], type: 'slider', bottom: 16, height: 18,
+      { show: true, xAxisIndex: [0, 1, 2, 3], type: 'slider', bottom: 6, height: 18,
         // 关键：禁用所有改窗口宽度的路径
         //   brushSelect: false → 禁用"鼠标框选调整宽度"（Ctrl+拖动框选）
         //   zoomLock: true    → 锁定窗口大小，handle 不能改宽度
@@ -521,21 +523,7 @@ function BT_tooltipFormatter(params) {
     }
   }
 
-  // MACD 数据（可选）
-  var m = BT_klineData.macd;
-  if (m && m.dif && m.dif[idx] != null && m.dif[idx] !== undefined) {
-    var dif = m.dif[idx];
-    var dea = m.dea[idx];
-    var macd = m.macd[idx];
-    var macdCol = (macd != null && macd >= 0) ? colUp : colDown;
-    lines.push(
-      '<div style="border-top:1px dashed rgba(128,128,128,0.3);margin-top:4px;padding-top:4px;line-height:1.7;font-size:12px;">' +
-        '<span style="color:#ffd166;">DIF</span> <b>' + dif.toFixed(3) + '</b>　' +
-        '<span style="color:#5c7cfa;">DEA</span> <b>' + dea.toFixed(3) + '</b>　' +
-        '<b style="color:' + macdCol + '">MACD ' + (macd != null && macd >= 0 ? '+' : '') + (macd != null ? macd.toFixed(3) : '--') + '</b>' +
-      '</div>'
-    );
-  }
+  // MACD 已移除（原此处显示 DIF/DEA/MACD 数值）。
 
   // 资金曲线已移除（原此处显示"当日总资金 + 累计收益率"）。
   //   资金数据本身仍可用（统计卡里显示当前资金/收益率），只是不再进 tooltip。
@@ -749,33 +737,11 @@ function BT_renderKLine(data) {
     z: 10
   };
 
-  // MACD：DIF/DEA 折线 + MACD 柱
-  var macdData = data.macd || { dif: [], dea: [], macd: [] };
-  var macdBarData = (macdData.macd || []).map(function(v, i) {
-    return {
-      value: v,
-      itemStyle: { color: v >= 0 ? BT_COLOR_UP : BT_COLOR_DOWN }
-    };
-  });
-  var macdSeries = [
-    {
-      name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2,
-      data: macdData.dif || [], smooth: true, lineStyle: { width: 1, color: '#ffd166' },
-      showSymbol: false, z: 3
-    },
-    {
-      name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2,
-      data: macdData.dea || [], smooth: true, lineStyle: { width: 1, color: '#5c7cfa' },
-      showSymbol: false, z: 3
-    },
-    {
-      name: 'MACD', type: 'bar', xAxisIndex: 2, yAxisIndex: 2,
-      data: macdBarData, z: 1
-    }
-  ];
+  // MACD 已移除（用户要求，主图与指数图都不要）：
+  //   原 DIF/DEA/MACD 三个 series 不再构建。
+  //   注意：grid[2]/xAxis[2]/yAxis[2] 仍保留占位（height 0 / show false），
+  //   维持 series 与轴的索引稳定，指数图复用本 option 不受影响。
 
-  // 资金曲线：按时间模拟所有交易，得出每日总资金（现金 + 持仓市值）
-  // 视觉：紫色 line + 渐变 area + 初始资金水平线 + 0轴从初始资金开始
   // 资金曲线已移除（用户要求）：不再构建 equity series。
   //   注意：grid / xAxis / yAxis 仍保留第 4 个占位（height 0、show false），
   //   因为指数图复用 BT_getBaseOption() 并按下标访问 yAxis[3]/xAxis[3]，删掉会错位。
@@ -783,7 +749,7 @@ function BT_renderKLine(data) {
   // 应用到图表
   BT_chart.setOption({
     xAxis: [{ data: dates }, { data: dates }, { data: dates }, { data: dates }],
-    series: [klineSeries].concat(maLines).concat([volSeries, volMA5Series]).concat(macdSeries)
+    series: [klineSeries].concat(maLines).concat([volSeries, volMA5Series])
   });
 
   // 显示/隐藏子图（通过 grid 的 height 控制）
@@ -818,25 +784,24 @@ function BT_renderKLine(data) {
 function BT_updateVisibleGrids() {
   if (!BT_chart) return;
   var showVol    = BT_showFlags.vol;
-  var showMacd   = BT_showFlags.macd;
 
-  // 固定像素高度（与 #btChart { height: 638px } 配套：18+400+5+80+5+120+16 = 644 ≈ 638+边距）
+  // 固定像素高度（与 #btChart { height: 552px } 配套：18+400+5+80+日期标签~14+滑块34 ≈ 551）
   var KLINE_PX  = 400;   // K线主图
   var VOL_PX    = 80;    // 成交量
-  var MACD_PX   = 120;   // MACD
   var GAP = 5;           // 子图间 gap
   var TOP_PX = 18;       // 顶部 18px 留白（容 Y轴 label）
 
   // 关键：当某个 subplot 隐藏时，下方 grid 要顶上来填空白
   var mainTop = TOP_PX;
   var volTop  = mainTop + KLINE_PX + GAP;
-  var macdTop = volTop  + (showVol ? VOL_PX : 0) + GAP;
+  // MACD 与资金曲线均已移除，主图只有 K线 + 成交量两段
+  var bottomY = volTop + (showVol ? VOL_PX : 0);
 
-  // 隐藏的 grid：top 直接等于上方 grid 的 bottom（不留 GAP 避免视觉断层），height=0
-  var volGrid  = showVol  ? { left: 60, right: 30, top: volTop,  height: VOL_PX }  : { top: mainTop + KLINE_PX, height: 0 };
-  var macdGrid = showMacd ? { left: 60, right: 30, top: macdTop, height: MACD_PX } : { top: showVol ? (volTop + VOL_PX) : (mainTop + KLINE_PX), height: 0 };
-  // 资金曲线已移除：第 4 个 grid 始终 height 0（保留占位维持 series/yAxis 索引稳定）
-  var equityGrid = { top: macdTop + (showMacd ? MACD_PX : 0), height: 0 };
+  var volGrid = showVol ? { left: 60, right: 30, top: volTop, height: VOL_PX }
+                        : { top: mainTop + KLINE_PX, height: 0 };
+  // grid[2]/grid[3] 始终 height 0（保留占位维持 series/xAxis/yAxis 索引稳定）
+  var macdGrid   = { top: bottomY, height: 0 };
+  var equityGrid = { top: bottomY, height: 0 };
 
   var grids = [
     { left: 60, right: 30, top: mainTop, height: KLINE_PX },
@@ -1026,21 +991,7 @@ function BT_setupIndexTooltip() {
       }
     }
 
-    // MACD 数据
-    var m = BT_indexData.macd;
-    if (m && m.dif && m.dif[idx] != null && m.dif[idx] !== undefined) {
-      var dif = m.dif[idx];
-      var dea = m.dea[idx];
-      var macdV = m.macd[idx];
-      var macdCol = (macdV != null && macdV >= 0) ? colUp : colDown;
-      lines.push(
-        '<div style="border-top:1px dashed rgba(128,128,128,0.3);margin-top:4px;padding-top:4px;line-height:1.7;">' +
-          '<span style="color:#ffd166;">DIF</span> <b>' + dif.toFixed(3) + '</b>　' +
-          '<span style="color:#5c7cfa;">DEA</span> <b>' + dea.toFixed(3) + '</b>　' +
-          '<b style="color:' + macdCol + '">MACD ' + (macdV != null && macdV >= 0 ? '+' : '') + (macdV != null ? macdV.toFixed(3) : '--') + '</b>' +
-        '</div>'
-      );
-    }
+    // MACD 数据已移除（用户要求）
 
     tt.innerHTML = lines.join('');
     tt.style.display = 'block';
@@ -1129,10 +1080,7 @@ function BT_toggleShowMA() {
   BT_showFlags.ma = document.getElementById('showMA').checked;
   if (BT_klineData) BT_renderKLine(BT_klineData);
 }
-function BT_toggleShowMACD() {
-  BT_showFlags.macd = document.getElementById('showMACD').checked;
-  BT_updateVisibleGrids();
-}
+// BT_toggleShowMACD 已移除（MACD 面板按用户要求删除）
 function BT_toggleShowVol() {
   BT_showFlags.vol = document.getElementById('showVol').checked;
   BT_updateVisibleGrids();
@@ -1252,18 +1200,7 @@ function BT_updateCursorDisplay() {
   }
   // MA（动态：按 BT_maPeriods 当前值生成 / 写值，硬编码的 curMa5/10/20/60 已废弃）
   BT_fillMaValues('curMa', 'cur', BT_klineData, idx);
-  // MACD
-  var m = BT_klineData.macd;
-  if (m && m.dif) {
-    var dif = m.dif[idx], dea = m.dea[idx], macd = m.macd[idx];
-    set('curDif', _fmt(dif, 3));
-    set('curDea', _fmt(dea, 3));
-    var macdEl = document.getElementById('curMacdVal');
-    if (macdEl) {
-      macdEl.textContent = macd != null ? (macd >= 0 ? '+' : '') + macd.toFixed(3) : '--';
-      macdEl.style.color = (macd != null && macd >= 0) ? BT_COLOR_UP : BT_COLOR_DOWN;
-    }
-  }
+  // MACD 面板已移除（用户要求）
 }
 
 // 指数图光标位置同步显示（与主图光标 idx 对齐）
@@ -1307,19 +1244,7 @@ function BT_updateIndexInfo() {
 
   // MA（动态：跟图表 MA 周期对齐，不再写死 5/10/20/60）
   BT_fillMaValues('idxMa', 'idx', BT_indexData, idx);
-
-  // MACD
-  var m = BT_indexData.macd;
-  if (m && m.dif) {
-    var dif = m.dif[idx], dea = m.dea[idx], macd = m.macd[idx];
-    set('idxDif', _fmt(dif, 3));
-    set('idxDea', _fmt(dea, 3));
-    var macdEl = document.getElementById('idxMacdVal');
-    if (macdEl) {
-      macdEl.textContent = macd != null ? (macd >= 0 ? '+' : '') + macd.toFixed(3) : '--';
-      macdEl.style.color = (macd != null && macd >= 0) ? BT_COLOR_UP : BT_COLOR_DOWN;
-    }
-  }
+  // MACD 面板已移除（用户要求）
 }
 
 // 设置光标到指定索引（被 BT_nextBar/BT_prevBar/外部调用）
@@ -1594,16 +1519,19 @@ function BT_initIndexChart() {
   if (!dom) return;
   BT_indexChart = echarts.init(dom, null, { renderer: 'canvas' });
   var baseOption = BT_getBaseOption();
-  // 调整 grid 比例：K线 300 / 量 80 / MACD 80（绝对像素，容器 480px）
-  //   10 + 300 + 5 + 80 + 5 + 80 = 480，刚好填满
+  // 调整 grid 比例：K线 400 / 量 80（绝对像素，容器 552px，与主图 #btChart 同高）
+  //   10 + 400 + 5 + 80 + 日期标签 ~14 + 底部留白 ~43 = 552
+  //   MACD 已移除：grid[2] 收起；grid[3]（原资金）保持隐藏占位
   baseOption.grid = [
-    { left: 50, right: 20, top: 10,   height: 300 },   // K线 300px
-    { left: 50, right: 20, top: 315,  height: 80 },    // 成交量 80px
-    { left: 50, right: 20, top: 400,  height: 80 },    // MACD 80px
-    { left: 50, right: 20, top: '100%', height: '0%' } // 资金曲线（隐藏）
+    { left: 50, right: 20, top: 10,   height: 400 },   // K线 400px
+    { left: 50, right: 20, top: 415,  height: 80 },    // 成交量 80px（日期标签显示在其下方）
+    { left: 50, right: 20, top: 495,  height: 0 },     // MACD（隐藏占位）
+    { left: 50, right: 20, top: 495,  height: 0 }      // 资金曲线（隐藏占位）
   ];
-  // 资金曲线 yAxis 也隐藏
+  // MACD 与资金曲线的 yAxis/xAxis 均隐藏
+  baseOption.yAxis[2] = Object.assign({}, baseOption.yAxis[2], { show: false });
   baseOption.yAxis[3] = Object.assign({}, baseOption.yAxis[3], { show: false });
+  baseOption.xAxis[2] = Object.assign({}, baseOption.xAxis[2], { show: false });
   baseOption.xAxis[3] = Object.assign({}, baseOption.xAxis[3], { show: false });
   // 关键：把 dataZoom[1] slider 隐藏（height: 0 + show: false）
   //   两图共用主图的 slider 控制，指数图只显示时间轴标签
@@ -1650,11 +1578,7 @@ function BT_renderIndexChart(data, indexName) {
     };
   });
 
-  // MACD（DIF/DEA 折线 + MACD 柱）
-  var macdData = data.macd || { dif: [], dea: [], macd: [] };
-  var macdBarData = (macdData.macd || []).map(function(v) {
-    return { value: v, itemStyle: { color: v >= 0 ? BT_COLOR_UP : BT_COLOR_DOWN } };
-  });
+  // MACD 数据构建已移除（用户要求）：指数图只保留 K线 + MA + 成交量
 
   // ★ 显式构造 series 数组（不能用 ES6 spread：ECharts setOption 不支持）
   //   顺序：K线 → MA×N → 成交 → DIF/DEA/MACD柱
@@ -1674,10 +1598,7 @@ function BT_renderIndexChart(data, indexName) {
   for (var _m = 0; _m < maLines.length; _m++) seriesArr.push(maLines[_m]);
   // 成交量（grid 1）
   seriesArr.push({ name: '成交', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volData, z: 1 });
-  // MACD（grid 2：DIF/DEA 折线 + MACD 柱）
-  seriesArr.push({ name: 'DIF',  type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macdData.dif || [], smooth: true, showSymbol: false, lineStyle: { width: 1, color: '#ffd166' }, z: 3 });
-  seriesArr.push({ name: 'DEA',  type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: macdData.dea || [], smooth: true, showSymbol: false, lineStyle: { width: 1, color: '#5c7cfa' }, z: 3 });
-  seriesArr.push({ name: 'MACD', type: 'bar',  xAxisIndex: 2, yAxisIndex: 2, data: macdBarData, z: 1 });
+  // MACD 已移除（用户要求）：指数图只保留 K线 + MA + 成交量
 
   BT_indexChart.setOption({
     xAxis: [{ data: dates }, { data: dates }, { data: dates }, { data: dates }],
