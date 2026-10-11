@@ -471,25 +471,21 @@
 
       <div class="bt-group">
         <label>现价:</label>
-        <input type="number" id="btPrice" step="0.01" min="0.01" placeholder="默认=光标日收盘">
+        <input type="number" id="btPrice" step="0.01" placeholder="默认=光标日收盘">
       </div>
 
       <div class="bt-btn-group">
-        <button class="btn btn-primary" id="btnNextBar" onclick="BT_nextBar()" title="光标移到下一根K线（→ 或空格）">⏭ 下一根</button>
+        <button class="btn btn-primary" id="btnNextBar" onclick="BT_nextBar()" title="光标移到下一根K线（→）">⏭ 下一根</button>
         <button class="btn btn-primary" id="btnPrevBar" onclick="BT_prevBar()" title="光标移到上一根K线（←）">⏮ 上一根</button>
       </div>
       <div class="bt-btn-group">
-        <button class="btn btn-danger" id="btnBuy" onclick="BT_buy()" title="按现价买入（快捷键 B）">🟥 买入</button>
-        <button class="btn btn-success" id="btnSell" onclick="BT_sell()" title="按现价卖出（快捷键 S）">🟩 卖出</button>
-        <button class="btn btn-warning" id="btnClearPos" onclick="BT_clearPosition()" title="按现价清空持仓">清仓</button>
+        <button class="btn btn-danger" id="btnBuy" onclick="BT_buy()">🟥 买入</button>
+        <button class="btn btn-success" id="btnSell" onclick="BT_sell()">🟩 卖出</button>
+        <button class="btn btn-warning" id="btnClearPos" onclick="BT_clearPosition()">清仓</button>
       </div>
 
       <div class="bt-tip">
-        💡 快捷键：<strong>←/→</strong> 移光标 ·
-        <strong>空格</strong> 下一根<br>
-        <strong>B</strong> 买入 · <strong>S</strong> 卖出 ·
-        <strong>Home/End</strong> 跳首/尾<br>
-        成交价默认取光标日<strong>收盘价</strong>（可在「现价」框覆盖）
+        💡 先点「⏭ 下一根」<br>推进光标，再点<br>「🟥 买入/🟩 卖出」<br>按光标日<strong>收盘价</strong>成交
       </div>
     </div>
   </div>
@@ -575,9 +571,9 @@
 <script src="js/ui.js?v=4"></script>
 
 <!-- 回测专用模块（顺序：交易 → 图表 → 入口） -->
-<script src="js/backtest-trade.js?v=8"></script>
-<script src="js/backtest-chart.js?v=81"></script>
-<script src="js/backtest-main.js?v=27"></script>
+<script src="js/backtest-trade.js?v=7"></script>
+<script src="js/backtest-chart.js?v=79"></script>
+<script src="js/backtest-main.js?v=26"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

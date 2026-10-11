@@ -41,10 +41,6 @@ function BT_setInitCapital() {
     return;
   }
   BT_initCapital = v;
-  // ★ 修复：初始资金是现金的起点（BT_recomputeCash 以它为基数），
-  //   改了本金却不重算现金，会让 BT_cash 与交易记录永久分叉——
-  //   后续"资金不足"判断与收益率都基于陈旧的现金值。
-  BT_recomputeCash();
   BT_renderStats();
 }
 
@@ -75,11 +71,7 @@ async function BT_initStore() {
   BT_historyCollection = DataStore.collection('backtest_history');
 
   // 监听交易变化（服务器拉取新数据时自动刷新 UI）
-  // ★ 防自触发：本页自己 save/delete 也会触发 _notify，而调用方（BT_doBuy/BT_doSell 等）
-  //   刚刚已经完整渲染过一遍。此前每次买卖都会再做一次全量 query + 3 个 render，
-  //   等于双份渲染，异步回写还可能把 UI 闪回旧态。用一个计数标志跳过自触发。
   BT_tradesCollection.onChange(function() {
-    if (BT_selfWriteDepth > 0) return;   // 自己写入引发的变化，调用方已渲染
     if (BT_currentSymbol) {
       BT_loadTradesFromStore(BT_currentSymbol).then(function() {
         if (typeof BT_renderTrades === 'function') BT_renderTrades();
@@ -89,11 +81,6 @@ async function BT_initStore() {
     }
   });
 }
-
-// 本页写入计数：>0 表示正在执行本地写操作，onChange 回调应跳过
-var BT_selfWriteDepth = 0;
-function BT_beginSelfWrite() { BT_selfWriteDepth++; }
-function BT_endSelfWrite() { BT_selfWriteDepth = Math.max(0, BT_selfWriteDepth - 1); }
 
 // 从 DataStore 加载某标的的交易记录
 async function BT_loadTradesFromStore(symbol) {
@@ -166,24 +153,13 @@ async function BT_saveTrades() {
   if (BT_trades.length === 0) return;
   var lastTrade = BT_trades[BT_trades.length - 1];
   lastTrade.symbol = BT_currentSymbol;
-  // 标记为"本页写入"，避免 onChange 触发冗余全量重载（调用方已自行渲染）
-  BT_beginSelfWrite();
-  try {
-    await BT_tradesCollection.save(lastTrade);
-  } finally {
-    BT_endSelfWrite();
-  }
+  await BT_tradesCollection.save(lastTrade);
 }
 
 // 从 DataStore 删除单笔交易
 async function BT_deleteTradeFromStore(tradeId) {
   if (!BT_tradesCollection) return;
-  BT_beginSelfWrite();
-  try {
-    await BT_tradesCollection.delete(tradeId);
-  } finally {
-    BT_endSelfWrite();
-  }
+  await BT_tradesCollection.delete(tradeId);
 }
 
 // 清空当前标的的交易记录
@@ -192,18 +168,10 @@ async function BT_clearAllTrades() {
   BT_position = { volume: 0, cost: 0, realized: 0 };
   BT_cash = BT_initCapital;
   // 从 DataStore 删除当前 symbol 的所有交易
-  // ★ 性能：此前 for 循环里逐条 await delete()，每次 delete 都触发 _notify →
-  //   onChange 全量 query + 3 个 render + 资金曲线重算，100 笔就是 100 次全量重载。
-  //   现在整段包在"自写入"标记里，逐条删除不再触发监听，渲染只在最后做一次。
   if (BT_tradesCollection && BT_currentSymbol) {
-    BT_beginSelfWrite();
-    try {
-      var symbolTrades = await BT_tradesCollection.query(function(t) { return t.symbol === BT_currentSymbol; });
-      for (var i = 0; i < symbolTrades.length; i++) {
-        await BT_tradesCollection.delete(symbolTrades[i].id);
-      }
-    } finally {
-      BT_endSelfWrite();
+    var symbolTrades = await BT_tradesCollection.query(function(t) { return t.symbol === BT_currentSymbol; });
+    for (var i = 0; i < symbolTrades.length; i++) {
+      await BT_tradesCollection.delete(symbolTrades[i].id);
     }
   }
   BT_renderTrades();
@@ -580,18 +548,10 @@ function BT_renderStats() {
 }
 
 // 简易 toast 提示
-// ★ 修复：每次调用都新起 setTimeout，连续两条提示时前一条的定时器会提前清掉后一条
-//   （表现为"第二条一闪而过"）。改为持有 timer id 并先清旧的；同时支持 duration。
-var _btToastTimer = null;
-function BT_toast(msg, type, duration) {
+function BT_toast(msg, type) {
   var el = document.getElementById('btToast');
   if (!el) { console.log('[backtest]', msg); return; }
-  if (_btToastTimer) { clearTimeout(_btToastTimer); _btToastTimer = null; }
   el.textContent = msg;
   el.className = 'bt-toast show ' + (type || 'success');
-  var ms = (typeof duration === 'number' && duration > 0) ? duration : 2200;
-  _btToastTimer = setTimeout(function() {
-    _btToastTimer = null;
-    el.className = 'bt-toast ' + (type || 'success');
-  }, ms);
+  setTimeout(function() { el.className = 'bt-toast ' + (type || 'success'); }, 2200);
 }

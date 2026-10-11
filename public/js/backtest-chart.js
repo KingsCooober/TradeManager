@@ -26,26 +26,6 @@ var BT_zoomLocked = false;      // 比例锁定：true 时 setCursor 不调整 d
 var BT_userZoomRange = null;    // 用户拖动 slider 自定义的窗口 {start: %, end: %}；null 表示用默认 pinRight
 var _inDataZoomApply = false;   // 死循环保护：我们自己 setOption 时阻断 dataZoom 回调
 
-// ===== 光标渲染的 rAF 合并 =====
-// 鼠标移动事件频率远高于渲染帧率，一帧内可能触发多次（mousemove + updateAxisPointer）。
-// 把"面板 + 统计 + 指数图同步"合并到下一帧只执行一次，避免同帧重复重活。
-var _cursorRafId = null;
-function BT_scheduleCursorRender() {
-  if (_cursorRafId != null) return;   // 本帧已排期
-  var raf = (typeof requestAnimationFrame === 'function')
-    ? requestAnimationFrame
-    : function (cb) { return setTimeout(cb, 16); };
-  _cursorRafId = raf(function () {
-    _cursorRafId = null;
-    if (BT_currentIdx == null) return;
-    if (typeof BT_updateCursorDisplay === 'function') BT_updateCursorDisplay();
-    if (typeof BT_renderStats === 'function') BT_renderStats();
-    // 同步指数图光标 + 右侧指数面板
-    if (typeof BT_syncIndexCursor === 'function') BT_syncIndexCursor(BT_currentIdx);
-    if (typeof BT_updateIndexInfo === 'function') BT_updateIndexInfo();
-  });
-}
-
 // 缩放档位（+/- 每次变化的倍率）
 var BT_ZOOM_STEP = 1.25;        // 1.25 比 1.5 更平滑，连续点 20+ 次仍可缩放
 var BT_VISIBLE_BARS_MIN = 20;   // 最少 20 根（再小 K 线太挤）
@@ -125,25 +105,39 @@ function BT_initChart() {
   // 关键：同时监听 'mousemove'（直接派发 + 包含 dataIndex）和 'updateAxisPointer'（带 axesInfo）
   //   之前只监听 updateAxisPointer，但 link 配置错误导致 axesInfo=[]，事件回调拿不到 idx
   //   现在 mousemove 作为主驱动，updateAxisPointer 作为补充
-  // ★ 性能：两个事件都会派发，且鼠标移动频率远高于渲染帧率。
-  //   此前两个回调各自同步执行"面板 + 统计 + 指数图 + 指数面板"四件重活（含 8 条 MA 重建），
-  //   同一帧内可能重复跑多次。现统一收敛到一个 rAF 合并的处理器：
-  //   一帧内无论触发多少次事件，只渲染一次。
-  function BT_onCursorMove(params, axisValue) {
-    var idx = (axisValue !== undefined) ? axisValue : (params && params.dataIndex);
-    if (idx == null || !BT_klineData) return;
-    if (!(idx >= 0 && idx < BT_klineData.dates.length)) return;
-    if (idx === BT_currentIdx) return;
-    BT_currentIdx = idx;
-    BT_currentDate = BT_klineData.dates[idx];
-    BT_currentClose = BT_klineData.ohlc[idx][1];
-    BT_scheduleCursorRender();
-  }
-  BT_chart.on('mousemove', function (params) { BT_onCursorMove(params); });
-  BT_chart.on('updateAxisPointer', function (event) {
+  BT_chart.on('mousemove', function(params) {
+    if (!params || params.dataIndex == null) return;
+    if (!BT_klineData) return;
+    var idx = params.dataIndex;
+    if (idx >= 0 && idx < BT_klineData.dates.length && idx !== BT_currentIdx) {
+      BT_currentIdx = idx;
+      BT_currentDate = BT_klineData.dates[idx];
+      BT_currentClose = BT_klineData.ohlc[idx][1];
+      BT_updateCursorDisplay();
+      BT_renderStats();
+      // 同步指数图光标
+      if (typeof BT_syncIndexCursor === 'function') BT_syncIndexCursor(idx);
+      // 同步右侧指数面板
+      if (typeof BT_updateIndexInfo === 'function') BT_updateIndexInfo();
+    }
+  });
+  BT_chart.on('updateAxisPointer', function(event) {
     // 兼容：有些 ECharts 版本走 updateAxisPointer 事件（axesInfo 带 value）
     var xAxisInfo = event.axesInfo && event.axesInfo[0];
-    if (xAxisInfo && xAxisInfo.value !== undefined) BT_onCursorMove(null, xAxisInfo.value);
+    if (xAxisInfo && xAxisInfo.value !== undefined && BT_klineData) {
+      var idx = xAxisInfo.value;
+      if (idx >= 0 && idx < BT_klineData.dates.length && idx !== BT_currentIdx) {
+        BT_currentIdx = idx;
+        BT_currentDate = BT_klineData.dates[idx];
+        BT_currentClose = BT_klineData.ohlc[idx][1];
+        BT_updateCursorDisplay();
+        BT_renderStats();
+        // 同步指数图光标
+        if (typeof BT_syncIndexCursor === 'function') BT_syncIndexCursor(idx);
+        // 同步右侧指数面板
+        if (typeof BT_updateIndexInfo === 'function') BT_updateIndexInfo();
+      }
+    }
   });
 
   // 监听用户拖动 dataZoom（slider / inside）→ 同步 BT_userZoomRange 和 BT_visibleBars
@@ -556,27 +550,16 @@ function BT_getCloses() {
 }
 
 // 前端计算 N 周期 MA（输入 OHLC 数组和周期 N，返回数组，前 N-1 项为 null）
-// ★ 性能：该函数是 O(n)（n 最多 2500），而光标每次跨 1 根 K 线都会为每条 MA
-//   （主图 4 条 + 指数图 4 条）各调一次，即每次鼠标移动重建 8 条全序列。
-//   这里按「数据数组引用 + 周期」做记忆化：同一份数据只算一次，
-//   换标的/换周期时数据引用变化，缓存自动失效（无需手动清理）。
-var _maCache = new WeakMap();   // ohlc 数组 → { n: 结果数组 }
 function BT_computeMAFromCloses(ohlc, n) {
-  if (!ohlc || !ohlc.length) return [];
-  var byPeriod = _maCache.get(ohlc);
-  if (byPeriod && byPeriod[n]) return byPeriod[n];
   var result = new Array(ohlc.length).fill(null);
-  if (ohlc.length >= n) {
-    var sum = 0;
-    for (var i = 0; i < n; i++) sum += ohlc[i][1];
-    result[n - 1] = sum / n;
-    for (var j = n; j < ohlc.length; j++) {
-      sum += ohlc[j][1] - ohlc[j - n][1];
-      result[j] = sum / n;
-    }
+  if (ohlc.length < n) return result;
+  var sum = 0;
+  for (var i = 0; i < n; i++) sum += ohlc[i][1];
+  result[n - 1] = sum / n;
+  for (var j = n; j < ohlc.length; j++) {
+    sum += ohlc[j][1] - ohlc[j - n][1];
+    result[j] = sum / n;
   }
-  if (!byPeriod) { byPeriod = {}; _maCache.set(ohlc, byPeriod); }
-  byPeriod[n] = result;
   return result;
 }
 
@@ -625,37 +608,29 @@ function BT_buildEquityCurve(ohlc, dates, trades) {
 // 重新计算 equity 数组 → 更新 data._equity + ECharts series + tooltip
 function BT_refreshEquityCurve() {
   if (!BT_chart || !BT_klineData) return;
+  if (!BT_showFlags.equity) return;
   var ohlc = BT_klineData.ohlc;
   var dates = BT_klineData.dates;
   if (!ohlc || !dates) return;
-  // ★ 修复：此前 `if (!BT_showFlags.equity) return;` 让"资金"开关关闭时连数据都不重算，
-  //   勾回来后曲线仍是旧值。现在始终重算数据，只把"是否重绘"交给显示开关。
+  // 重算 equity
   var newEquity = BT_buildEquityCurve(ohlc, dates, BT_trades || []);
   BT_klineData._equity = newEquity;
-  if (!BT_showFlags.equity) {
-    // 未显示资金曲线：数据已更新，无需重绘
-    if (typeof BT_renderStats === 'function') BT_renderStats();
-    return;
-  }
-  // 更新 ECharts 的"资金" series。
-  // ★★ 重要教训：ECharts 的 setOption({series:[...]}) 是**按数组下标**合并的，不是按 name 匹配。
-  //    主图 series 顺序为 [K线, MA..., 成交, VOL5, DIF, DEA, MACD, 资金]，
-  //    若直接传 [{name:'资金',data:...}]，它会被合并到 series[0] = **K线**，
-  //    把资金曲线的数字数组灌进 candlestick 的 data —— K 线会直接画坏（曾误引入此问题）。
-  //    这里用 getOption() 取出真实 series，按下标改对位置再回灌，保证位置绝对正确。
-  //    代价是每次买卖多一次 option 深拷贝，但买卖是离散操作（非高频），可以接受。
+  // 更新 ECharts series（资金曲线是 series 数组的最后一个）
   var opt = BT_chart.getOption();
   var series = opt.series || [];
+  // 找 equity series（按 name 匹配更稳）
   var equityIdx = -1;
   for (var i = 0; i < series.length; i++) {
     if (series[i] && series[i].name === '资金') { equityIdx = i; break; }
   }
   if (equityIdx < 0) {
-    // 资金 series 尚未渲染（如刚初始化）→ 数据已存入 BT_klineData._equity，等下次整图渲染
-    if (typeof BT_renderStats === 'function') BT_renderStats();
+    // 资金 series 还没渲染（初始没开显示？）→ 跳过
     return;
   }
-  series[equityIdx].data = newEquity;
+  // 用 series[i] 引用更新（ECharts 会响应式更新）
+  if (typeof series[equityIdx].data !== 'undefined') {
+    series[equityIdx].data = newEquity;
+  }
   _inDataZoomApply = true;
   try {
     BT_chart.setOption({ series: series });
@@ -1309,11 +1284,8 @@ function BT_updateCursorDisplay() {
   set('curDate', dates[idx]);
   set('curOpen',  _fmt(ohlc[0], 2));
   set('curClose', _fmt(ohlc[1], 2));
-  // ★ ohlc 数组顺序是 [open, close, low, high]（见 server/market-quote.js:596），
-  //   此前这里写反了（把 ohlc[2]=low 显示成"高"），用户会按错误的最高/最低价下单。
-  //   同文件 tooltip(476) 与指数面板(1365-1366) 的取值一直是对的，只有此处错。
-  set('curHigh',  _fmt(ohlc[3], 2));
-  set('curLow',   _fmt(ohlc[2], 2));
+  set('curHigh',  _fmt(ohlc[2], 2));
+  set('curLow',   _fmt(ohlc[3], 2));
   // 涨跌幅
   var pct = '';
   var pctEl = document.getElementById('curPct');
@@ -1648,11 +1620,7 @@ function BT_showPeriodBanner(msg) {
       'box-shadow: 0 2px 6px rgba(0,0,0,0.2)',
       'pointer-events: none'
     ].join(';');
-    // ★ 修复：'.bt-chart-wrap' 在页面里有两个（#btIndexSection 在前，主 K 线 wrap 在后），
-    //   querySelector 取第一个 → banner 会浮在指数图上方，而它描述的是主图的月线降级。
-    //   改为挂在主图 canvas 的父容器上。
-    var chartEl = document.getElementById('btChart');
-    var wrap = chartEl ? chartEl.parentNode : null;
+    var wrap = document.querySelector('.bt-chart-wrap');
     if (wrap) {
       if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
       wrap.appendChild(el);
