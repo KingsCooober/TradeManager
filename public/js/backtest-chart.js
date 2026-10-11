@@ -21,15 +21,44 @@ var BT_showFlags = { ma: true, macd: true, vol: true, equity: true };  // 显示
 // 数据少于 60 根时显示全部；可在 BT_KLINE_WINDOW 修改
 var BT_KLINE_WINDOW = 60;
 var BT_currentIdx = null;       // 光标所在的 K 线索引（也存 localStorage）
-var BT_visibleBars = 250;       // 固定显示的 K 线根数（缩放比例）
+// ★ 默认 120 根（与 HTML 下拉的 selected 值一致；原为 250，蜡烛体仅约 2.8px 偏细）。
+//   注意：本变量会被 BT_saveState 持久化并在下次打开时恢复，
+//   所以用户一旦把窗口拉宽，之后每次打开都会沿用该值——上限已收到 500 保证不至于不可辨。
+var BT_DEFAULT_VISIBLE_BARS = 120;   // 默认可见根数（唯一来源，BT_init 的兜底判断也用它）
+var BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;   // 固定显示的 K 线根数（缩放比例）
 var BT_zoomLocked = false;      // 比例锁定：true 时 setCursor 不调整 dataZoom
 var BT_userZoomRange = null;    // 用户拖动 slider 自定义的窗口 {start: %, end: %}；null 表示用默认 pinRight
 var _inDataZoomApply = false;   // 死循环保护：我们自己 setOption 时阻断 dataZoom 回调
 
+// ===== 光标渲染的 rAF 合并 =====
+// 鼠标移动事件频率远高于渲染帧率，一帧内可能触发多次（mousemove + updateAxisPointer）。
+// 把"面板 + 统计 + 指数图同步"合并到下一帧只执行一次，避免同帧重复重活。
+var _cursorRafId = null;
+function BT_scheduleCursorRender() {
+  if (_cursorRafId != null) return;   // 本帧已排期
+  var raf = (typeof requestAnimationFrame === 'function')
+    ? requestAnimationFrame
+    : function (cb) { return setTimeout(cb, 16); };
+  _cursorRafId = raf(function () {
+    _cursorRafId = null;
+    if (BT_currentIdx == null) return;
+    if (typeof BT_updateCursorDisplay === 'function') BT_updateCursorDisplay();
+    if (typeof BT_renderStats === 'function') BT_renderStats();
+    // 同步指数图光标 + 右侧指数面板
+    if (typeof BT_syncIndexCursor === 'function') BT_syncIndexCursor(BT_currentIdx);
+    if (typeof BT_updateIndexInfo === 'function') BT_updateIndexInfo();
+  });
+}
+
 // 缩放档位（+/- 每次变化的倍率）
 var BT_ZOOM_STEP = 1.25;        // 1.25 比 1.5 更平滑，连续点 20+ 次仍可缩放
 var BT_VISIBLE_BARS_MIN = 20;   // 最少 20 根（再小 K 线太挤）
-var BT_VISIBLE_BARS_MAX = 1500; // 最多 1500 根（≈ 全量）
+// ★ 最多 350 根（原为 1500）：绘图区约 1168px 时，蜡烛体宽 ≈ 每根宽度 × 0.6。
+//   实测各档位蜡烛体宽：120 根 5.8px、250 根 2.8px、350 根 2.0px、
+//   500 根 1.4px、1500 根 0.47px（肉眼已无法分辨，纯"糊成一片"）。
+//   取 350 根作为上限，保证任何档位下蜡烛体宽 ≥ 2px（≈1.4 年日线，足够看趋势；
+//   要看更长历史可把"周期"切到 10 年，数据仍在，只是不一次全铺开）。
+var BT_VISIBLE_BARS_MAX = 350;
 
 // 恢复锁定状态
 try { BT_zoomLocked = JSON.parse(localStorage.getItem('bt_state_zoomLocked') || 'false') === true; } catch (e) { BT_zoomLocked = false; }
@@ -105,39 +134,25 @@ function BT_initChart() {
   // 关键：同时监听 'mousemove'（直接派发 + 包含 dataIndex）和 'updateAxisPointer'（带 axesInfo）
   //   之前只监听 updateAxisPointer，但 link 配置错误导致 axesInfo=[]，事件回调拿不到 idx
   //   现在 mousemove 作为主驱动，updateAxisPointer 作为补充
-  BT_chart.on('mousemove', function(params) {
-    if (!params || params.dataIndex == null) return;
-    if (!BT_klineData) return;
-    var idx = params.dataIndex;
-    if (idx >= 0 && idx < BT_klineData.dates.length && idx !== BT_currentIdx) {
-      BT_currentIdx = idx;
-      BT_currentDate = BT_klineData.dates[idx];
-      BT_currentClose = BT_klineData.ohlc[idx][1];
-      BT_updateCursorDisplay();
-      BT_renderStats();
-      // 同步指数图光标
-      if (typeof BT_syncIndexCursor === 'function') BT_syncIndexCursor(idx);
-      // 同步右侧指数面板
-      if (typeof BT_updateIndexInfo === 'function') BT_updateIndexInfo();
-    }
-  });
-  BT_chart.on('updateAxisPointer', function(event) {
+  // ★ 性能：两个事件都会派发，且鼠标移动频率远高于渲染帧率。
+  //   此前两个回调各自同步执行"面板 + 统计 + 指数图 + 指数面板"四件重活（含 8 条 MA 重建），
+  //   同一帧内可能重复跑多次。现统一收敛到一个 rAF 合并的处理器：
+  //   一帧内无论触发多少次事件，只渲染一次。
+  function BT_onCursorMove(params, axisValue) {
+    var idx = (axisValue !== undefined) ? axisValue : (params && params.dataIndex);
+    if (idx == null || !BT_klineData) return;
+    if (!(idx >= 0 && idx < BT_klineData.dates.length)) return;
+    if (idx === BT_currentIdx) return;
+    BT_currentIdx = idx;
+    BT_currentDate = BT_klineData.dates[idx];
+    BT_currentClose = BT_klineData.ohlc[idx][1];
+    BT_scheduleCursorRender();
+  }
+  BT_chart.on('mousemove', function (params) { BT_onCursorMove(params); });
+  BT_chart.on('updateAxisPointer', function (event) {
     // 兼容：有些 ECharts 版本走 updateAxisPointer 事件（axesInfo 带 value）
     var xAxisInfo = event.axesInfo && event.axesInfo[0];
-    if (xAxisInfo && xAxisInfo.value !== undefined && BT_klineData) {
-      var idx = xAxisInfo.value;
-      if (idx >= 0 && idx < BT_klineData.dates.length && idx !== BT_currentIdx) {
-        BT_currentIdx = idx;
-        BT_currentDate = BT_klineData.dates[idx];
-        BT_currentClose = BT_klineData.ohlc[idx][1];
-        BT_updateCursorDisplay();
-        BT_renderStats();
-        // 同步指数图光标
-        if (typeof BT_syncIndexCursor === 'function') BT_syncIndexCursor(idx);
-        // 同步右侧指数面板
-        if (typeof BT_updateIndexInfo === 'function') BT_updateIndexInfo();
-      }
-    }
+    if (xAxisInfo && xAxisInfo.value !== undefined) BT_onCursorMove(null, xAxisInfo.value);
   });
 
   // 监听用户拖动 dataZoom（slider / inside）→ 同步 BT_userZoomRange 和 BT_visibleBars
@@ -550,16 +565,27 @@ function BT_getCloses() {
 }
 
 // 前端计算 N 周期 MA（输入 OHLC 数组和周期 N，返回数组，前 N-1 项为 null）
+// ★ 性能：该函数是 O(n)（n 最多 2500），而光标每次跨 1 根 K 线都会为每条 MA
+//   （主图 4 条 + 指数图 4 条）各调一次，即每次鼠标移动重建 8 条全序列。
+//   这里按「数据数组引用 + 周期」做记忆化：同一份数据只算一次，
+//   换标的/换周期时数据引用变化，缓存自动失效（无需手动清理）。
+var _maCache = new WeakMap();   // ohlc 数组 → { n: 结果数组 }
 function BT_computeMAFromCloses(ohlc, n) {
+  if (!ohlc || !ohlc.length) return [];
+  var byPeriod = _maCache.get(ohlc);
+  if (byPeriod && byPeriod[n]) return byPeriod[n];
   var result = new Array(ohlc.length).fill(null);
-  if (ohlc.length < n) return result;
-  var sum = 0;
-  for (var i = 0; i < n; i++) sum += ohlc[i][1];
-  result[n - 1] = sum / n;
-  for (var j = n; j < ohlc.length; j++) {
-    sum += ohlc[j][1] - ohlc[j - n][1];
-    result[j] = sum / n;
+  if (ohlc.length >= n) {
+    var sum = 0;
+    for (var i = 0; i < n; i++) sum += ohlc[i][1];
+    result[n - 1] = sum / n;
+    for (var j = n; j < ohlc.length; j++) {
+      sum += ohlc[j][1] - ohlc[j - n][1];
+      result[j] = sum / n;
+    }
   }
+  if (!byPeriod) { byPeriod = {}; _maCache.set(ohlc, byPeriod); }
+  byPeriod[n] = result;
   return result;
 }
 
@@ -608,29 +634,37 @@ function BT_buildEquityCurve(ohlc, dates, trades) {
 // 重新计算 equity 数组 → 更新 data._equity + ECharts series + tooltip
 function BT_refreshEquityCurve() {
   if (!BT_chart || !BT_klineData) return;
-  if (!BT_showFlags.equity) return;
   var ohlc = BT_klineData.ohlc;
   var dates = BT_klineData.dates;
   if (!ohlc || !dates) return;
-  // 重算 equity
+  // ★ 修复：此前 `if (!BT_showFlags.equity) return;` 让"资金"开关关闭时连数据都不重算，
+  //   勾回来后曲线仍是旧值。现在始终重算数据，只把"是否重绘"交给显示开关。
   var newEquity = BT_buildEquityCurve(ohlc, dates, BT_trades || []);
   BT_klineData._equity = newEquity;
-  // 更新 ECharts series（资金曲线是 series 数组的最后一个）
+  if (!BT_showFlags.equity) {
+    // 未显示资金曲线：数据已更新，无需重绘
+    if (typeof BT_renderStats === 'function') BT_renderStats();
+    return;
+  }
+  // 更新 ECharts 的"资金" series。
+  // ★★ 重要教训：ECharts 的 setOption({series:[...]}) 是**按数组下标**合并的，不是按 name 匹配。
+  //    主图 series 顺序为 [K线, MA..., 成交, VOL5, DIF, DEA, MACD, 资金]，
+  //    若直接传 [{name:'资金',data:...}]，它会被合并到 series[0] = **K线**，
+  //    把资金曲线的数字数组灌进 candlestick 的 data —— K 线会直接画坏（曾误引入此问题）。
+  //    这里用 getOption() 取出真实 series，按下标改对位置再回灌，保证位置绝对正确。
+  //    代价是每次买卖多一次 option 深拷贝，但买卖是离散操作（非高频），可以接受。
   var opt = BT_chart.getOption();
   var series = opt.series || [];
-  // 找 equity series（按 name 匹配更稳）
   var equityIdx = -1;
   for (var i = 0; i < series.length; i++) {
     if (series[i] && series[i].name === '资金') { equityIdx = i; break; }
   }
   if (equityIdx < 0) {
-    // 资金 series 还没渲染（初始没开显示？）→ 跳过
+    // 资金 series 尚未渲染（如刚初始化）→ 数据已存入 BT_klineData._equity，等下次整图渲染
+    if (typeof BT_renderStats === 'function') BT_renderStats();
     return;
   }
-  // 用 series[i] 引用更新（ECharts 会响应式更新）
-  if (typeof series[equityIdx].data !== 'undefined') {
-    series[equityIdx].data = newEquity;
-  }
+  series[equityIdx].data = newEquity;
   _inDataZoomApply = true;
   try {
     BT_chart.setOption({ series: series });
@@ -659,13 +693,16 @@ function BT_renderKLine(data) {
   }
 
   // ★ BT_visibleBars 由 select 选项决定（60/90/120），不要在这里覆盖
-  //   如果 select 还没初始化（页面刷新早于 BT_initUI），用默认值 120
+  //   如果 select 还没初始化（页面刷新早于 BT_initUI），用默认值兜底
   var visEl = document.getElementById('btVisibleBars');
   if (visEl) {
-    BT_visibleBars = parseInt(visEl.value) || 120;
+    BT_visibleBars = parseInt(visEl.value) || BT_DEFAULT_VISIBLE_BARS;
   } else if (!BT_visibleBars) {
-    BT_visibleBars = 120;
+    BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;
   }
+  // 始终钳制在上限内：历史持久化可能存着旧上限（如 1500）的值，
+  // 若不钳制，蜡烛会细到不可辨（上限已从 1500 收到 500）。
+  BT_visibleBars = Math.max(BT_VISIBLE_BARS_MIN, Math.min(BT_VISIBLE_BARS_MAX, BT_visibleBars));
 
   var dates = data.dates;
   var ohlc  = data.ohlc;
@@ -691,6 +728,12 @@ function BT_renderKLine(data) {
     name: 'K线',
     type: 'candlestick',
     data: ohlc,
+    // ★ 蜡烛宽度：此前完全交给 ECharts 自动计算，在"可见根数多"时会细到看不清——
+    //   实测（绘图区约 1168px）：250 根时蜡烛体仅 2.8px、500 根 1.4px、1200 根 0.6px，
+    //   视觉上就是"发虚/糊成一条线"。而缩放上限 1500 根时更细。
+    //   这里给一个上限，避免少根数时蜡烛过胖；配合把缩放上限收到 500 根（见 BT_VISIBLE_BARS_MAX），
+    //   保证蜡烛体宽始终 ≥ 约 2.3px（500 根时）。
+    barMaxWidth: 14,
     itemStyle: {
       color: BT_COLOR_UP,        // 阳线（收>开）
       color0: BT_COLOR_DOWN,     // 阴线（收<开）
@@ -1284,8 +1327,11 @@ function BT_updateCursorDisplay() {
   set('curDate', dates[idx]);
   set('curOpen',  _fmt(ohlc[0], 2));
   set('curClose', _fmt(ohlc[1], 2));
-  set('curHigh',  _fmt(ohlc[2], 2));
-  set('curLow',   _fmt(ohlc[3], 2));
+  // ★ ohlc 数组顺序是 [open, close, low, high]（见 server/market-quote.js:596），
+  //   此前这里写反了（把 ohlc[2]=low 显示成"高"），用户会按错误的最高/最低价下单。
+  //   同文件 tooltip(476) 与指数面板(1365-1366) 的取值一直是对的，只有此处错。
+  set('curHigh',  _fmt(ohlc[3], 2));
+  set('curLow',   _fmt(ohlc[2], 2));
   // 涨跌幅
   var pct = '';
   var pctEl = document.getElementById('curPct');
@@ -1410,6 +1456,11 @@ function BT_setCursor(idx, mode) {
   if (!BT_chart || !BT_klineData) return;
   var total = BT_klineData.dates.length;
   if (total === 0) return;
+  // ★ 可见根数钳制（单一收口点）：BT_setCursor 是所有窗口变更路径的必经之地
+  //   （+/- 缩放、下拉切换、拖 slider、数据加载后的自动定位）。
+  //   此前钳制只写在 BT_renderKLine 里，其它路径可绕过 → 蜡烛细到 0.5px 不可辨。
+  //   放在这里可保证任何路径下蜡烛体宽都不低于约 2.3px（500 根 / 1168px 绘图区）。
+  BT_visibleBars = Math.max(BT_VISIBLE_BARS_MIN, Math.min(BT_VISIBLE_BARS_MAX, BT_visibleBars || BT_DEFAULT_VISIBLE_BARS));
   if (idx < 0) idx = 0;
   if (idx >= total) idx = total - 1;
   BT_currentIdx = idx;
@@ -1620,7 +1671,11 @@ function BT_showPeriodBanner(msg) {
       'box-shadow: 0 2px 6px rgba(0,0,0,0.2)',
       'pointer-events: none'
     ].join(';');
-    var wrap = document.querySelector('.bt-chart-wrap');
+    // ★ 修复：'.bt-chart-wrap' 在页面里有两个（#btIndexSection 在前，主 K 线 wrap 在后），
+    //   querySelector 取第一个 → banner 会浮在指数图上方，而它描述的是主图的月线降级。
+    //   改为挂在主图 canvas 的父容器上。
+    var chartEl = document.getElementById('btChart');
+    var wrap = chartEl ? chartEl.parentNode : null;
     if (wrap) {
       if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
       wrap.appendChild(el);

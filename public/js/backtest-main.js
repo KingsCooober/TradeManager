@@ -11,6 +11,22 @@
 var BT_LS_PREFIX = 'bt_state_';
 function BT_lsKey(k) { return BT_LS_PREFIX + k; }
 
+// ===== 年份 → K 线根数 映射（唯一定义处，此前在 BT_loadData / BT_loadIndex 重复两份）=====
+// 约 250 个交易日/年。后端一次能拉多少由 /api/market/kline-stock 决定，超出会降级为月线。
+var BT_YEARS_TO_COUNT = { '1': 250, '2': 500, '3': 750, '5': 1200, '7': 1750, '8': 2000, '10': 2500 };
+var BT_DEFAULT_COUNT = 1200;
+function BT_yearsToCount(years) {
+  return BT_YEARS_TO_COUNT[String(years)] || BT_DEFAULT_COUNT;
+}
+
+// ===== 异步请求序号守卫（防竞态）=====
+// ★ 修复：BT_loadData / BT_loadIndex 是异步的，此前没有序号守卫。
+//   快速连续切换标的（或连点"加载"）时，先发的慢响应可能后到，
+//   用旧标的的数据覆盖新标的的图表与 BT_currentSymbol，导致"图与标题不符"。
+//   每次发起请求自增序号，回调里比对，不是最新请求就直接丢弃。
+var BT_loadSeq = 0;
+var BT_indexLoadSeq = 0;
+
 // 全局：当前正在回测的标的代码（sh600000 / sz000001 等）
 // ★ 声明在 backtest-trade.js:22（本文件加载于其后，重复声明会把已恢复的状态清空）
 // 全局：当前正在回测的标的名称（如「浦发银行」，由后端在 K 线接口中一起返回）
@@ -20,32 +36,48 @@ var BT_currentSymbolName = null;
 var BT_historySearchCache = [];
 
 // ===== 持久化：标的/周期/MA/缩放/光标位置 =====
-function BT_saveState() {
+// ★ 性能：BT_saveState 会被"方向键切 K 线"高频调用（按住方向键约 30 次/秒），
+//   每次都 localStorage.setItem + IndexedDB 事务，实测会明显拖慢连续操作。
+//   改为防抖：300ms 内的多次调用合并为一次落盘；关键时机（切标的/完成回测）用
+//   BT_saveStateNow() 立即写，保证不丢状态。
+var BT_saveTimer = null;
+var BT_SAVE_DEBOUNCE_MS = 300;
+
+function BT_collectState() {
+  var symEl = document.getElementById('btSymbol');
+  var yrsEl = document.getElementById('btYears');
+  var vbEl  = document.getElementById('btVisibleBars');
+  var ma1 = document.getElementById('ma1');
+  var ma2 = document.getElementById('ma2');
+  var ma3 = document.getElementById('ma3');
+  var ma4 = document.getElementById('ma4');
+  // 关键：保存 BT_visibleBars（内存变量）而不是 vbEl.value（select 显示值），
+  //       这样 +/- 缩放后产生的非标称值（如 167）才能正确恢复
+  var vbToSave = (typeof BT_visibleBars === 'number' && BT_visibleBars > 0)
+    ? String(BT_visibleBars)
+    : (vbEl && vbEl.value);
+  return {
+    symbol:       symEl && symEl.value,
+    years:        yrsEl && yrsEl.value,
+    visibleBars:  vbToSave,
+    ma1: ma1 && ma1.value,
+    ma2: ma2 && ma2.value,
+    ma3: ma3 && ma3.value,
+    ma4: ma4 && ma4.value,
+    showIndex:    document.getElementById('showIndex') && document.getElementById('showIndex').checked,
+    cursorIdx:    BT_currentIdx,
+    // ★ 修复：初始资金此前不持久化，刷新后回落到默认 100 万并重算现金，
+    //   导致同一份交易记录在刷新前后收益率不同。纳入状态一起保存。
+    initCapital:  (typeof BT_initCapital === 'number' && BT_initCapital > 0) ? BT_initCapital : null,
+    savedAt:      Date.now()
+  };
+}
+
+// 立即落盘（用于切标的、完成回测、页面卸载等关键时机）
+function BT_saveStateNow() {
+  if (BT_saveTimer) { clearTimeout(BT_saveTimer); BT_saveTimer = null; }
   try {
-    var symEl = document.getElementById('btSymbol');
-    var yrsEl = document.getElementById('btYears');
-    var vbEl  = document.getElementById('btVisibleBars');
-    var ma1 = document.getElementById('ma1');
-    var ma2 = document.getElementById('ma2');
-    var ma3 = document.getElementById('ma3');
-    var ma4 = document.getElementById('ma4');
-    // 关键：保存 BT_visibleBars（内存变量）而不是 vbEl.value（select 显示值），
-    //       这样 +/- 缩放后产生的非标称值（如 167）才能正确恢复
-    var vbToSave = (typeof BT_visibleBars === 'number' && BT_visibleBars > 0)
-      ? String(BT_visibleBars)
-      : (vbEl && vbEl.value);
-    var state = {
-      symbol:       symEl && symEl.value,
-      years:        yrsEl && yrsEl.value,
-      visibleBars:  vbToSave,
-      ma1: ma1 && ma1.value,
-      ma2: ma2 && ma2.value,
-      ma3: ma3 && ma3.value,
-      ma4: ma4 && ma4.value,
-      showIndex:    document.getElementById('showIndex') && document.getElementById('showIndex').checked,
-      cursorIdx:    BT_currentIdx,
-      savedAt:      Date.now()
-    };
+    var state = BT_collectState();
     localStorage.setItem(BT_lsKey('form'), JSON.stringify(state));
 
     // 同步到 DataStore（跨设备同步，fire-and-forget）
@@ -55,6 +87,15 @@ function BT_saveState() {
       );
     }
   } catch (e) { /* ignore quota */ }
+}
+
+// 防抖落盘（高频调用场景，如方向键切 K 线）
+function BT_saveState() {
+  if (BT_saveTimer) clearTimeout(BT_saveTimer);
+  BT_saveTimer = setTimeout(function () {
+    BT_saveTimer = null;
+    BT_saveStateNow();
+  }, BT_SAVE_DEBOUNCE_MS);
 }
 
 function BT_loadState() {
@@ -73,6 +114,13 @@ function BT_init() {
       // DataStore ready → 从服务器拉取数据 + 迁移 localStorage 旧数据
       BT_migrateHistoryFromLocalStorage();
       BT_renderHistory();  // 从 DataStore 重新渲染历史记录
+    }).catch(function (e) {
+      // ★ 修复：此前没有 catch，DataStore.init() 一旦失败（如 IndexedDB 被禁用/配额满）
+      //   迁移与第二次渲染永不执行，页面静默停在 localStorage 模式且无任何提示。
+      console.warn('[backtest] DataStore 初始化失败，降级为 localStorage 模式:', e);
+      BT_toast('云端存储不可用，已降级为本地模式（数据仅保存在本机）', 'warn', 5000);
+      // 降级路径：仍渲染一次历史记录（走 localStorage 分支）
+      try { BT_renderHistory(); } catch (e2) { /* ignore */ }
     });
   }
 
@@ -94,6 +142,13 @@ function BT_init() {
     if (typeof saved.ma2 === 'string') document.getElementById('ma2').value = saved.ma2;
     if (typeof saved.ma3 === 'string') document.getElementById('ma3').value = saved.ma3;
     if (typeof saved.ma4 === 'string') document.getElementById('ma4').value = saved.ma4;
+    // ★ 恢复初始资金（与 BT_saveState 的 initCapital 对应）。
+    //   必须在下面 BT_loadTrades/BT_recomputeCash 之前生效，否则现金会按默认本金重算。
+    if (typeof saved.initCapital === 'number' && saved.initCapital > 0) {
+      BT_initCapital = saved.initCapital;
+      var _icEl = document.getElementById('btInitCapital');
+      if (_icEl) _icEl.value = saved.initCapital;
+    }
     // ★ 指数走势图开关：恢复后立即应用显隐
     if (typeof saved.showIndex === 'boolean') {
       var siEl = document.getElementById('showIndex');
@@ -113,8 +168,11 @@ function BT_init() {
     });
     if (_restoredMA.length > 0) BT_maPeriods = _restoredMA;
   }
-  // 兜底：若 BT_visibleBars 仍是默认值 250 但 select 上有用户上次选择的值，从 select 同步一次
-  if (typeof BT_visibleBars !== 'number' || BT_visibleBars === 250) {
+  // 兜底：BT_visibleBars 若仍是初始默认值（即用户从未调过缩放），
+  //       就从下拉框取当前选中值同步一次。
+  // ★ 此前这里硬编码 === 250，与 backtest-chart.js 里的默认值重复且易失配
+  //   （默认值一改此处就失效）。改为与 BT_DEFAULT_VISIBLE_BARS 单一来源比对。
+  if (typeof BT_visibleBars !== 'number' || BT_visibleBars === BT_DEFAULT_VISIBLE_BARS) {
     var _vbEl = document.getElementById('btVisibleBars');
     if (_vbEl && _vbEl.value) {
       var _vv = parseInt(_vbEl.value);
@@ -175,14 +233,34 @@ function BT_init() {
   var vbEl = document.getElementById('btVisibleBars');
   if (vbEl) vbEl.addEventListener('change', BT_applyVisibleBars);
 
-  // 9) 键盘快捷键：← / → 移动光标
+  // 9) 键盘快捷键：← / → 移动光标，B/S 买卖，空格下一根，Home/End 跳首尾
+  //   回测是高频操作，鼠标在"K 线区 / 买卖按钮"之间来回移动很费事；
+  //   快捷键让"看盘 → 下单"全程不离开键盘。
   document.addEventListener('keydown', function(e) {
     if (!BT_klineData) return;
-    // 避免在 input 内触发
+    // 避免在 input 内触发（否则在现价/标的框里打字会误下单）
     var t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
-    if (e.key === 'ArrowRight') { BT_nextBar(); e.preventDefault(); }
-    else if (e.key === 'ArrowLeft') { BT_prevBar(); e.preventDefault(); }
+    // 弹窗打开时不响应（避免与弹窗内的按键冲突）
+    if (document.querySelector('.modal-overlay.show, .ui-modal-overlay')) return;
+    // 带修饰键的交给浏览器（Ctrl+S 等）
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    switch (e.key) {
+      case 'ArrowRight': BT_nextBar(); e.preventDefault(); break;
+      case 'ArrowLeft':  BT_prevBar(); e.preventDefault(); break;
+      case ' ':          BT_nextBar(); e.preventDefault(); break;   // 空格 = 下一根
+      case 'b': case 'B': BT_buy();  e.preventDefault(); break;
+      case 's': case 'S': BT_sell(); e.preventDefault(); break;
+      case 'Home':
+        if (typeof BT_setCursor === 'function') BT_setCursor(0, 'pinRight');
+        e.preventDefault(); break;
+      case 'End':
+        if (typeof BT_setCursor === 'function') {
+          BT_setCursor(BT_klineData.dates.length - 1, 'pinRight');
+        }
+        e.preventDefault(); break;
+    }
   });
 
   // 10) 监听登录状态变化（其他页面登录后跳回此页能立即看到）
@@ -220,6 +298,13 @@ function BT_init() {
     // 延迟一下，等 ECharts 容器 ready
     setTimeout(function() { BT_loadData(/*silent*/ true); }, 50);
   }
+
+  // 13) 页面隐藏/卸载前把防抖中的状态立即落盘（否则最后一次操作会丢）
+  window.addEventListener('pagehide', BT_saveStateNow);
+  window.addEventListener('beforeunload', BT_saveStateNow);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') BT_saveStateNow();
+  });
 }
 
 // ===== 顶部登录 UI 同步（main.js 中 updateHeaderSyncUI 的本地化版本） =====
@@ -267,30 +352,25 @@ async function BT_loadData(silent) {
     return;
   }
 
-  var count;
-  switch (yearsEl.value) {
-    case '1':   count = 250;  break;  // 1 年 ≈ 250 个交易日
-    case '2':   count = 500;  break;
-    case '3':   count = 750;  break;
-    case '5':   count = 1200; break;
-    case '7':   count = 1750; break;  // 7 年
-    case '8':   count = 2000; break;  // 8 年
-    case '10':  count = 2500; break;  // 10 年（后端 Baostock 一次拉到）
-    default:    count = 1200;
-  }
+  var count = BT_yearsToCount(yearsEl.value);
 
   var btn = document.getElementById('btnLoad');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 加载中…'; }
 
+  // 序号守卫：只认最后一次发起的请求
+  var mySeq = ++BT_loadSeq;
+
   try {
     var url = '/api/market/kline-stock/' + symbol + '?count=' + count;
     var res = await authFetch(url);
+    if (mySeq !== BT_loadSeq) return;   // 已有更新的请求发出，丢弃本次结果
     if (!res.ok) {
       var errText = '';
       try { errText = (await res.json()).error || res.statusText; } catch (e) { errText = res.statusText; }
       throw new Error('HTTP ' + res.status + ': ' + errText);
     }
     var data = await res.json();
+    if (mySeq !== BT_loadSeq) return;   // 解析期间又发起了新请求
     // 缓存当前标的名称（来自后端 kline-stock 接口的 name 字段）
     BT_currentSymbolName = data.name || null;
 
@@ -312,16 +392,18 @@ async function BT_loadData(silent) {
     // 主图加载完后，重新拉指数图（让 count 与主图一致 → 时间范围对齐）
     if (typeof BT_loadIndex === 'function') BT_loadIndex(/*silent*/ true);
 
-    BT_saveState();  // 把最新 symbol/years/visibleBars 落盘
+    BT_saveStateNow();  // 切标的/改周期是关键状态，立即落盘（不等防抖）
     if (!silent) {
       BT_toast('✅ ' + symbol + ' 加载完成：' + (data.count || data.dates.length) + ' 根 K 线' +
         (data.cached ? '（缓存）' : '（实时）'), 'success');
     }
   } catch (e) {
+    if (mySeq !== BT_loadSeq) return;   // 过期请求的失败不应打扰用户
     console.error('[backtest] 加载失败:', e);
     if (!silent) BT_toast('加载失败：' + e.message, 'error');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '📥 加载 K 线'; }
+    // 只有最新一次请求才恢复按钮，避免旧请求提前解锁、让用户误以为可以再点
+    if (mySeq === BT_loadSeq && btn) { btn.disabled = false; btn.textContent = '📥 加载 K 线'; }
   }
 }
 
@@ -335,6 +417,9 @@ async function BT_loadIndex(silent) {
     if (!silent) BT_toast('指数代码格式错误', 'error');
     return;
   }
+  // 序号守卫：切换指数时旧请求返回不应覆盖新指数图
+  var mySeq = ++BT_indexLoadSeq;
+
   try {
     // 与主图拉相同根数（时间范围对齐 → 两图 dataZoom 同步才有意义）
     // 若主图还没加载，用主图 select 的 years 对应的 count 兜底
@@ -343,27 +428,20 @@ async function BT_loadIndex(silent) {
       count = window.BT_klineData.dates.length;
     } else {
       var yearsEl = document.getElementById('btYears');
-      var y = yearsEl ? yearsEl.value : '1';
-      switch (y) {
-        case '1':  count = 250;  break;
-        case '2':  count = 500;  break;
-        case '3':  count = 750;  break;
-        case '5':  count = 1200; break;
-        case '7':  count = 1750; break;
-        case '8':  count = 2000; break;
-        case '10': count = 2500; break;
-        default:   count = 1200;
-      }
+      count = BT_yearsToCount(yearsEl ? yearsEl.value : '1');
     }
     var url = '/api/market/kline-stock/' + symbol + '?count=' + count;
     var res = await authFetch(url);
+    if (mySeq !== BT_indexLoadSeq) return;
     if (!res.ok) throw new Error('HTTP ' + res.status);
     var data = await res.json();
+    if (mySeq !== BT_indexLoadSeq) return;
     // API 返回的 JSON 顶层带 name（指数名），传给 BT_renderIndexChart
     var indexName = data && data.name || symbol;
     BT_renderIndexChart(data, indexName);
     if (!silent) BT_toast('✅ 指数 ' + (indexName || symbol) + ' 加载完成', 'success');
   } catch (e) {
+    if (mySeq !== BT_indexLoadSeq) return;
     console.error('[index] 加载失败:', e);
     if (!silent) BT_toast('指数加载失败：' + e.message, 'error');
   }
@@ -387,9 +465,12 @@ function BT_setPosition(mode) {
 }
 
 // 按当前可用现金 × 仓位比例反算买入股数
-function BT_calcBuyVolume() {
-  if (!BT_klineData || !BT_currentClose) return 0;
-  var price = BT_currentClose;
+// 按当前可用现金 × 仓位比例反算买入股数
+// ★ price 由调用方传入「实际成交价」：此前固定用 BT_currentClose，
+//   若用户在输入框填了更高的价格，数量仍按收盘价放大 → 会误报"资金不足"。
+function BT_calcBuyVolume(price) {
+  if (price == null) price = BT_currentClose;
+  price = parseFloat(price);
   if (!price || price <= 0) return 0;
   var cash = typeof BT_cash === 'number' ? BT_cash : 0;
   // 预留 0.5% 防止手续费/余数误差
@@ -412,13 +493,27 @@ function BT_calcSellVolume() {
     : BT_position.volume;
 }
 
+// 读取并校验"现价"输入框：返回合法正数价格，非法返回 null
+// ★ 修复：此前用 parseFloat(v) || BT_currentClose，负数（-5）是真值不会被兜底，
+//   会一路传到 BT_doBuy 使 cost 为负 → cost > cash 恒假 → 现金反而增加（凭空造钱）。
+function BT_readPriceInput() {
+  var el = document.getElementById('btPrice');
+  var raw = el ? el.value : '';
+  if (raw === '' || raw == null) return BT_currentClose;   // 留空 = 用光标日收盘价
+  var v = parseFloat(raw);
+  if (!isFinite(v) || v <= 0) return null;                 // 非法/非正 → 拒绝
+  return v;
+}
+
 // 买入按钮
 function BT_buy() {
   if (!BT_klineData) { BT_toast('请先加载 K 线', 'warn'); return; }
   if (!BT_currentDate) { BT_toast('请在 K 线上移动光标', 'warn'); return; }
-  var price = parseFloat(document.getElementById('btPrice').value) || BT_currentClose;
-  var volume = BT_calcBuyVolume();
-  if (volume <= 0) { BT_toast('无法计算买入数量', 'warn'); return; }
+  var price = BT_readPriceInput();
+  if (price == null) { BT_toast('现价必须是大于 0 的数字', 'error'); return; }
+  // 用实际成交价反算手数（避免高价买入时按收盘价放大数量而误报资金不足）
+  var volume = BT_calcBuyVolume(price);
+  if (volume <= 0) { BT_toast('资金不足，无法买入 1 手', 'warn'); return; }
   BT_doBuy(BT_currentDate, price, volume);
   BT_saveState();
 }
@@ -428,7 +523,8 @@ function BT_sell() {
   if (!BT_klineData) { BT_toast('请先加载 K 线', 'warn'); return; }
   if (!BT_currentDate) { BT_toast('请在 K 线上移动光标', 'warn'); return; }
   if (!BT_position || BT_position.volume === 0) { BT_toast('当前无持仓', 'warn'); return; }
-  var price = parseFloat(document.getElementById('btPrice').value) || BT_currentClose;
+  var price = BT_readPriceInput();
+  if (price == null) { BT_toast('现价必须是大于 0 的数字', 'error'); return; }
   var volume = BT_calcSellVolume();
   if (volume <= 0) { BT_toast('无法计算卖出数量', 'warn'); return; }
   BT_doSell(BT_currentDate, price, volume);
@@ -802,12 +898,16 @@ async function BT_renderHistory() {
       }
     });
     // 持久化到 DataStore
-    if (BT_historyCollection && typeof BT_historyCollection.update === 'function') {
+    // ★ 修复：store.js 的 collection 只有 getAll/get/query/save/saveBatch/delete/clear/onChange，
+    //   没有 update()。此前守卫 `typeof BT_historyCollection.update === 'function'` 恒为假，
+    //   名称永远写不回库 → 每次打开页面都重新走三级外网查询。
+    //   改用 save()（内部按 id upsert），并把整个记录对象带上以免丢字段。
+    if (BT_historyCollection && typeof BT_historyCollection.save === 'function') {
       Object.keys(nameMap).forEach(function(sym) {
         for (var k = 0; k < list.length; k++) {
           if (list[k].symbol && list[k].symbol.toLowerCase() === sym && list[k].id) {
             list[k].name = nameMap[sym];
-            try { BT_historyCollection.update(list[k].id, { name: nameMap[sym] }); } catch (e) { /* ignore */ }
+            try { BT_historyCollection.save(Object.assign({}, list[k], { name: nameMap[sym] })); } catch (e) { /* ignore */ }
             break;
           }
         }
@@ -979,22 +1079,29 @@ async function BT_viewHistoryRecord(id) {
       if (detailMcl == null) detailMcl = risk3.maxConsecLoss;
     }
   }
-  lines.push('📊 回测详情: ' + rec.symbol);
-  lines.push('完成时间: ' + (rec.finishedAt || '').replace('T', ' ').substring(0, 19));
+  lines.push('📊 回测详情: ' + (rec.symbol || '-'));
+  lines.push('完成时间: ' + String(rec.finishedAt || '').replace('T', ' ').substring(0, 19));
   lines.push('─────────────────────');
   lines.push('初始资金: ¥' + (rec.initCapital || 0).toLocaleString());
   lines.push('当前资金: ¥' + (rec.currentCapital || 0).toLocaleString());
   lines.push('现金余额: ¥' + (rec.cash || 0).toLocaleString());
   lines.push('持仓市值: ¥' + (rec.positionValue || 0).toLocaleString());
-  lines.push('当前仓位: ' + (rec.positionPct || 0).toFixed(2) + '%');
+  // ★ 老记录可能缺字段：此处原先直接 .toFixed()/比较，缺字段会在异步函数内抛
+  //   TypeError，表现为"点详情没反应且无任何提示"。统一做数值兜底。
+  var nz = function (v) { return (typeof v === 'number' && isFinite(v)) ? v : 0; };
+  lines.push('当前仓位: ' + nz(rec.positionPct).toFixed(2) + '%');
   lines.push('─────────────────────');
-  lines.push('累计收益率: ' + (rec.totalReturn >= 0 ? '+' : '') + rec.totalReturn + '%');
-  lines.push('已实现盈亏: ' + (rec.realized >= 0 ? '+' : '') + '¥' + rec.realized.toFixed(2));
-  lines.push('浮动盈亏:   ' + (rec.unrealized >= 0 ? '+' : '') + '¥' + rec.unrealized.toFixed(2));
+  var tr = nz(rec.totalReturn);
+  lines.push('累计收益率: ' + (tr >= 0 ? '+' : '') + tr.toFixed(2) + '%');
+  var rz = nz(rec.realized);
+  lines.push('已实现盈亏: ' + (rz >= 0 ? '+' : '') + '¥' + rz.toFixed(2));
+  var uz = nz(rec.unrealized);
+  lines.push('浮动盈亏:   ' + (uz >= 0 ? '+' : '') + '¥' + uz.toFixed(2));
   lines.push('─────────────────────');
-  lines.push('交易笔数: ' + rec.tradeCount + ' 笔（平仓 ' + rec.closedCount + ' 笔）');
-  lines.push('胜率: ' + (rec.closedCount > 0 ? rec.winRate + '%' : '--'));
-  lines.push('盈亏比: ' + (rec.profitFactor == null ? '--' : rec.profitFactor.toFixed(2)));
+  lines.push('交易笔数: ' + nz(rec.tradeCount) + ' 笔（平仓 ' + nz(rec.closedCount) + ' 笔）');
+  lines.push('胜率: ' + (nz(rec.closedCount) > 0 ? nz(rec.winRate) + '%' : '--'));
+  lines.push('盈亏比: ' + (rec.profitFactor == null ? '--'
+    : (rec.profitFactor === Infinity ? '∞' : nz(rec.profitFactor).toFixed(2))));
   lines.push('─────────────────────');
   lines.push('⚠️ 风险指标:');
   lines.push('最大回撤: ' + (detailDd != null ? detailDd.toFixed(2) + '%' : '--'));
