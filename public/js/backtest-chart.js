@@ -637,12 +637,28 @@ function BT_refreshEquityCurve() {
     if (typeof BT_renderStats === 'function') BT_renderStats();
     return;
   }
-  // 只更新资金 series 本身，不再回灌全部 series
-  // ★ 此前用 getOption() 取全量 series 再整体 setOption，会把 K 线/量/MACD/MA
-  //   共 2500×N 个数据点全部重新上传，每次买卖各一次，代价很高。
+  // 更新 ECharts 的"资金" series。
+  // ★★ 重要教训：ECharts 的 setOption({series:[...]}) 是**按数组下标**合并的，不是按 name 匹配。
+  //    主图 series 顺序为 [K线, MA..., 成交, VOL5, DIF, DEA, MACD, 资金]，
+  //    若直接传 [{name:'资金',data:...}]，它会被合并到 series[0] = **K线**，
+  //    把资金曲线的数字数组灌进 candlestick 的 data —— K 线会直接画坏（曾误引入此问题）。
+  //    这里用 getOption() 取出真实 series，按下标改对位置再回灌，保证位置绝对正确。
+  //    代价是每次买卖多一次 option 深拷贝，但买卖是离散操作（非高频），可以接受。
+  var opt = BT_chart.getOption();
+  var series = opt.series || [];
+  var equityIdx = -1;
+  for (var i = 0; i < series.length; i++) {
+    if (series[i] && series[i].name === '资金') { equityIdx = i; break; }
+  }
+  if (equityIdx < 0) {
+    // 资金 series 尚未渲染（如刚初始化）→ 数据已存入 BT_klineData._equity，等下次整图渲染
+    if (typeof BT_renderStats === 'function') BT_renderStats();
+    return;
+  }
+  series[equityIdx].data = newEquity;
   _inDataZoomApply = true;
   try {
-    BT_chart.setOption({ series: [{ name: '资金', data: newEquity }] });
+    BT_chart.setOption({ series: series });
   } finally {
     setTimeout(function() { _inDataZoomApply = false; }, 0);
   }
