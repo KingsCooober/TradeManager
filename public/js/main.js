@@ -322,14 +322,14 @@ window.performGlobalSearch = function(q) {
 };
 
 function showDepositModal() {
-  document.getElementById('depositModal').style.display = 'flex';
+  openModalOverlay('depositModal');
   document.getElementById('depositAmount').value = '';
   document.getElementById('depositDate').value = getToday();
   renderDepositHistory();
 }
 
 function closeDepositModal() {
-  document.getElementById('depositModal').style.display = 'none';
+  closeModalOverlay('depositModal');
 }
 
 function renderDepositHistory() {
@@ -411,14 +411,14 @@ function confirmDeposit() {
 }
 
 function showWithdrawModal() {
-  document.getElementById('withdrawModal').style.display = 'flex';
+  openModalOverlay('withdrawModal');
   document.getElementById('withdrawAmount').value = '';
   document.getElementById('withdrawDate').value = getToday();
   renderWithdrawHistory();
 }
 
 function closeWithdrawModal() {
-  document.getElementById('withdrawModal').style.display = 'none';
+  closeModalOverlay('withdrawModal');
 }
 
 function renderWithdrawHistory() {
@@ -496,7 +496,7 @@ function clearAll() {
 var clearActionType = null;  // 'trades' / 'funds' / 'all'
 
 function openSettingsModal() {
-  document.getElementById('settingsModal').style.display = 'flex';
+  openModalOverlay('settingsModal');
   // 更新统计
   var tcEl = document.getElementById('settingsTradeCount');
   if (tcEl) tcEl.textContent = (typeof trades !== 'undefined' && trades) ? trades.length : 0;
@@ -507,7 +507,7 @@ function openSettingsModal() {
 }
 
 function closeSettingsModal() {
-  document.getElementById('settingsModal').style.display = 'none';
+  closeModalOverlay('settingsModal');
 }
 
 function openClearTradesConfirm() {
@@ -528,11 +528,11 @@ function openClearConfirmInternal(type, title, actionLabel, verifyCode) {
   document.getElementById('clearConfirmInput').value = '';
   document.getElementById('clearConfirmBtn').disabled = true;
   document.getElementById('clearConfirmHint').textContent = '';
-  document.getElementById('clearConfirmModal').style.display = 'flex';
+  openModalOverlay('clearConfirmModal');
 }
 
 function closeClearConfirm() {
-  document.getElementById('clearConfirmModal').style.display = 'none';
+  closeModalOverlay('clearConfirmModal');
   clearActionType = null;
 }
 
@@ -652,14 +652,12 @@ function exportCSV() {
 
 // 打开登录弹窗
 function openLoginModal() {
-  var modal = document.getElementById('loginModal');
-  if (modal) modal.style.display = 'flex';
+  openModalOverlay('loginModal');
 }
 
 // 关闭登录弹窗
 function closeLoginModal() {
-  var modal = document.getElementById('loginModal');
-  if (modal) modal.style.display = 'none';
+  closeModalOverlay('loginModal');
 }
 
 // 更新顶部导航栏登录状态
@@ -858,8 +856,7 @@ function handleLogout() {
   }).then(function(ok) {
     if (!ok) return;
     // 关闭管理员面板（如果打开）
-    var adminPanel = document.getElementById('adminPanel');
-    if (adminPanel) adminPanel.style.display = 'none';
+    closeModalOverlay('adminPanel');
 
     // P1-1: 若有未同步数据，先兜底同步一次；同步失败也允许退出，但提示用户
     if (hasUnsynced && window.syncModule && typeof window.syncModule.fullSync === 'function') {
@@ -895,13 +892,11 @@ function performLogoutCleanup() {
 
 // ===== 修改密码功能 =====
 function openChangePasswordModal() {
-  var modal = document.getElementById('changePasswordModal');
-  if (modal) modal.style.display = 'flex';
+  openModalOverlay('changePasswordModal');
 }
 
 function closeChangePasswordModal() {
-  var modal = document.getElementById('changePasswordModal');
-  if (modal) modal.style.display = 'none';
+  closeModalOverlay('changePasswordModal');
   // 清空输入
   document.getElementById('changePwdOld').value = '';
   document.getElementById('changePwdNew').value = '';
@@ -1028,10 +1023,11 @@ var adminUserList = [];
 
 function toggleAdminPanel() {
   var panel = document.getElementById('adminPanel');
-  if (panel.style.display === 'flex') {
-    panel.style.display = 'none';
+  var isOpen = panel.classList.contains('show');
+  if (isOpen) {
+    closeModalOverlay(panel);
   } else {
-    panel.style.display = 'flex';
+    openModalOverlay(panel);
     refreshAdminStats();
     refreshAdminUserList();
   }

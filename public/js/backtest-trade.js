@@ -304,8 +304,16 @@ function BT_clearPosition() {
     BT_toast('请先在 K 线上移动光标', 'warn');
     return;
   }
-  if (!confirm('确定以 ' + BT_currentClose.toFixed(2) + ' 的价格清仓 ' + BT_position.volume + ' 股？')) return;
-  BT_doSell(BT_currentDate, BT_currentClose, BT_position.volume);
+  // ★ 原生 confirm → showConfirm（统一弹窗组件，异步）
+  showConfirm({
+    title: '一键清仓',
+    message: '确定以 ' + BT_currentClose.toFixed(2) + ' 的价格清仓 ' + BT_position.volume + ' 股？',
+    type: 'warning',
+    confirmText: '清仓'
+  }).then(function (ok) {
+    if (!ok) return;
+    BT_doSell(BT_currentDate, BT_currentClose, BT_position.volume);
+  });
 }
 
 // 删除最后一笔（撤销）
@@ -314,20 +322,29 @@ function BT_deleteLastTrade() {
     BT_toast('没有可撤销的交易', 'warn');
     return;
   }
-  if (!confirm('确定删除最后一笔交易（' + BT_trades[BT_trades.length - 1].date + ' ' +
-    (BT_trades[BT_trades.length - 1].action === 'buy' ? '买入' : '卖出') + '）？')) return;
-  var removed = BT_trades.pop();
-  BT_recomputePosition();
-  BT_recomputeCash();
-  // 从 DataStore 删除
-  if (removed && removed.id) {
-    BT_deleteTradeFromStore(removed.id);
-  }
-  BT_renderTrades();
-  BT_renderStats();
-  BT_refreshChartMarkers();
-  BT_refreshEquityCurve();
-  BT_toast('已撤销最后一笔', 'success');
+  var last = BT_trades[BT_trades.length - 1];
+  // ★ 原生 confirm → showConfirm（统一弹窗组件，异步）
+  showConfirm({
+    title: '撤销交易',
+    message: '确定删除最后一笔交易（' + last.date + ' ' +
+      (last.action === 'buy' ? '买入' : '卖出') + '）？',
+    type: 'warning',
+    confirmText: '删除'
+  }).then(function (ok) {
+    if (!ok) return;
+    var removed = BT_trades.pop();
+    BT_recomputePosition();
+    BT_recomputeCash();
+    // 从 DataStore 删除
+    if (removed && removed.id) {
+      BT_deleteTradeFromStore(removed.id);
+    }
+    BT_renderTrades();
+    BT_renderStats();
+    BT_refreshChartMarkers();
+    BT_refreshEquityCurve();
+    BT_toast('已撤销最后一笔', 'success');
+  });
 }
 
 // 统计指标

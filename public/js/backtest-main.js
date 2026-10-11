@@ -436,9 +436,17 @@ function BT_sell() {
 function BT_clearTrades() {
   if (!BT_currentSymbol) { BT_toast('请先加载 K 线', 'warn'); return; }
   if (BT_trades.length === 0) { BT_toast('当前没有交易', 'warn'); return; }
-  if (!confirm('确定清空 ' + BT_currentSymbol + ' 的全部 ' + BT_trades.length + ' 笔交易？此操作不可撤销！')) return;
-  BT_clearAllTrades();
-  BT_toast('已清空 ' + BT_currentSymbol + ' 的全部交易', 'success');
+  // ★ 原生 confirm → showConfirm（统一弹窗组件，异步；替代同步 return 模式）
+  showConfirm({
+    title: '清空交易',
+    message: '确定清空 ' + BT_currentSymbol + ' 的全部 ' + BT_trades.length + ' 笔交易？此操作不可撤销！',
+    type: 'warning',
+    confirmText: '清空'
+  }).then(function (ok) {
+    if (!ok) return;
+    BT_clearAllTrades();
+    BT_toast('已清空 ' + BT_currentSymbol + ' 的全部交易', 'success');
+  });
 }
 
 // 下一根K线（光标右移）—— 以"当前窗口最右一根的下一根"为目标
@@ -517,7 +525,13 @@ function BT_ensureZoomRangeHealthy() {
 async function BT_finishBacktest() {
   if (!BT_currentSymbol) { BT_toast('请先加载 K 线', 'warn'); return; }
   if (BT_trades.length === 0) {
-    if (!confirm('当前没有交易记录，仍要标记为完成回测吗？')) return;
+    var okEmpty = await showConfirm({
+      title: '完成回测',
+      message: '当前没有交易记录，仍要标记为完成回测吗？',
+      type: 'warning',
+      confirmText: '标记完成'
+    });
+    if (!okEmpty) return;
   }
   // ★ 防御：如果当前 name 为空（后端 /kline-stock 接口没拿到），先查一次
   //   走三级 fallback：后端 → 新浪 → 东财
@@ -990,12 +1004,19 @@ async function BT_viewHistoryRecord(id) {
       }
     });
   }
-  alert(lines.join('\n'));
+  // ★ 原生 alert → alertDialog（统一组件；正文 pre-wrap，长文本可滚动）
+  alertDialog({ title: '📊 回测详情', message: lines.join('\n') });
 }
 
 // 删除单条历史记录
 async function BT_deleteHistoryRecord(id) {
-  if (!confirm('确定删除这条回测记录吗？')) return;
+  var okDel = await showConfirm({
+    title: '删除记录',
+    message: '确定删除这条回测记录吗？',
+    type: 'warning',
+    confirmText: '删除'
+  });
+  if (!okDel) return;
   // 从 DataStore 删除
   if (BT_historyCollection) {
     await BT_historyCollection.delete(id);
@@ -1012,7 +1033,13 @@ async function BT_deleteHistoryRecord(id) {
 
 // 清空所有历史记录
 async function BT_clearAllHistory() {
-  if (!confirm('确定清空所有历史回测记录吗？此操作不可恢复！')) return;
+  var okClear = await showConfirm({
+    title: '清空历史',
+    message: '确定清空所有历史回测记录吗？此操作不可恢复！',
+    type: 'warning',
+    confirmText: '清空'
+  });
+  if (!okClear) return;
   // 从 DataStore 清空
   if (BT_historyCollection) {
     await BT_historyCollection.clear();

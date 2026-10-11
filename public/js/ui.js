@@ -256,3 +256,53 @@ function alertDialog(options) {
 window.showToast = showToast;
 window.showConfirm = showConfirm;
 window.alertDialog = alertDialog;
+
+// ===== 弹窗开关统一辅助（全站 .modal-overlay 只用 classList('show') 一种机制）=====
+// ★ 背景：index.html 曾有 11 个弹窗用 style.display='flex'/'none'，
+//   唯独 equityModal 用 classList('show')（charts.js），两套机制在 CSS 上互斥
+//   （.modal-overlay 基类 display:none，.show 才是 flex），
+//   导致无法用单一选择器查"当前打开的弹窗"。
+//   统一后：打开加 .show、关闭移除 .show，并清掉历史遗留的内联 display 避免双轨残留。
+// 本文件在所有页面最先加载（index.html:790），确保 calculator.js/table.js 等后加载模块可用。
+function openModalOverlay(id) {
+  var el = typeof id === 'string' ? document.getElementById(id) : id;
+  if (!el) return;
+  el.classList.add('show');
+  el.style.removeProperty('display'); // 清除旧机制残留的内联 display
+}
+
+function closeModalOverlay(id) {
+  var el = typeof id === 'string' ? document.getElementById(id) : id;
+  if (!el) return;
+  el.classList.remove('show');
+  el.style.removeProperty('display');
+}
+
+// Esc 关闭当前打开的弹窗（index 页此前无任何键盘关闭路径）。
+// 只处理主页面弹窗；daily-review/diary2 有各自的 Esc 分发，ui.js 的对话框自己管理 Esc，
+// 这里按"页面是否定义了对应关闭函数"判定，避免跨页误关。
+(function __installGlobalEscClose() {
+  var closers = {
+    tradeConfirmModal: 'closeTradeConfirmModal',
+    tradeDetailModal: 'closeTradeDetailModal',
+    tradeEditModal: 'closeTradeEditModal',
+    depositModal: 'closeDepositModal',
+    withdrawModal: 'closeWithdrawModal',
+    settingsModal: 'closeSettingsModal',
+    clearConfirmModal: 'closeClearConfirm',
+    loginModal: 'closeLoginModal',
+    changePasswordModal: 'closeChangePasswordModal',
+    deleteConfirmModal: 'closeDeleteConfirmModal',
+    equityModal: 'closeEquityModal'
+  };
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    var open = document.querySelector('.modal-overlay.show');
+    if (!open) return;
+    var fn = closers[open.id];
+    if (fn && typeof window[fn] === 'function') {
+      e.preventDefault();
+      window[fn]();
+    }
+  });
+})();

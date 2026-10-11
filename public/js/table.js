@@ -46,12 +46,12 @@ function openDeleteConfirm(id, symbol, dir, entry) {
   document.getElementById('deleteDir').textContent = dir || '-';
   document.getElementById('deleteEntry').textContent = entry || '-';
   
-  document.getElementById('deleteConfirmModal').style.display = 'flex';
+  openModalOverlay('deleteConfirmModal');
 }
 
 function closeDeleteConfirmModal() {
   pendingDeleteTradeId = null;
-  document.getElementById('deleteConfirmModal').style.display = 'none';
+  closeModalOverlay('deleteConfirmModal');
 }
 
 function confirmDeleteTrade() {
@@ -730,7 +730,7 @@ function openTradeDetail(id) {
   var modal = document.getElementById('tradeDetailModal');
   if (modal) {
     modal.dataset.tradeId = idStr;
-    modal.style.display = 'flex';
+    openModalOverlay(modal);
     // 绑定编辑按钮事件
     var editBtn = document.getElementById('tradeDetailEditBtn');
     if (editBtn) {
@@ -740,8 +740,7 @@ function openTradeDetail(id) {
 }
 
 function closeTradeDetailModal() {
-  var modal = document.getElementById('tradeDetailModal');
-  if (modal) modal.style.display = 'none';
+  closeModalOverlay('tradeDetailModal');
 }
 
 // ===== 交易编辑弹窗（新增 / 编辑） =====
@@ -776,8 +775,7 @@ function openAddTradeModal() {
   // 升级弹窗内所有原生 select 为 custom-select（视觉与"买点类型"统一）
   upgradeTradeEditSelects();
 
-  var modal = document.getElementById('tradeEditModal');
-  if (modal) modal.style.display = 'flex';
+  openModalOverlay('tradeEditModal');
 }
 
 function openEditTradeModal(id) {
@@ -829,8 +827,7 @@ function openEditTradeModal(id) {
   // 升级弹窗内所有原生 select 为 custom-select（视觉与"买点类型"统一）
   upgradeTradeEditSelects();
 
-  var modal = document.getElementById('tradeEditModal');
-  if (modal) modal.style.display = 'flex';
+  openModalOverlay('tradeEditModal');
 }
 
 // 把交易编辑弹窗内的所有原生 <select> 升级为 custom-select
@@ -868,8 +865,7 @@ function bindExitPriceLiveClear() {
 }
 
 function closeTradeEditModal() {
-  var modal = document.getElementById('tradeEditModal');
-  if (modal) modal.style.display = 'none';
+  closeModalOverlay('tradeEditModal');
 }
 
 function saveTradeFromModal() {

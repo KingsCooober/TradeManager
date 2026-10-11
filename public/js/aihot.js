@@ -96,15 +96,24 @@
   }
 
   function handleLogout() {
-    if (!window.confirm('退出 Trade Manager 登录？')) return;
-    clearUserAndToken();
-    state.requestId += 1;
-    state.busy = false;
-    clearInterval(state.timer);
-    state.timer = null;
-    updateHeaderAuth();
-    showAuthGate();
-    showLoginModal();
+    // ★ 原生 confirm → showConfirm（ui.js 统一组件；aihot.html 已加载 ui.js）
+    if (typeof showConfirm !== 'function') { clearUserAndToken(); return; }
+    showConfirm({
+      title: '退出登录',
+      message: '退出 Trade Manager 登录？',
+      type: 'warning',
+      confirmText: '退出'
+    }).then(function (ok) {
+      if (!ok) return;
+      clearUserAndToken();
+      state.requestId += 1;
+      state.busy = false;
+      clearInterval(state.timer);
+      state.timer = null;
+      updateHeaderAuth();
+      showAuthGate();
+      showLoginModal();
+    });
   }
   window.handleAihotLogout = handleLogout;
 

@@ -500,7 +500,7 @@ function confirmAddTradeFromCalc() {
 
   // 渲染确认弹窗
   renderTradeConfirmModal(pendingTrade);
-  document.getElementById('tradeConfirmModal').style.display = 'flex';
+  openModalOverlay('tradeConfirmModal');
   var agreeCheckbox = document.getElementById('tradeConfirmAgree');
   if (agreeCheckbox) agreeCheckbox.checked = false;
 }
@@ -541,8 +541,7 @@ function renderTradeConfirmModal(trade) {
 }
 
 function closeTradeConfirmModal() {
-  var modal = document.getElementById('tradeConfirmModal');
-  if (modal) modal.style.display = 'none';
+  closeModalOverlay('tradeConfirmModal');
   pendingTrade = null;
 }
 
