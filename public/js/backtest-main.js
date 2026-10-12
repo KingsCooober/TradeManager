@@ -160,12 +160,24 @@ function BT_init() {
         if (section) section.style.display = saved.showIndex ? '' : 'none';
       }
     }
-    // 同步恢复 BT_maPeriods 内存变量（否则 K线图还会用默认 [5,10,20,60]）
+    // 同步恢复 BT_maPeriods 内存变量（否则 K线图还会用默认值）
     var _restoredMA = [];
     ['ma1', 'ma2', 'ma3', 'ma4'].forEach(function(id) {
       var _vv = parseInt(saved[id]);
       if (!isNaN(_vv) && _vv > 0 && _vv <= 400) _restoredMA.push(_vv);
     });
+    // ★ 迁移：localStorage 里若存的是"旧默认值"，说明用户从未自定义过均线，
+    //   应改用新默认值；否则改了默认值用户却看不到变化（持久化状态会一直覆盖它）。
+    //   用户自己改过的值（不等于旧默认）一律保留，不做覆盖。
+    var _OLD_MA_DEFAULT = '5,10,20,60';
+    if (_restoredMA.join(',') === _OLD_MA_DEFAULT) {
+      _restoredMA = BT_MA_DEFAULT.slice();
+      // 同步写回输入框，避免界面显示旧值
+      for (var _mi = 0; _mi < 4; _mi++) {
+        var _el = document.getElementById('ma' + (_mi + 1));
+        if (_el) _el.value = _restoredMA[_mi];
+      }
+    }
     if (_restoredMA.length > 0) BT_maPeriods = _restoredMA;
   }
   // 兜底：BT_visibleBars 若仍是初始默认值（即用户从未调过缩放），

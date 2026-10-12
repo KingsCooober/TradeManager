@@ -15,7 +15,9 @@
 var BT_chart = null;            // ECharts 实例
 var BT_renderCustomTooltip = null;  // 自定义 DOM tooltip 渲染函数（由 BT_setupCustomTooltip 初始化）
 var BT_klineData = null;        // 当前 K 线完整数据 {dates, ohlc, volumes, ma5/10/20, macd, count, ...}
-var BT_maPeriods = [5, 10, 20, 60];  // MA 周期（从输入框实时读取）
+// MA 周期默认值：单一来源（HTML 里的 ma1~ma4 初始 value 需与其保持一致）
+var BT_MA_DEFAULT = [10, 20, 144, 169];
+var BT_maPeriods = BT_MA_DEFAULT.slice();  // MA 周期（从输入框实时读取）
 var BT_showFlags = { ma: true, vol: true };  // MACD/资金面板已按用户要求移除  // 显示开关
 // 固定显示窗口：默认只显示最近 60 根 K线（让单根 K线 视觉宽度固定）
 // 数据少于 60 根时显示全部；可在 BT_KLINE_WINDOW 修改
