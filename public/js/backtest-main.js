@@ -129,11 +129,16 @@ function BT_init() {
     if (saved.years)       document.getElementById('btYears').value  = saved.years;
     if (saved.visibleBars) {
       var _v = parseInt(saved.visibleBars);
-      if (!isNaN(_v) && _v > 0) {
-        // 关键：直接写回 BT_visibleBars 内存变量，避免 select.value 无匹配项时静默失败
+      // ★ 缩放已取消：只接受白名单档位（90/120）。
+      //   旧存档可能存着任意值（60/250/350 等），这里吸附回默认，避免
+      //   出现"下拉框没有该档位、实际却按该值渲染"的不一致。
+      if (!isNaN(_v) && BT_ALLOWED_VISIBLE_BARS.indexOf(_v) >= 0) {
         BT_visibleBars = _v;
+        document.getElementById('btVisibleBars').value = String(_v);
+      } else {
+        BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;
+        document.getElementById('btVisibleBars').value = String(BT_DEFAULT_VISIBLE_BARS);
       }
-      document.getElementById('btVisibleBars').value = saved.visibleBars;  // 同步显示（即使没有匹配项也设上）
     }
     // 关键：用 typeof === 'string' 而不是 if (saved.ma1)，让空字符串也能恢复（清空的 MA）
     if (typeof saved.ma1 === 'string') document.getElementById('ma1').value = saved.ma1;

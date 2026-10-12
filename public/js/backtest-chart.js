@@ -23,12 +23,11 @@ var BT_showFlags = { ma: true, vol: true };  // MACD/资金面板已按用户要
 // 数据少于 60 根时显示全部；可在 BT_KLINE_WINDOW 修改
 var BT_KLINE_WINDOW = 60;
 var BT_currentIdx = null;       // 光标所在的 K 线索引（也存 localStorage）
-// ★ 默认 120 根（与 HTML 下拉的 selected 值一致；原为 250，蜡烛体仅约 2.8px 偏细）。
-//   注意：本变量会被 BT_saveState 持久化并在下次打开时恢复，
-//   所以用户一旦把窗口拉宽，之后每次打开都会沿用该值——上限已收到 500 保证不至于不可辨。
-var BT_DEFAULT_VISIBLE_BARS = 120;   // 默认可见根数（唯一来源，BT_init 的兜底判断也用它）
-var BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;   // 固定显示的 K 线根数（缩放比例）
-var BT_zoomLocked = false;      // 比例锁定：true 时 setCursor 不调整 dataZoom
+// 默认 90 根（与 HTML 下拉的 selected 一致）。根数只允许 90/120 两档，
+// 由 BT_ALLOWED_VISIBLE_BARS 白名单校验（见下方），不再支持连续缩放。
+var BT_DEFAULT_VISIBLE_BARS = 90;   // 默认可见根数（唯一来源）
+var BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;   // 固定显示的 K 线根数
+var BT_zoomLocked = true;       // 比例锁定恒为 true：缩放已取消，窗口不随光标漂移
 var BT_userZoomRange = null;    // 用户拖动 slider 自定义的窗口 {start: %, end: %}；null 表示用默认 pinRight
 var _inDataZoomApply = false;   // 死循环保护：我们自己 setOption 时阻断 dataZoom 回调
 
@@ -52,24 +51,26 @@ function BT_scheduleCursorRender() {
   });
 }
 
-// 缩放档位（+/- 每次变化的倍率）
-var BT_ZOOM_STEP = 1.25;        // 1.25 比 1.5 更平滑，连续点 20+ 次仍可缩放
-var BT_VISIBLE_BARS_MIN = 20;   // 最少 20 根（再小 K 线太挤）
-// ★ 最多 350 根（原为 1500）：绘图区约 1168px 时，蜡烛体宽 ≈ 每根宽度 × 0.6。
-//   实测各档位蜡烛体宽：120 根 5.8px、250 根 2.8px、350 根 2.0px、
-//   500 根 1.4px、1500 根 0.47px（肉眼已无法分辨，纯"糊成一片"）。
-//   取 350 根作为上限，保证任何档位下蜡烛体宽 ≥ 2px（≈1.4 年日线，足够看趋势；
-//   要看更长历史可把"周期"切到 10 年，数据仍在，只是不一次全铺开）。
-var BT_VISIBLE_BARS_MAX = 350;
+// K 线显示根数：改为固定档位（只允许 90 / 120，默认 90），不再支持连续缩放。
+//   ★ 原为 20~350 连续缩放（+/- 按钮 + 比例锁定），按用户要求取消，
+//     因为窗口宽度固定后，"看多少根"只需两档即可，缩放反而增加误操作。
+var BT_ALLOWED_VISIBLE_BARS = [90, 120];
+// 保留 MIN/MAX 常量供兜底钳制（applyVisibleBars / setCursor 仍在用）
+var BT_VISIBLE_BARS_MIN = 90;
+var BT_VISIBLE_BARS_MAX = 120;
+// BT_ZOOM_STEP 已废弃（缩放按钮移除），保留变量避免旧代码引用报错
+var BT_ZOOM_STEP = 1.25;
 
-// 恢复锁定状态
-try { BT_zoomLocked = JSON.parse(localStorage.getItem('bt_state_zoomLocked') || 'false') === true; } catch (e) { BT_zoomLocked = false; }
+// 恢复锁定状态（缩放已取消，锁定恒为 true，保证窗口不随光标漂移）
+BT_zoomLocked = true;
 
-// 从输入框读取 BT_visibleBars
+// 从输入框读取 BT_visibleBars（仅允许档位内的值）
 function BT_getVisibleBars() {
   var el = document.getElementById('btVisibleBars');
-  var v = el ? parseInt(el.value) : 250;
-  return (v && v > 0) ? v : 250;
+  var v = el ? parseInt(el.value) : BT_DEFAULT_VISIBLE_BARS;
+  if (!v || v <= 0) return BT_DEFAULT_VISIBLE_BARS;
+  // 只接受白名单档位，其余回落到默认，避免旧存档写入任意值
+  return (BT_ALLOWED_VISIBLE_BARS.indexOf(v) >= 0) ? v : BT_DEFAULT_VISIBLE_BARS;
 }
 
 // 计算 zoom 范围（百分比）
@@ -181,13 +182,20 @@ function BT_initChart() {
     if (typeof BT_syncIndexZoom === 'function') BT_syncIndexZoom();
     // 记录用户自定义窗口
     BT_userZoomRange = { start: s, end: e };
-    // 反算窗口宽度（约多少根 K 线）→ 同步 BT_visibleBars
+    // 反算窗口宽度（约多少根 K 线）→ 吸附到最近的允许档位（90 / 120）
+    //   ★ 缩放已取消：拖动滑块不再产生任意根数，只能落到 90 或 120，
+    //     避免出现"下拉框显示 90 但实际显示 137 根"的不一致。
     var total = BT_klineData.dates.length;
     if (total > 1) {
-      var bars = Math.max(1, Math.round((e - s) / 100 * (total - 1)));
-      bars = Math.max(BT_VISIBLE_BARS_MIN, Math.min(BT_VISIBLE_BARS_MAX, bars));
-      if (bars !== BT_visibleBars) {
-        BT_visibleBars = bars;
+      var bars = Math.round((e - s) / 100 * (total - 1));
+      var snapped = BT_ALLOWED_VISIBLE_BARS[0];
+      var best = Infinity;
+      for (var bi = 0; bi < BT_ALLOWED_VISIBLE_BARS.length; bi++) {
+        var d = Math.abs(BT_ALLOWED_VISIBLE_BARS[bi] - bars);
+        if (d < best) { best = d; snapped = BT_ALLOWED_VISIBLE_BARS[bi]; }
+      }
+      if (snapped !== BT_visibleBars) {
+        BT_visibleBars = snapped;
         BT_syncVisibleBarsSelect();   // 同步下拉框显示（不触发 change）
       }
     }
@@ -608,17 +616,16 @@ function BT_renderKLine(data) {
     BT_hidePeriodBanner();
   }
 
-  // ★ BT_visibleBars 由 select 选项决定（60/90/120），不要在这里覆盖
+  // ★ BT_visibleBars 由 select 选项决定（只允许 90 / 120），不要在这里覆盖
   //   如果 select 还没初始化（页面刷新早于 BT_initUI），用默认值兜底
   var visEl = document.getElementById('btVisibleBars');
   if (visEl) {
     BT_visibleBars = parseInt(visEl.value) || BT_DEFAULT_VISIBLE_BARS;
-  } else if (!BT_visibleBars) {
+  }
+  // 吸附到允许档位：旧存档可能存着任意值（如 350），缩放已取消只能落在 90/120
+  if (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) < 0) {
     BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;
   }
-  // 始终钳制在上限内：历史持久化可能存着旧上限（如 1500）的值，
-  // 若不钳制，蜡烛会细到不可辨（上限已从 1500 收到 500）。
-  BT_visibleBars = Math.max(BT_VISIBLE_BARS_MIN, Math.min(BT_VISIBLE_BARS_MAX, BT_visibleBars));
 
   var dates = data.dates;
   var ohlc  = data.ohlc;
@@ -1273,11 +1280,13 @@ function BT_setCursor(idx, mode) {
   if (!BT_chart || !BT_klineData) return;
   var total = BT_klineData.dates.length;
   if (total === 0) return;
-  // ★ 可见根数钳制（单一收口点）：BT_setCursor 是所有窗口变更路径的必经之地
-  //   （+/- 缩放、下拉切换、拖 slider、数据加载后的自动定位）。
-  //   此前钳制只写在 BT_renderKLine 里，其它路径可绕过 → 蜡烛细到 0.5px 不可辨。
-  //   放在这里可保证任何路径下蜡烛体宽都不低于约 2.3px（500 根 / 1168px 绘图区）。
-  BT_visibleBars = Math.max(BT_VISIBLE_BARS_MIN, Math.min(BT_VISIBLE_BARS_MAX, BT_visibleBars || BT_DEFAULT_VISIBLE_BARS));
+  // ★ 可见根数吸附到允许档位（90 / 120）——所有窗口变更路径的必经收口点
+  //   （下拉切换、拖 slider、数据加载后的自动定位）。
+  //   缩放已取消：任何来源的越界值（如旧存档 350）都会被吸附回 90/120。
+  if (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) < 0) {
+    BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;
+    BT_syncVisibleBarsSelect();
+  }
   if (idx < 0) idx = 0;
   if (idx >= total) idx = total - 1;
   BT_currentIdx = idx;
@@ -1386,84 +1395,22 @@ function BT_calcZoomRangeForIdx(idx, vis, currentRange) {
   return { start: startPct, end: endPct };
 }
 
-// ===== 缩放 +/- 与比例锁定 =====
+// ===== 缩放已取消（按用户要求）=====
+// 原 BT_zoomIn / BT_zoomOut / BT_syncVisibleBarsSelect / BT_toggleZoomLock 均移除：
+//   - 显示根数只允许 90 / 120 两档，通过下拉框切换即可；
+//   - 缩放按钮与比例锁定按钮已从控制栏删除，窗口宽度恒定。
 
-// 放大（K 线更密，显示更少根数）
-function BT_zoomIn() {
-  if (!BT_klineData) { BT_toast('请先加载 K 线', 'warn'); return; }
-  var newBars = Math.max(BT_VISIBLE_BARS_MIN, Math.round(BT_visibleBars / BT_ZOOM_STEP));
-  if (newBars >= BT_visibleBars) {
-    BT_toast('已经放到最大（' + BT_VISIBLE_BARS_MIN + ' 根）', 'warn');
-    return;
-  }
-  BT_visibleBars = newBars;
-  // 顺序：先同步下拉框 → 再调 applyVisibleBars（applyVisibleBars 会从下拉框读回新值）
-  BT_syncVisibleBarsSelect();
-  BT_applyVisibleBars();
-  BT_saveState();
-}
-
-// 缩小（K 线更疏，显示更多根数）
-function BT_zoomOut() {
-  if (!BT_klineData) { BT_toast('请先加载 K 线', 'warn'); return; }
-  var total = BT_klineData.dates.length;
-  var maxBars = Math.min(BT_VISIBLE_BARS_MAX, total);
-  var newBars = Math.min(maxBars, Math.round(BT_visibleBars * BT_ZOOM_STEP));
-  if (newBars <= BT_visibleBars) {
-    BT_toast('已经缩到最小（' + maxBars + ' 根）', 'warn');
-    return;
-  }
-  BT_visibleBars = newBars;
-  // 顺序：先同步下拉框 → 再调 applyVisibleBars
-  BT_syncVisibleBarsSelect();
-  BT_applyVisibleBars();
-  BT_saveState();
-}
-
-// 把当前 BT_visibleBars 同步到下拉框（去重：先清理旧的"手动"option，再查重插入）
+// 兼容占位：若有旧代码/旧存档仍调用缩放函数，给个明确提示而不是报错
+function BT_zoomIn()  { BT_toast('已取消缩放，请在「显示」里选择 90 / 120 根', 'warn'); }
+function BT_zoomOut() { BT_toast('已取消缩放，请在「显示」里选择 90 / 120 根', 'warn'); }
+function BT_toggleZoomLock() { /* 缩放取消后锁定恒为 true，无操作 */ }
+// 兼容占位：旧的"同步下拉框"逻辑（缩放时才需要），现在只保证选中值合法
 function BT_syncVisibleBarsSelect() {
   var el = document.getElementById('btVisibleBars');
   if (!el) return;
-  var targetVal = String(BT_visibleBars);
-
-  // 1) 先清理所有旧的"手动"option（防止跨多次 +/- 后累积几十个重复项）
-  for (var i = el.options.length - 1; i >= 0; i--) {
-    if (el.options[i].dataset && el.options[i].dataset.manual === '1') {
-      el.remove(i);
-    }
-  }
-
-  // 2) 查重：若 select 里已有匹配项（标称档位或手动档位），直接选中
-  var matchIdx = -1;
-  for (var j = 0; j < el.options.length; j++) {
-    if (parseInt(el.options[j].value) === BT_visibleBars) { matchIdx = j; break; }
-  }
-  if (matchIdx >= 0) {
-    el.value = targetVal;
-  } else {
-    // 3) 没有匹配项则新增一个"手动"option（带 data-manual 标识，便于下次清理）
-    var opt = document.createElement('option');
-    opt.value = targetVal;
-    opt.textContent = BT_visibleBars + ' 根（手动）';
-    opt.dataset.manual = '1';
-    el.appendChild(opt);
-    el.value = targetVal;
-  }
-}
-
-// 切换比例锁定
-function BT_toggleZoomLock() {
-  BT_zoomLocked = !BT_zoomLocked;
-  try { localStorage.setItem('bt_state_zoomLocked', JSON.stringify(BT_zoomLocked)); } catch (e) {}
-  var btn = document.getElementById('btnZoomLock');
-  if (btn) {
-    btn.textContent = BT_zoomLocked ? '🔒 锁定' : '🔓 锁定';
-    btn.classList.toggle('active', BT_zoomLocked);
-    btn.title = BT_zoomLocked
-      ? '已锁定比例：拖动滑块 / 下一根K线 都不会改变窗口'
-      : '未锁定：拖动 / 推进光标时会自动调整窗口';
-  }
-  BT_toast(BT_zoomLocked ? '已锁定比例' : '已解锁比例', BT_zoomLocked ? 'success' : 'warn');
+  var v = (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) >= 0) ? BT_visibleBars : BT_DEFAULT_VISIBLE_BARS;
+  BT_visibleBars = v;
+  el.value = String(v);
 }
 
 // ===== K线周期 banner（月线降级提示） =====
@@ -1509,17 +1456,9 @@ function BT_hidePeriodBanner() {
 }
 
 // 初始化锁定按钮的 UI 状态（页面加载时调用）
+// 缩放功能已取消，锁定按钮不再存在；保留空实现避免调用点报错。
 function BT_initZoomLockUI() {
-  var btn = document.getElementById('btnZoomLock');
-  if (!btn) return;
-  if (BT_zoomLocked) {
-    btn.textContent = '🔒 锁定';
-    btn.classList.add('active');
-    btn.title = '已锁定比例：拖动滑块 / 下一根K线 都不会改变窗口';
-  } else {
-    btn.textContent = '🔓 锁定';
-    btn.title = '未锁定：拖动 / 推进光标时会自动调整窗口';
-  }
+  /* 缩放已取消：无锁定按钮 */
 }
 
 // ==================== 大盘指数走势图（复用主图完整组件：K线 + MA + 成交量 + MACD） ====================
@@ -1630,6 +1569,27 @@ function BT_renderIndexChart(data, indexName) {
 
   // 同步缩放窗口（与主图一致）
   BT_syncIndexZoom();
+
+  // ★ 兜底：主图尚未加载时，BT_syncIndexZoom 会直接 return（它以主图日期为锚点），
+  //   导致指数图铺满全部数据（如 250 根），与「显示 90 根」的默认观感不一致。
+  //   这里按当前档位根数，把指数图自行定位到"最近 N 根"。
+  if (!BT_klineData) BT_pinIndexZoomToLatest();
+}
+
+// 主图无数据时：让指数图按当前显示档位定位到最近 N 根
+function BT_pinIndexZoomToLatest() {
+  if (!BT_indexChart || !BT_indexData) return;
+  var total = BT_indexData.dates.length;
+  if (total <= 1) return;
+  var vis = (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) >= 0) ? BT_visibleBars : BT_DEFAULT_VISIBLE_BARS;
+  var visPct = Math.min(100, vis / (total - 1) * 100);
+  var start = Math.max(0, 100 - visPct);
+  _inDataZoomApply = true;
+  try {
+    BT_indexChart.setOption({ dataZoom: [{ start: start, end: 100 }, { start: start, end: 100 }] });
+  } finally {
+    setTimeout(function() { _inDataZoomApply = false; }, 0);
+  }
 }
 
 // 同步指数图表的 dataZoom（4 grid 全部同步主图：inside + slider 隐藏）

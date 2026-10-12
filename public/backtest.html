@@ -361,6 +361,46 @@
   .bt-tradebar .bt-tip-inline { white-space: normal; }
 }
 
+/* ===== 主体两栏布局：左图表（固定宽度）+ 右指标栏 ===== */
+.bt-main-layout {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.bt-main-left {
+  /* 固定宽度：图表收窄，右侧腾出空间放指标卡。
+     960 = K线绘图区(约 960) + 右侧 180px 光标数据栏 + 卡片内边距 */
+  flex: 0 0 1152px;
+  max-width: 1152px;
+  min-width: 0;
+}
+.bt-main-right {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 右侧指标卡：竖排单列（原为底部通栏网格） */
+.bt-stats-side {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 0;
+}
+.bt-stats-side .bt-stat {
+  padding: 8px 12px;
+}
+.bt-stats-side .bt-stat-label { font-size: 11px; margin-bottom: 4px; }
+.bt-stats-side .bt-stat-value { font-size: 17px; }
+
+/* 窄屏回退：宽度不足时改为上下堆叠，避免图表被压扁 */
+@media (max-width: 1500px) {
+  .bt-main-layout { flex-direction: column; }
+  .bt-main-left { flex: 1 1 auto; max-width: none; width: 100%; }
+  .bt-main-right { width: 100%; }
+  .bt-stats-side { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+}
+
 .bt-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -424,10 +464,10 @@
 .bt-toast.error { border-left: 3px solid var(--color-red, #ef476f); }
 .bt-toast.warn { border-left: 3px solid var(--color-yellow, #ffd166); }
 
-/* 小按钮（缩放/锁定） */
+/* 小按钮（.btn-sm 仍被其他页面元素复用） */
 .btn.btn-sm { padding: 4px 8px; font-size: 13px; line-height: 1.2; }
 .btn.active { background: var(--color-blue, #4361ee); color: #fff; border-color: var(--color-blue, #4361ee); }
-.btn.btn-sm#btnZoomLock.active { background: var(--color-yellow, #ffd166); color: #333; border-color: var(--color-yellow, #ffd166); }
+/* 注：#btnZoomLock 样式已移除（缩放/锁定按钮按用户要求删除） */
 
 [data-theme="dark"] .bt-controlbar,
 [data-theme="dark"] .bt-chart-wrap,
@@ -485,10 +525,10 @@
     </div>
     <div class="bt-group">
       <label>显示:</label>
-      <select id="btVisibleBars" title="固定显示根数（K线缩放比例）">
-        <option value="60">60 根</option>
-        <option value="90">90 根</option>
-        <option value="120" selected>120 根</option>
+      <!-- 固定显示根数：只保留 90 / 120 两档，默认 90（K线缩放按钮已移除） -->
+      <select id="btVisibleBars" title="固定显示根数">
+        <option value="90" selected>90 根</option>
+        <option value="120">120 根</option>
       </select>
     </div>
     <div class="bt-group">
@@ -499,12 +539,6 @@
         <option value="sz399673">创业板50</option>
         <option value="sh000688">科创50</option>
       </select>
-    </div>
-    <div class="bt-group">
-      <label>缩放:</label>
-      <button class="btn btn-sm" id="btnZoomIn"  onclick="BT_zoomIn()"  title="放大（K线更密）">🔍＋</button>
-      <button class="btn btn-sm" id="btnZoomOut" onclick="BT_zoomOut()" title="缩小（K线更疏）">🔍−</button>
-      <button class="btn btn-sm" id="btnZoomLock" onclick="BT_toggleZoomLock()" title="未锁定：拖动 / 推进光标时会自动调整窗口">🔓 锁定</button>
     </div>
     <div class="bt-group">
       <label><input type="checkbox" id="showMA" checked> MA</label>
@@ -521,6 +555,10 @@
       <button class="btn btn-warning" id="btnFinish" onclick="BT_finishBacktest()" title="标记当前标的的回测结束（保存本次回测摘要）">🏁 完成回测</button>
     </div>
   </div>
+
+  <!-- 主体两栏：左侧图表（固定 960px 绘图区），右侧指标卡 -->
+  <div class="bt-main-layout">
+    <div class="bt-main-left">
 
   <!-- 大盘指数走势图（上方窗口，与主图同步缩放）-->
   <!-- 与主图共用 .bt-chart-wrap 布局：左侧 K线 + 右侧 180px 指数数据栏（跟主图完全对称）-->
@@ -611,18 +649,23 @@
     </div>
   </div>
 
-  <!-- 核心指标卡：初始资金 + 累计收益率 + 当前仓位 + 胜率 + 盈亏比 + 交易次数 + 风险指标 -->
-  <div class="bt-stats" id="btStats">
-    <div class="bt-stat"><div class="bt-stat-label">初始资金</div><div class="bt-stat-value" id="statInitCapital">¥1,000,000</div></div>
-    <div class="bt-stat"><div class="bt-stat-label">累计收益率</div><div class="bt-stat-value" id="statTotalReturn">--</div></div>
-    <div class="bt-stat"><div class="bt-stat-label">当前仓位</div><div class="bt-stat-value" id="statPosition">--</div></div>
-    <div class="bt-stat"><div class="bt-stat-label">当前资金</div><div class="bt-stat-value" id="statCurrentCapital">--</div></div>
-    <div class="bt-stat"><div class="bt-stat-label">胜率</div><div class="bt-stat-value" id="statWinRate">--</div></div>
-    <div class="bt-stat"><div class="bt-stat-label">盈亏比</div><div class="bt-stat-value" id="statProfitFactor">--</div></div>
-    <div class="bt-stat"><div class="bt-stat-label">最大回撤</div><div class="bt-stat-value" id="statMaxDrawdown">--</div></div>
-    <div class="bt-stat"><div class="bt-stat-label">最大连亏</div><div class="bt-stat-value" id="statMaxConsecLoss">--</div></div>
-    <div class="bt-stat"><div class="bt-stat-label">交易次数</div><div class="bt-stat-value" id="statTradeCount">--</div></div>
-  </div>
+    </div><!-- /.bt-main-left -->
+
+    <!-- 右侧指标栏：核心指标卡竖排 -->
+    <aside class="bt-main-right">
+      <div class="bt-stats bt-stats-side" id="btStats">
+        <div class="bt-stat"><div class="bt-stat-label">初始资金</div><div class="bt-stat-value" id="statInitCapital">¥1,000,000</div></div>
+        <div class="bt-stat"><div class="bt-stat-label">累计收益率</div><div class="bt-stat-value" id="statTotalReturn">--</div></div>
+        <div class="bt-stat"><div class="bt-stat-label">当前仓位</div><div class="bt-stat-value" id="statPosition">--</div></div>
+        <div class="bt-stat"><div class="bt-stat-label">当前资金</div><div class="bt-stat-value" id="statCurrentCapital">--</div></div>
+        <div class="bt-stat"><div class="bt-stat-label">胜率</div><div class="bt-stat-value" id="statWinRate">--</div></div>
+        <div class="bt-stat"><div class="bt-stat-label">盈亏比</div><div class="bt-stat-value" id="statProfitFactor">--</div></div>
+        <div class="bt-stat"><div class="bt-stat-label">最大回撤</div><div class="bt-stat-value" id="statMaxDrawdown">--</div></div>
+        <div class="bt-stat"><div class="bt-stat-label">最大连亏</div><div class="bt-stat-value" id="statMaxConsecLoss">--</div></div>
+        <div class="bt-stat"><div class="bt-stat-label">交易次数</div><div class="bt-stat-value" id="statTradeCount">--</div></div>
+      </div>
+    </aside>
+  </div><!-- /.bt-main-layout -->
 
   <!-- 交易明细 -->
   <div class="bt-trades">
@@ -693,8 +736,8 @@
 
 <!-- 回测专用模块（顺序：交易 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=8"></script>
-<script src="js/backtest-chart.js?v=86"></script>
-<script src="js/backtest-main.js?v=32"></script>
+<script src="js/backtest-chart.js?v=87"></script>
+<script src="js/backtest-main.js?v=33"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）
