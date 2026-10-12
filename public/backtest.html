@@ -366,33 +366,45 @@
 .bt-main-layout {
   display: flex;
   gap: 12px;
-  align-items: flex-start;
+  /* 两栏等高：左列（两张 K 线图 + 交易条）决定总高，
+     右列随之拉伸，9 张指标卡等分填满，底部不留空白 */
+  align-items: stretch;
   margin-bottom: 12px;
 }
 .bt-main-left {
-  /* 固定宽度：图表收窄，右侧腾出空间放指标卡。
-     960 = K线绘图区(约 960) + 右侧 180px 光标数据栏 + 卡片内边距 */
-  flex: 0 0 1152px;
-  max-width: 1152px;
-  min-width: 0;
-}
-.bt-main-right {
+  /* 左侧图表列自适应：占满"总宽 - 右侧固定指标栏"，指标栏收窄后图表自然变宽 */
   flex: 1 1 auto;
   min-width: 0;
 }
+.bt-main-right {
+  /* 右侧指标栏：固定窄宽度（数字不长，无需更宽），
+     收窄腾出的空间全部给左侧 K 线图 */
+  flex: 0 0 232px;
+  max-width: 232px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 
-/* 右侧指标卡：单列竖排（按用户要求，原为两列）
+/* 右侧指标卡：单列竖排，9 张卡等高撑满整列高度（与左侧图表区顶部对齐、底部齐平）
    ★ 注意元素同时带 .bt-stats 与 .bt-stats-side 两个类，而 .bt-stats 的
    grid-template-columns 定义在下方、特异性相同会覆盖本规则，
    因此这里用 .bt-stats.bt-stats-side 提高特异性确保单列生效。 */
 .bt-stats.bt-stats-side {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  /* 9 行等分（1fr each）→ 卡片自动拉高填满，不再在底部留大片空白 */
+  grid-template-rows: repeat(9, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 0;
+  flex: 1 1 auto;      /* 撑满右侧列高度 */
+  min-height: 0;
 }
 .bt-stats-side .bt-stat {
-  padding: 8px 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;   /* 内容垂直居中，卡片变高后不显得上重下轻 */
 }
 .bt-stats-side .bt-stat-label { font-size: 11px; margin-bottom: 4px; }
 .bt-stats-side .bt-stat-value { font-size: 17px; }
@@ -401,8 +413,13 @@
 @media (max-width: 1500px) {
   .bt-main-layout { flex-direction: column; }
   .bt-main-left { flex: 1 1 auto; max-width: none; width: 100%; }
-  .bt-main-right { width: 100%; }
-  .bt-stats.bt-stats-side { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .bt-main-right { width: 100%; max-width: none; flex: 0 0 auto; }
+  /* 堆叠时不再等分高度（否则整列被拉得极高），恢复按内容高度排列 */
+  .bt-stats.bt-stats-side {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    grid-template-rows: none;
+    flex: 0 0 auto;
+  }
 }
 
 .bt-stats {
