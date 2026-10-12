@@ -179,6 +179,12 @@ function __showModal(options) {
   function close(value) {
     if (settled) return;
     settled = true;
+    // ★ 关闭时立即切断指针事件命中，避免淡出动画（200ms）期间
+    //   遮罩仍拦截整屏点击 —— 否则用户"关掉弹窗后马上连点底栏按钮"
+    //   会被静默吞掉，表现为按钮失灵或步数对不上（例如回测里连点
+    //   「下一根」只走了一格）。淡出只保留视觉，不保留交互拦截。
+    overlay.style.pointerEvents = 'none';
+    overlay.setAttribute('aria-hidden', 'true');
     overlay.classList.remove('ui-modal-show');
     setTimeout(function() {
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);

@@ -550,6 +550,39 @@ test.describe('12 - 回测练习页', () => {
       expect(B.date, '移动鼠标后右栏应切换到另一根 K线').not.toBe(A.date);
       expect(B.idxDate, '指数图右栏也应同步').toBe(B.date);
     });
+
+    // 回归：清仓确认后立刻连点「下一根」不应丢点击
+    //（ui.js 的 showConfirm 淡出动画期间曾有 200ms 仍拦截整屏点击，
+    //  导致快速连点被静默吞掉，表现为"下一根只走了一根/步数对不上"）
+    test('清仓确认后立即连点「下一根」每次都应生效', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      await page.evaluate(() => {
+        BT_setCursor(100, 'pinRight');
+        BT_doBuy(BT_currentDate, BT_currentClose, 1000);
+      });
+      await page.waitForTimeout(400);
+
+      // 点清仓 → 确认
+      await page.click('.bt-tradebar #btnClearPos');
+      await page.waitForSelector('.ui-modal-overlay', { state: 'visible' });
+      await page.click('.ui-modal-overlay .btn-primary');
+
+      // 不等待，立刻连点 4 次（此前会丢失点击）
+      for (let i = 0; i < 4; i++) {
+        await page.click('.bt-tradebar #btnNextBar', { force: true, noWaitAfter: true });
+        await page.waitForTimeout(30);
+      }
+      await page.waitForTimeout(900);
+
+      const pos = await page.evaluate(() => ({
+        vol: BT_position.volume,
+        idx: BT_currentIdx
+      }));
+      expect(pos.vol, '清仓后持仓应为 0').toBe(0);
+      expect(pos.idx, '连点 4 次应精确前进 4 根（104）').toBe(104);
+    });
   });
 
   // ============================================================
