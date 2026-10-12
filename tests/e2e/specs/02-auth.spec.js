@@ -78,12 +78,9 @@ test.describe('02 - 用户认证', () => {
     await lm.logout();
     await page.waitForTimeout(500);
 
-    // 尝试错误密码
-    const dialogPromise = lm.waitForLoginFailure();
+    // 尝试错误密码（失败提示走 toast：showToast '登录失败: ...'）
     await lm.login(user.username, 'wrongpassword123');
-    const dialog = await dialogPromise;
-    expect(dialog.message()).toMatch(/失败|错误/);
-    await dialog.accept();
+    expect(await lm.waitForLoginFailure()).toMatch(/失败|错误/);
 
     // 弹窗应保持显示
     await expect(page.locator('#loginModal')).toBeVisible();
@@ -91,10 +88,8 @@ test.describe('02 - 用户认证', () => {
 
   test('不存在的用户应登录失败', async ({ page }) => {
     const lm = new LoginModal(page);
-    const dialogPromise = lm.waitForLoginFailure();
     await lm.login('nonexistent_user_xyz_99999', 'whatever');
-    const dialog = await dialogPromise;
-    expect(dialog.message()).toMatch(/失败|错误/);
+    expect(await lm.waitForLoginFailure()).toMatch(/失败|错误/);
   });
 
   test('重复注册应返回错误', async ({ page }) => {
@@ -108,48 +103,31 @@ test.describe('02 - 用户认证', () => {
     await page.waitForTimeout(500);
 
     // 第二次注册相同用户
-    const dialogPromise = lm.waitForLoginFailure();
     await lm.register(user.username, user.password);
-    const dialog = await dialogPromise;
-    expect(dialog.message()).toMatch(/存在|失败/);
+    expect(await lm.waitForLoginFailure()).toMatch(/存在|失败/);
   });
 
   test('密码少于6位应注册失败', async ({ page }) => {
     const lm = new LoginModal(page);
+    await lm.clearToasts();
     await lm.open();
     await page.fill('#syncLoginUser', uniqueUsername('short'));
     await page.fill('#syncLoginPass', '123'); // 只有3位
 
-    // 关键: 必须在 click 之前注册 dialog handler（alert 同步阻塞 JS 执行）
-    // 使用 once 确保只触发一次
-    const dialogPromise = new Promise((resolve) => {
-      page.once('dialog', async (dialog) => {
-        const msg = dialog.message();
-        await dialog.accept();
-        resolve(msg);
-      });
-    });
     // force: 跳过 stability 检查（modal 动画）
     await page.click('#loginModal button:has-text("注册")', { force: true });
-    const message = await dialogPromise;
-    expect(message).toMatch(/6位/);
+    // 失败提示走 toast（showToast '密码至少需要6位'），不是原生 alert
+    expect(await lm.waitForLoginFailure()).toMatch(/6位/);
   });
 
   test('空用户名/密码应提示错误', async ({ page }) => {
     const lm = new LoginModal(page);
+    await lm.clearToasts();
     await lm.open();
 
-    // 关键: 必须在 click 之前注册 dialog handler（alert 同步阻塞 JS 执行）
-    const dialogPromise = new Promise((resolve) => {
-      page.once('dialog', async (dialog) => {
-        const msg = dialog.message();
-        await dialog.accept();
-        resolve(msg);
-      });
-    });
     await page.click('#loginModal button:has-text("登录")', { force: true });
-    const message = await dialogPromise;
-    expect(message).toMatch(/用户/);
+    // 失败提示走 toast（showToast '请输入用户名和密码'）
+    expect(await lm.waitForLoginFailure()).toMatch(/用户/);
   });
 
   test('应能退出登录', async ({ page }) => {
@@ -158,9 +136,8 @@ test.describe('02 - 用户认证', () => {
     await lm.register(user.username, user.password);
     await lm.waitForLoginSuccess(user.username, 15000);
 
-    // 退出
-    await page.click('button:has-text("退出")');
-    await page.waitForTimeout(800);
+    // 退出（handleLogout 有 showConfirm 二次确认，走页面对象统一处理）
+    await lm.logout();
 
     // 验证未登录状态
     const isLoggedIn = await lm.isLoggedIn();
@@ -177,12 +154,13 @@ test.describe('02 - 用户认证', () => {
     await lm.waitForLoginSuccess(user.username, 15000);
 
     // 修改密码
+    // ★ 成功提示走 alertDialog（ui.js 的单按钮弹窗 .ui-modal-overlay），不是原生 alert
     const newPwd = 'NewPwd2@';
-    const dialogPromise = page.waitForEvent('dialog', { timeout: 5000 });
     await lm.changePassword(user.password, newPwd, newPwd);
-    const dialog = await dialogPromise;
-    expect(dialog.message()).toMatch(/成功/);
-    await dialog.accept();
+    await page.waitForSelector('.ui-modal-overlay', { state: 'visible', timeout: 8000 });
+    expect(await page.textContent('.ui-modal-body')).toMatch(/成功/);
+    await page.click('.ui-modal-overlay .btn-primary');
+    await page.waitForSelector('.ui-modal-overlay', { state: 'detached', timeout: 5000 }).catch(() => {});
 
     await page.waitForTimeout(500);
 
@@ -199,22 +177,15 @@ test.describe('02 - 用户认证', () => {
     await lm.register(user.username, user.password);
     await lm.waitForLoginSuccess(user.username, 15000);
 
+    await lm.clearToasts();
     await lm.openChangePassword();
     await page.fill('#changePwdOld', user.password);
     await page.fill('#changePwdNew', 'NewPwd1!');
     await page.fill('#changePwdConfirm', 'Different2@');
 
-    // 关键: 必须在 click 之前注册 dialog handler（alert 同步阻塞 JS 执行）
-    const dialogPromise = new Promise((resolve) => {
-      page.once('dialog', async (dialog) => {
-        const msg = dialog.message();
-        await dialog.accept();
-        resolve(msg);
-      });
-    });
     // force: 跳过 stability 检查（modal 动画）
     await page.click('button:has-text("确认修改")', { force: true });
-    const message = await dialogPromise;
-    expect(message).toMatch(/不一致/);
+    // 失败提示走 toast（showToast '两次输入的新密码不一致'）
+    expect(await lm.waitForLoginFailure()).toMatch(/不一致/);
   });
 });

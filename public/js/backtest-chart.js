@@ -135,16 +135,17 @@ function BT_initChart() {
   BT_renderMaList('curMa', 'cur');
   BT_renderMaList('idxMa', 'idx');
 
-  // 监听光标移动 → 更新底部 actionbar
-  // 关键：同时监听 'mousemove'（直接派发 + 包含 dataIndex）和 'updateAxisPointer'（带 axesInfo）
-  //   之前只监听 updateAxisPointer，但 link 配置错误导致 axesInfo=[]，事件回调拿不到 idx
-  //   现在 mousemove 作为主驱动，updateAxisPointer 作为补充
-  // ★ 性能：两个事件都会派发，且鼠标移动频率远高于渲染帧率。
-  //   此前两个回调各自同步执行"面板 + 统计 + 指数图 + 指数面板"四件重活（含 8 条 MA 重建），
-  //   同一帧内可能重复跑多次。现统一收敛到一个 rAF 合并的处理器：
-  //   一帧内无论触发多少次事件，只渲染一次。
-  function BT_onCursorMove(params, axisValue) {
-    var idx = (axisValue !== undefined) ? axisValue : (params && params.dataIndex);
+  // 监听光标移动 → 更新右侧 K线 数据栏
+  // ★★ 实测（本页 tooltip.show=false 时）：
+  //   - chart 'mousemove'：0 次触发（拿不到 dataIndex）
+  //   - chart 'updateAxisPointer'：能触发，但 axesInfo 实测为空数组 []（拿不到 value）
+  //     → 两者都无法驱动右侧数据栏，表现为 hover 时右栏一直是 "--"
+  //   改为直接监听 **zrender 的 mousemove**，用 offsetX + convertFromPixel 自行换算索引。
+  //   这与自绘十字光标（backtest-crosshair.js）用同一个数据源，两者天然同步。
+  //
+  // ★ 性能：鼠标移动频率远高于渲染帧率，统一收敛到一个 rAF 合并处理器，
+  //   一帧内无论触发多少次，只渲染一次。
+  function BT_onCursorMove(idx) {
     if (idx == null || !BT_klineData) return;
     if (!(idx >= 0 && idx < BT_klineData.dates.length)) return;
     if (idx === BT_currentIdx) return;
@@ -153,11 +154,24 @@ function BT_initChart() {
     BT_currentClose = BT_klineData.ohlc[idx][1];
     BT_scheduleCursorRender();
   }
-  BT_chart.on('mousemove', function (params) { BT_onCursorMove(params); });
+
+  // 主驱动：zrender mousemove → offsetX 换算索引
+  var _zrMain = BT_chart.getZr();
+  if (_zrMain && _zrMain.on) {
+    _zrMain.on('mousemove', function (e) {
+      var offX = e && e.offsetX;
+      if (offX == null) return;
+      var raw = BT_chart.convertFromPixel({ xAxisIndex: 0 }, offX);
+      if (raw == null || isNaN(raw)) return;
+      BT_onCursorMove(Math.round(raw));
+    });
+  }
+
+  // 兼容兜底：若某些场景下 ECharts 事件恢复可用，仍走同一条路径
+  BT_chart.on('mousemove', function (params) { BT_onCursorMove(params && params.dataIndex); });
   BT_chart.on('updateAxisPointer', function (event) {
-    // 兼容：有些 ECharts 版本走 updateAxisPointer 事件（axesInfo 带 value）
-    var xAxisInfo = event.axesInfo && event.axesInfo[0];
-    if (xAxisInfo && xAxisInfo.value !== undefined) BT_onCursorMove(null, xAxisInfo.value);
+    var xAxisInfo = event && event.axesInfo && event.axesInfo[0];
+    if (xAxisInfo && xAxisInfo.value !== undefined) BT_onCursorMove(xAxisInfo.value);
   });
 
   // 监听用户拖动 dataZoom（slider / inside）→ 同步 BT_userZoomRange 和 BT_visibleBars

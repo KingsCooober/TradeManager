@@ -514,6 +514,42 @@ test.describe('12 - 回测练习页', () => {
       await page.waitForTimeout(500);
       expect((await layerInfo('btChartIndex')).drawn, '指数图 hover 也应显示').toBeGreaterThan(200);
     });
+
+    // 回归：十字光标显示后，右侧 K线 数据栏也必须同步刷新
+    //（同根因 —— 原光标链路同样拿不到索引，会导致右栏一直是 "--"）
+    test('hover 时右侧 K线 数据栏应同步更新', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      const read = () => page.evaluate(() => {
+        const t = (id) => { const e = document.getElementById(id); return e ? e.textContent.trim() : null; };
+        return {
+          idx: window.BT_currentIdx,
+          date: t('curDate'), open: t('curOpen'), close: t('curClose'),
+          high: t('curHigh'), low: t('curLow'), vol: t('curVol'), ma5: t('curMaP_0'),
+          idxDate: t('idxDate'), idxMa5: t('idxMaP_0')
+        };
+      });
+
+      const box = await page.locator('#btChart').boundingBox();
+
+      await page.mouse.move(box.x + box.width * 0.30, box.y + box.height * 0.30);
+      await page.waitForTimeout(600);
+      const A = await read();
+
+      await page.mouse.move(box.x + box.width * 0.70, box.y + box.height * 0.30);
+      await page.waitForTimeout(600);
+      const B = await read();
+
+      expect(A.date, '右栏日期应已填充（非 --）').toBeTruthy();
+      expect(A.date).not.toBe('--');
+      expect([A.open, A.close, A.high, A.low].every((v) => v && v !== '--'),
+        '开/收/高/低应全部填充').toBe(true);
+      expect(A.vol && A.vol !== '--', '成交量应填充').toBe(true);
+      expect(A.ma5 && A.ma5 !== '--', 'MA 数值应填充').toBe(true);
+      expect(B.date, '移动鼠标后右栏应切换到另一根 K线').not.toBe(A.date);
+      expect(B.idxDate, '指数图右栏也应同步').toBe(B.date);
+    });
   });
 
   // ============================================================

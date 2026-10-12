@@ -46,10 +46,25 @@ class CalculatorPanel extends BasePage {
   }
 
   /**
-   * 等待计算器就绪
+   * 等待计算器就绪（并确保已展开）
+   * ★ 计算器面板默认折叠（#calcToggleBtn 切换），折叠时 .calc-actions 内的
+   *   「清空」「添加到交易记录」按钮不可见，点击会一直等到超时 → 先展开再操作。
+   * ★ 判定用 aria-expanded 而不是按钮文案：按钮内同时存在
+   *   <span>展开 ▼</span> 和 <span>收起 ▲</span>（CSS 隐藏其一），
+   *   textContent 永远同时含"展开"和"收起"，按文案判断会反复误切换。
    */
   async waitForReady() {
     await this.page.waitForSelector(this.selectors.card, { state: 'visible' });
+    const toggle = this.page.locator('#calcToggleBtn');
+    if (await toggle.count() > 0 && await toggle.first().isVisible()) {
+      const expanded = await toggle.first().getAttribute('aria-expanded');
+      if (expanded !== 'true') {
+        await toggle.first().click();
+        await this.waitForAutoSave(300);
+      }
+    }
+    // 确认动作按钮可见
+    await this.page.waitForSelector(this.selectors.addBtn, { state: 'visible', timeout: 8000 });
   }
 
   /**
@@ -153,6 +168,8 @@ class CalculatorPanel extends BasePage {
    * 一键填写计算器
    */
   async fillForm({ symbol, dir, buyType, entry, stop, targetR, actualLots, openDate }) {
+    // 折叠状态下字段不可见，先展开
+    await this.waitForReady();
     if (symbol !== undefined) await this.setSymbol(symbol);
     if (dir !== undefined) await this.setDirection(dir);
     if (buyType !== undefined) await this.setBuyType(buyType);
@@ -167,22 +184,60 @@ class CalculatorPanel extends BasePage {
    * 添加到交易记录
    */
   async addToTrade() {
-    // 监听 alert（"请填写..." 错误信息）
-    const dialogPromise = this.page.waitForEvent('dialog', { timeout: 3000 }).catch(() => null);
+    // ★ 校验失败提示已从原生 alert 改为 showToast（见 calculator.js 的 showToast 分支），
+    //   因此不能再等 dialog，改为等待 .ui-toast-body 出现。
+    await this.clearToasts();
+    await this.waitForReady();
     await this.page.click(this.selectors.addBtn);
-    const dialog = await dialogPromise;
-    if (dialog) {
-      const msg = dialog.message();
-      await dialog.accept();
-      return { success: false, message: msg };
+
+    // 出错时 calculator.js 会 markInputError + showToast 并 return，不会开确认弹窗
+    const errToast = await this.waitForToast(2500);
+    if (errToast) {
+      return { success: false, message: errToast };
     }
+
+    // 正常路径会弹出「🛡️ 开仓前确认」确认框（#tradeConfirmModal），
+    // 需勾选「我已确认…」(#tradeConfirmAgree) 后点「确认添加」才会真正写入 trades。
+    const modal = this.page.locator('#tradeConfirmModal');
+    await this.page.waitForSelector('#tradeConfirmModal', { state: 'visible', timeout: 6000 });
+    await this.page.check('#tradeConfirmAgree', { force: true });
+    await this.page.click('#tradeConfirmModal button:has-text("确认添加")', { force: true });
+    await this.page.waitForSelector('#tradeConfirmModal', { state: 'hidden', timeout: 6000 }).catch(() => {});
+
+    await this.waitForAutoSave(400);
     return { success: true };
+  }
+
+  /**
+   * 清空既有 toast，避免读到上一次的提示
+   */
+  async clearToasts() {
+    await this.page.evaluate(() => {
+      document.querySelectorAll('.ui-toast').forEach((t) => t.remove());
+    }).catch(() => {});
+  }
+
+  /**
+   * 等待 toast 提示并返回文案
+   * ★ 只取 .ui-toast-body：整个 toast 的 textContent 会带上门关闭按钮的 "✕"
+   */
+  async waitForToast(timeout = 3000) {
+    await this.page.waitForFunction(() => {
+      const nodes = Array.from(document.querySelectorAll('.ui-toast-body'));
+      return nodes.some((n) => (n.textContent || '').trim().length > 0);
+    }, null, { timeout }).catch(() => {});
+    return this.page.evaluate(() => {
+      const nodes = Array.from(document.querySelectorAll('.ui-toast-body'));
+      const texts = nodes.map((n) => (n.textContent || '').trim()).filter(Boolean);
+      return texts.length ? texts[texts.length - 1] : '';
+    });
   }
 
   /**
    * 清空计算器
    */
   async clear() {
+    await this.waitForReady();
     await this.page.click(this.selectors.clearBtn);
     await this.waitForAutoSave(200);
   }

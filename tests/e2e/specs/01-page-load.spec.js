@@ -19,7 +19,7 @@ test.describe('01 - 页面加载', () => {
     await expect(page).toHaveTitle(/Trade Manager/);
     await expect(page.locator('.app-logo')).toBeVisible();
     await expect(page.locator('.app-title h1')).toContainText('Trade Manager');
-    await expect(page.locator('.app-subtitle')).toContainText('交易管理系统');
+    // ★ .app-subtitle 已随 header 统一（由 header.js 注入 .app-title）而移除，不再断言
 
     // 验证各模块
     await tp.verifyAllSections();
@@ -42,8 +42,8 @@ test.describe('01 - 页面加载', () => {
     const dp = new DiaryPage(page);
     await dp.load();
 
-    // 验证标题
-    await expect(page.locator('.app-title h1')).toContainText('复盘总结');
+    // 验证标题（★ 复盘页标题已移到工具栏 h2；header 的 .app-title h1 是共享的 "Trade Manager"）
+    await expect(page.locator(dp.selectors.title)).toContainText('复盘总结');
 
     // 验证表格和工具栏
     await expect(page.locator(dp.selectors.toolbar)).toBeVisible();

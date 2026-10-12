@@ -190,24 +190,16 @@ test.describe('03 - 开仓仓位计算器', () => {
     expect(symbol).toBe('BTC');
   });
 
-  test('缺少必要字段时添加应失败（alert）', async ({ page }) => {
+  test('缺少必要字段时添加应失败（toast 提示）', async ({ page }) => {
     const calc = new CalculatorPanel(page);
     // 不填写入场价和止损价
-    // 设置对话框处理器（auto accept）
-    let dialogMessage = '';
-    const dialogHandler = async (dialog) => {
-      dialogMessage = dialog.message();
-      await dialog.accept();
-    };
-    page.on('dialog', dialogHandler);
-    try {
-      await page.click('button:has-text("添加到交易记录")');
-      // 等待 alert 触发
-      await page.waitForTimeout(500);
-    } finally {
-      page.off('dialog', dialogHandler);
-    }
-    expect(dialogMessage).toMatch(/入场|止损/);
+    await calc.clearToasts();
+    await calc.waitForReady();
+    await page.click('button:has-text("添加到交易记录")');
+    // ★ 校验提示已从原生 alert 改为 showToast（calculator.js），
+    //   这里直接等 .ui-toast-body 的文案
+    const msg = await calc.waitForToast(4000);
+    expect(msg).toMatch(/入场|止损/);
   });
 
   test('应能切换买点类型并保持计算', async ({ page }) => {
