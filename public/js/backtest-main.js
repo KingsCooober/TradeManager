@@ -787,9 +787,12 @@ function BT_nextBar() {
   BT_ensureZoomRangeHealthy();
   var next;
   if (BT_userZoomRange && BT_userZoomRange.end > BT_userZoomRange.start) {
-    // 用户曾拖动 slider：以窗口右边界对应的 idx + 1 为基准
+    // 曾拖动 slider / 已有窗口：以窗口右边界为基准右移一格。
+    // ★ 修正：窗口贴近最左时会左对齐，此时光标可能已在窗口内部（idx < 右边界），
+    //   若仍按右边界 +1 会让光标「向前跳一大步」。改为止取两者较大值 +1。
     var endIdx = Math.round(BT_userZoomRange.end / 100 * max);
-    next = Math.min(max, endIdx + 1);
+    var base = (BT_currentIdx != null && BT_currentIdx > endIdx) ? BT_currentIdx : endIdx;
+    next = Math.min(max, base + 1);
   } else {
     next = Math.min(max, (BT_currentIdx == null ? max : BT_currentIdx + 1));
   }
@@ -805,9 +808,12 @@ function BT_prevBar() {
   BT_ensureZoomRangeHealthy();
   var prev;
   if (BT_userZoomRange && BT_userZoomRange.end > BT_userZoomRange.start) {
-    // 用户曾拖动 slider：以窗口右边界对应的 idx - 1 为基准（与 nextBar 镜像）
+    // 以窗口右边界为基准左移一格（与 nextBar 镜像）。
+    // ★ 修正：光标在窗口内（idx < 右边界，如已滚到最早一根）时应以光标为基准，
+    //   否则点「上一根」会向前跳（实测 idx=0 时会跳到 119）。
     var endIdx = Math.round(BT_userZoomRange.end / 100 * max);
-    prev = Math.max(0, endIdx - 1);
+    var base = (BT_currentIdx != null && BT_currentIdx < endIdx) ? BT_currentIdx : endIdx;
+    prev = Math.max(0, base - 1);
   } else {
     prev = Math.max(0, (BT_currentIdx == null ? 0 : BT_currentIdx - 1));
   }

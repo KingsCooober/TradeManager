@@ -27,7 +27,10 @@ var BT_currentIdx = null;       // 光标所在的 K 线索引（也存 localSto
 // 由 BT_ALLOWED_VISIBLE_BARS 白名单校验（见下方），不再支持连续缩放。
 var BT_DEFAULT_VISIBLE_BARS = 90;   // 默认可见根数（唯一来源）
 var BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;   // 固定显示的 K 线根数
-var BT_zoomLocked = true;       // 比例锁定恒为 true：缩放已取消，窗口不随光标漂移
+// 注：原 BT_zoomLocked（比例锁定）已彻底移除。
+//   它曾被用来让"取消缩放"后窗口不随光标漂移，结果连带把「上一根/下一根」
+//   的窗口滚动也一并禁掉了（按钮看着像失效）。
+//   现在窗口始终跟随光标，缩放档位仅由「显示」下拉（90/120）决定。
 var BT_userZoomRange = null;    // 用户拖动 slider 自定义的窗口 {start: %, end: %}；null 表示用默认 pinRight
 var _inDataZoomApply = false;   // 死循环保护：我们自己 setOption 时阻断 dataZoom 回调
 
@@ -60,9 +63,6 @@ var BT_VISIBLE_BARS_MIN = 90;
 var BT_VISIBLE_BARS_MAX = 120;
 // BT_ZOOM_STEP 已废弃（缩放按钮移除），保留变量避免旧代码引用报错
 var BT_ZOOM_STEP = 1.25;
-
-// 恢复锁定状态（缩放已取消，锁定恒为 true，保证窗口不随光标漂移）
-BT_zoomLocked = true;
 
 // 从输入框读取 BT_visibleBars（仅允许档位内的值）
 function BT_getVisibleBars() {
@@ -1284,8 +1284,13 @@ function BT_updateIndexInfo() {
 // mode: 'auto' = 居中（默认，鼠标 hover 时光标在窗口中间）
 //       'pinRight' = 钉到窗口最右（"下一根K线"专用）
 //       'pinLeft'  = 钉到窗口最左
-// 锁定时（BT_zoomLocked=true）一律不调整 dataZoom
 // 用户曾拖动 slider（BT_userZoomRange != null）时，保留窗口宽度、让 idx 落在最右
+//
+// ★★ 重要教训：这里原先判断 `if (!BT_zoomLocked)`，而取消缩放时
+//    我把 BT_zoomLocked 设成了恒 true，导致「上一根/下一根」只移动光标、
+//    窗口不再滚动 —— 用户看到的症状就是"按钮失效"。
+//    「取消缩放」指的是用户不能借按钮改窗口宽度，与"窗口是否跟随光标滚动"无关，
+//    因此这里不再受 BT_zoomLocked 影响，窗口始终跟随光标。
 function BT_setCursor(idx, mode) {
   if (!BT_chart || !BT_klineData) return;
   var total = BT_klineData.dates.length;
@@ -1303,23 +1308,21 @@ function BT_setCursor(idx, mode) {
   BT_currentDate = BT_klineData.dates[idx];
   BT_currentClose = BT_klineData.ohlc[idx][1];
 
-  // 调整 dataZoom（锁定时不调，保持用户当前视野）
-  if (!BT_zoomLocked) {
-    var zr;
-    if (BT_userZoomRange && BT_userZoomRange.end > BT_userZoomRange.start) {
-      // 用户曾拖动 slider → 保留窗口宽度，让 idx 落在最右（与"下一根/上一根"按钮语义一致）
-      zr = BT_calcZoomRangeForIdx(idx, BT_visibleBars, BT_userZoomRange);
-    } else {
-      // 默认行为：按 mode 计算（pinRight/auto/pinLeft）
-      zr = BT_calcZoomRange(idx, mode || 'auto');
-    }
-    _inDataZoomApply = true;
-    try {
-      BT_chart.setOption({ dataZoom: [{ start: zr.start, end: zr.end }, { start: zr.start, end: zr.end }] });
-      BT_userZoomRange = { start: zr.start, end: zr.end };
-    } finally {
-      setTimeout(function() { _inDataZoomApply = false; }, 0);
-    }
+  // 调整 dataZoom：让窗口跟随光标（pinRight 时光标贴窗口最右）
+  var zr;
+  if (BT_userZoomRange && BT_userZoomRange.end > BT_userZoomRange.start) {
+    // 曾拖动 slider → 保留当前窗口宽度，只平移让 idx 落在最右
+    zr = BT_calcZoomRangeForIdx(idx, BT_visibleBars, BT_userZoomRange);
+  } else {
+    // 默认行为：按 mode 计算（pinRight/auto/pinLeft）
+    zr = BT_calcZoomRange(idx, mode || 'auto');
+  }
+  _inDataZoomApply = true;
+  try {
+    BT_chart.setOption({ dataZoom: [{ start: zr.start, end: zr.end }, { start: zr.start, end: zr.end }] });
+    BT_userZoomRange = { start: zr.start, end: zr.end };
+  } finally {
+    setTimeout(function() { _inDataZoomApply = false; }, 0);
   }
   BT_chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: idx });
   // 同步指数图（先同步 zoom 窗口 → 再同步光标位置）
