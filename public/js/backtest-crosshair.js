@@ -181,10 +181,30 @@
       var onZrMove = function (e) {
         var offX = e && e.offsetX;
         if (offX == null) return;
+        var offY = e && e.offsetY;
+        var o = inst.getOpts() || {};
         var idx = chart.convertFromPixel({ xAxisIndex: 0 }, offX);
         // convertFromPixel 可能返回小数，取整并做边界校验
         if (idx == null || isNaN(idx)) { hide(inst); return; }
         idx = Math.round(idx);
+        // ★ 边界钳制：鼠标落在绘图区**之外**（左侧 y 轴刻度、右侧留白、
+        //   底部缩放滑块等）时，convertFromPixel 仍会换算出一个索引，
+        //   导致"没有 K 线的地方也出现光标，显示范围与实际可见 K 线不一致"。
+        //   此处按绘图区实际覆盖的索引区间钳制，越界直接隐藏光标。
+        if (o.plotLeft != null && o.plotRight != null) {
+          if (offX < o.plotLeft || offX > o.plotRight) { hide(inst); return; }
+        }
+        if (o.minIdx != null && o.maxIdx != null &&
+            !isNaN(o.minIdx) && !isNaN(o.maxIdx)) {
+          var lo = Math.min(o.minIdx, o.maxIdx);
+          var hi = Math.max(o.minIdx, o.maxIdx);
+          if (idx < lo || idx > hi) { hide(inst); return; }
+        }
+        // ★ 纵向同理：底部 dataZoom 滑块不在 K 线区域内，
+        //   指针在那里时应让位给拖动手势，不再叠加十字光标。
+        if (offY != null && o.plotBottom != null && offY > o.plotBottom) {
+          hide(inst); return;
+        }
         onHover(idx);
       };
       zr.on('mousemove', onZrMove);

@@ -583,6 +583,52 @@ test.describe('12 - 回测练习页', () => {
       expect(pos.vol, '清仓后持仓应为 0').toBe(0);
       expect(pos.idx, '连点 4 次应精确前进 4 根（104）').toBe(104);
     });
+
+    // 回归：光标只应出现在实际有 K 线的绘图区内
+    //（此前 convertFromPixel 会把绘图区外的坐标也换算成索引，
+    //  导致 y 轴左侧 / 右侧留白 / 底部滑块上都会"吸附"到某根 K 线并画光标）
+    test('光标不应出现在绘图区之外（y轴/留白/滑块）', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      const drawn = () => page.evaluate(() => {
+        const l = document.querySelector('#btChart .bt-crosshair-layer');
+        if (!l) return -1;
+        const c = l.getContext('2d');
+        const d = c.getImageData(0, 0, l.width, l.height).data;
+        let n = 0;
+        for (let p = 3; p < d.length; p += 4) if (d[p] > 0) n++;
+        return n;
+      });
+      const geom = await page.evaluate(() => {
+        const o = BT_chart.getOption();
+        const W = BT_chart.getWidth(), H = BT_chart.getHeight();
+        const g = o.grid[0];
+        return { left: g.left, right: W - g.right, W, H };
+      });
+      const box = await page.locator('#btChart').boundingBox();
+      const midY = Math.round(geom.H * 0.3);
+
+      // 绘图区内 → 应显示
+      await page.mouse.move(box.x + 500, box.y + midY);
+      await page.waitForTimeout(450);
+      expect(await drawn(), '绘图区内应显示光标').toBeGreaterThan(200);
+
+      // y 轴左侧（刻度区）→ 不应显示
+      await page.mouse.move(box.x + Math.max(2, geom.left - 30), box.y + midY);
+      await page.waitForTimeout(450);
+      expect(await drawn(), 'y 轴左侧不应显示光标').toBe(0);
+
+      // 绘图区右侧留白 → 不应显示
+      await page.mouse.move(box.x + Math.min(geom.W - 2, geom.right + 20), box.y + midY);
+      await page.waitForTimeout(450);
+      expect(await drawn(), '右侧留白不应显示光标').toBe(0);
+
+      // 底部缩放滑块 → 不应显示
+      await page.mouse.move(box.x + Math.round(geom.W / 2), box.y + geom.H - 10);
+      await page.waitForTimeout(450);
+      expect(await drawn(), '缩放滑块上不应显示光标').toBe(0);
+    });
   });
 
   // ============================================================

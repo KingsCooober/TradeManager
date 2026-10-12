@@ -280,6 +280,10 @@ function BT_attachCrosshair(domId, chart, isMain) {
       plotBottom: plotBottom,
       plotLeft: left,
       plotRight: right,
+      // 绘图区左边界对应的数据索引：鼠标在左侧留白时索引会"越界"到更早的
+      // 不可见 K 线，导致"没有 K 线的地方也出现光标"。以它作为下界钳制。
+      minIdx: chart.convertFromPixel({ xAxisIndex: 0 }, left),
+      maxIdx: chart.convertFromPixel({ xAxisIndex: 0 }, right),
       data: (isMain ? window.BT_klineData : window.BT_indexData)
     };
   });
