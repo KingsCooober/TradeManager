@@ -777,83 +777,34 @@ function BT_clearTrades() {
   });
 }
 
-// 下一根K线（光标右移）—— 以"当前窗口最右一根的下一根"为目标
-// 这样用户在窗口内反复点"下一根"，窗口会跟随滚动而不是被压扁
+// 下一根K线（光标右移一格）
+// ★ 语义就是"光标 +1"，窗口由 BT_setCursor 负责跟随滚动。
+//   历史实现曾以"窗口右边界 +1"为基准（意图是让窗口整屏滚动），
+//   但这在窗口已左对齐时会产生跳格：光标在 0、窗口右边界在 ~90 时，
+//   点「下一根」会直接跳到 91。改为逐格移动后，两端边界行为一致。
 function BT_nextBar() {
   if (!BT_klineData || !BT_klineData.dates.length) { BT_toast('请先加载 K 线', 'warn'); return; }
   var max = BT_klineData.dates.length - 1;
-  // 自检 + 纠正：ECharts slider moveHandle 拖到边界时会把窗口压扁（宽度 → 0）
-  // 在计算 next 前先纠正，保证后续 BT_calcZoomRangeForIdx 用正确的宽度
-  BT_ensureZoomRangeHealthy();
-  var next;
-  if (BT_userZoomRange && BT_userZoomRange.end > BT_userZoomRange.start) {
-    // 曾拖动 slider / 已有窗口：以窗口右边界为基准右移一格。
-    // ★ 修正：窗口贴近最左时会左对齐，此时光标可能已在窗口内部（idx < 右边界），
-    //   若仍按右边界 +1 会让光标「向前跳一大步」。改为止取两者较大值 +1。
-    var endIdx = Math.round(BT_userZoomRange.end / 100 * max);
-    var base = (BT_currentIdx != null && BT_currentIdx > endIdx) ? BT_currentIdx : endIdx;
-    next = Math.min(max, base + 1);
-  } else {
-    next = Math.min(max, (BT_currentIdx == null ? max : BT_currentIdx + 1));
-  }
+  var cur = (BT_currentIdx == null) ? max : BT_currentIdx;
+  var next = Math.min(max, cur + 1);
   BT_setCursor(next, 'pinRight');
   BT_saveState();
 }
 
-// 上一根K线（光标左移）—— 始终以"窗口右边界 idx - 1"为基准（与 nextBar 镜像）
-// 不再以窗口最左 idx - 1 为基准（那样会导致窗口一下"跳"一整个宽度）
+// 上一根K线（光标左移一格）—— 与 nextBar 完全镜像
 function BT_prevBar() {
   if (!BT_klineData || !BT_klineData.dates.length) { BT_toast('请先加载 K 线', 'warn'); return; }
-  var max = BT_klineData.dates.length - 1;
-  BT_ensureZoomRangeHealthy();
-  var prev;
-  if (BT_userZoomRange && BT_userZoomRange.end > BT_userZoomRange.start) {
-    // 以窗口右边界为基准左移一格（与 nextBar 镜像）。
-    // ★ 修正：光标在窗口内（idx < 右边界，如已滚到最早一根）时应以光标为基准，
-    //   否则点「上一根」会向前跳（实测 idx=0 时会跳到 119）。
-    var endIdx = Math.round(BT_userZoomRange.end / 100 * max);
-    var base = (BT_currentIdx != null && BT_currentIdx < endIdx) ? BT_currentIdx : endIdx;
-    prev = Math.max(0, base - 1);
-  } else {
-    prev = Math.max(0, (BT_currentIdx == null ? 0 : BT_currentIdx - 1));
-  }
-  BT_setCursor(prev);
+  var cur = (BT_currentIdx == null) ? 0 : BT_currentIdx;
+  var prev = Math.max(0, cur - 1);
+  BT_setCursor(prev, 'pinRight');
   BT_saveState();
 }
 
-// 自检窗口健康度：直接读 ECharts 实际 dataZoom 状态（因为 slider 拖动不触发 dataZoom 事件，
-//   BT_userZoomRange 内存变量可能与 ECharts 实际不同步），如果被压扁则恢复标准宽度
-// 关键：必须用 ECharts.getOption().dataZoom 作为唯一真相源，而不是 BT_userZoomRange
-function BT_ensureZoomRangeHealthy() {
-  if (!BT_chart || !BT_klineData) return;
-  var opt = BT_chart.getOption();
-  if (!opt || !opt.dataZoom || !opt.dataZoom[0]) return;
-  var z = opt.dataZoom[0];
-  var actualWidth = (z.end || 0) - (z.start || 0);
-  var MIN_WIDTH = 1.5;
-  if (actualWidth >= MIN_WIDTH) {
-    // 健康：把 ECharts 实际状态同步回 BT_userZoomRange（修复潜在的不一致）
-    BT_userZoomRange = { start: z.start, end: z.end };
-    return;
-  }
-  // 被压扁了 → 强制按 BT_visibleBars 重置窗口
-  var total = BT_klineData.dates.length;
-  if (total <= 1) return;
-  var correctVisPct = BT_visibleBars / (total - 1) * 100;
-  // 让窗口左端保持在当前拖到的位置（不直接钉最右，避免覆盖用户的浏览意图）
-  var newStart = Math.max(0, Math.min(z.start, 100 - correctVisPct));
-  var newEnd = Math.min(100, newStart + correctVisPct);
-  BT_userZoomRange = { start: newStart, end: newEnd };
-  _inDataZoomApply = true;
-  try {
-    BT_chart.setOption({ dataZoom: [
-      { start: newStart, end: newEnd },
-      { start: newStart, end: newEnd }
-    ]});
-  } finally {
-    setTimeout(function() { _inDataZoomApply = false; }, 0);
-  }
-}
+// BT_ensureZoomRangeHealthy 已移除（死代码）：
+//   它原用于探测"滑块被拖到边界把窗口压扁"的异常，并在 nextBar/prevBar 前纠正。
+//   现在窗口宽度只由「显示」下拉（90/120）决定、且 BT_setCursor 每次都会按
+//   BT_visibleBars 重算窗口，压扁状态无法持续存在，该自检已无必要。
+//   附注：它曾无条件回写 BT_userZoomRange，是 nextBar/prevBar 边界跳格的诱因之一。
 
 // 完成回测：保存本次回测摘要到 localStorage
 async function BT_finishBacktest() {
