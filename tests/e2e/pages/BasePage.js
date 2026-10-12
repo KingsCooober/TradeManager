@@ -94,6 +94,24 @@ class BasePage {
   }
 
   /**
+   * 设置原生 select 的值（兼容被 custom-select 升级过的下拉）
+   *
+   * 背景：项目里部分 <select> 被 custom-select.js 升级成自定义控件，
+   * 原生 select 被 display:none 隐藏，此时 Playwright 的 selectOption 会
+   * 因"元素不可见"超时。这里直接写 value 并派发 change 事件，
+   * 与 custom-select 内部同步机制一致（它本身也是靠 selectedIndex + change 工作）。
+   */
+  async setSelectValue(selector, value) {
+    await this.page.evaluate(({ sel, val }) => {
+      const el = document.querySelector(sel);
+      if (!el) throw new Error('select 不存在: ' + sel);
+      el.value = String(val);
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, { sel: selector, val: value });
+    await this.page.waitForTimeout(200);
+  }
+
+  /**
    * 点击导航到复盘页面
    */
   async goToDiary() {

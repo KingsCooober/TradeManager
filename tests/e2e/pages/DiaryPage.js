@@ -12,7 +12,9 @@ class DiaryPage extends BasePage {
   get selectors() {
     return {
       header: '.app-header',
-      title: '.app-title h1',
+      // ★ 标题位置已变更：header 改为 header.js 共享注入（h1 是 "Trade Manager"），
+      //   复盘页自身标题是工具栏里的 h2「📝 复盘总结」。
+      title: '.diary-toolbar h2, .diary-toolbar h1',
       backBtn: 'button:has-text("返回")',
       diaryLink: 'a:has-text("复盘总结")',
 
@@ -108,7 +110,9 @@ class DiaryPage extends BasePage {
     if (pnlPercent !== undefined) await this.page.fill(this.selectors.diaryPnlPercent, String(pnlPercent));
     if (tradeLogic !== undefined) await this.page.fill(this.selectors.diaryTradeLogic, tradeLogic);
     if (mood !== undefined) await this.page.fill(this.selectors.diaryMood, mood);
-    if (followSystem !== undefined) await this.page.selectOption(this.selectors.diaryFollowSystem, followSystem);
+    // ★ followSystem 等下拉被 custom-select 升级，原生 select 隐藏，
+    //   用 selectOption 会因不可见而超时 → 走 setSelectValue（写 value + 派发 change）
+    if (followSystem !== undefined) await this.setSelectValue(this.selectors.diaryFollowSystem, followSystem);
     if (lesson !== undefined) await this.page.fill(this.selectors.diaryLesson, lesson);
     if (improvement !== undefined) await this.page.fill(this.selectors.diaryImprovement, improvement);
   }
@@ -185,7 +189,7 @@ class DiaryPage extends BasePage {
    * 应用快速筛选
    */
   async applyQuickFilter(value) {
-    await this.page.selectOption(this.selectors.quickFilter, value);
+    await this.setSelectValue(this.selectors.quickFilter, value);
     await this.waitForAutoSave(500);
   }
 
@@ -208,10 +212,12 @@ class DiaryPage extends BasePage {
 
   /**
    * 返回主页面
+   * ★ 页面自身的「← 返回」按钮已移除，导航改为 header.js 注入的共享导航栏，
+   *   因此点顶部导航里的「📊 交易管理」链接返回。
    */
   async goBackToMain() {
-    await this.page.click(this.selectors.backBtn);
-    await this.page.waitForURL(/index\.html$/);
+    await this.page.click('.app-header a[href*="index.html"], .app-header a:has-text("交易管理")');
+    await this.page.waitForURL(/index\.html/);
   }
 }
 

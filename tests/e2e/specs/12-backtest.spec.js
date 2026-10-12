@@ -456,7 +456,68 @@ test.describe('12 - 回测练习页', () => {
   });
 
   // ============================================================
-  // 8. 标的搜索（名称 / 纯数字 / 下拉选择）
+  // 8. 十字光标（回归：hover 时不显示）
+  // ============================================================
+  test.describe('十字光标', () => {
+    test('两图 hover 时应显示十字光标，且随鼠标移动', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      // 扫描覆盖层像素找竖线 x / 横线 y（虚线有间隙，按"命中最多"统计）
+      const layerInfo = (domId) => page.evaluate((id) => {
+        const l = document.querySelector('#' + id + ' .bt-crosshair-layer');
+        if (!l) return { exists: false };
+        const c = l.getContext('2d');
+        const w = l.width, h = l.height;
+        const d = c.getImageData(0, 0, w, h).data;
+        const colHits = new Array(w).fill(0);
+        const rowHits = new Array(h).fill(0);
+        let drawn = 0;
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            if (d[(y * w + x) * 4 + 3] > 20) { colHits[x]++; rowHits[y]++; drawn++; }
+          }
+        }
+        let vx = -1, maxC = 0;
+        for (let x = 0; x < w; x++) if (colHits[x] > maxC) { maxC = colHits[x]; vx = x; }
+        let hy = -1, maxR = 0;
+        for (let y = 0; y < h; y++) if (rowHits[y] > maxR) { maxR = rowHits[y]; hy = y; }
+        return { exists: true, drawn, vx: maxC >= 5 ? vx : -1, hy: maxR >= 5 ? hy : -1 };
+      }, domId);
+
+      const box = await page.locator('#btChart').boundingBox();
+
+      // 位置 A（左侧）
+      await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.30);
+      await page.waitForTimeout(500);
+      const A = await layerInfo('btChart');
+
+      // 位置 B（明显更右）
+      await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.30);
+      await page.waitForTimeout(500);
+      const B = await layerInfo('btChart');
+
+      expect(A.exists, '应存在自绘十字光标覆盖层').toBe(true);
+      expect(A.drawn, 'hover 时应绘制十字光标').toBeGreaterThan(200);
+      expect(A.vx, '应能定位到竖线').toBeGreaterThan(0);
+      expect(A.hy, '应能定位到横线').toBeGreaterThan(0);
+      expect(B.vx, '竖线应随鼠标右移').toBeGreaterThan(A.vx + 100);
+
+      // 移出图表 → 隐藏
+      await page.mouse.move(box.x - 200, box.y - 200);
+      await page.waitForTimeout(500);
+      expect((await layerInfo('btChart')).drawn, '移出后应隐藏').toBe(0);
+
+      // 指数图同样生效
+      const idxBox = await page.locator('#btChartIndex').boundingBox();
+      await page.mouse.move(idxBox.x + idxBox.width * 0.4, idxBox.y + idxBox.height * 0.3);
+      await page.waitForTimeout(500);
+      expect((await layerInfo('btChartIndex')).drawn, '指数图 hover 也应显示').toBeGreaterThan(200);
+    });
+  });
+
+  // ============================================================
+  // 9. 标的搜索（名称 / 纯数字 / 下拉选择）
   // ============================================================
   test.describe('标的搜索', () => {
     test('输入中文名称应弹出候选，可点选填入带前缀代码', async ({ page }) => {

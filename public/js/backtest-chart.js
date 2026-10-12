@@ -231,6 +231,44 @@ function BT_initChart() {
 
   // 自定义 DOM tooltip（不挡 K线，显示在 chart 右上角空白区）
   BT_setupCustomTooltip();
+
+  // 十字光标（自绘 canvas 覆盖层；ECharts 内置 axisPointer 在 tooltip.show=false 下不生效）
+  BT_attachCrosshair('btChart', BT_chart, true);
+}
+
+/**
+ * 绑定十字光标并提供绘图区几何信息
+ * @param {string} domId 容器 id
+ * @param {object} chart ECharts 实例
+ * @param {boolean} isMain 主图（成交量在最底部）；指数图无成交量，绘图区只到 K线底部
+ */
+function BT_attachCrosshair(domId, chart, isMain) {
+  if (typeof BT_crosshair === 'undefined') return;
+  BT_crosshair.attach(domId, chart, function () {
+    var opt = chart.getOption();
+    var grids = opt.grid || [];
+    var g0 = grids[0] || { top: 18, left: 60, right: 30 };
+    var gVol = grids[1];
+    // 竖线底端：主图到成交量底；指数图只有 K线（grid[1] 在指数图是量，若存在则到底，否则到 K线底）
+    var plotBottom;
+    if (isMain && gVol && gVol.height > 0) {
+      plotBottom = gVol.top + gVol.height;
+    } else if (!isMain && gVol && gVol.height > 0) {
+      plotBottom = gVol.top + gVol.height;
+    } else {
+      plotBottom = g0.top + (g0.height || 0);
+    }
+    var width = chart.getWidth();
+    var left = typeof g0.left === 'number' ? g0.left : (g0.left || 60);
+    var right = typeof g0.right === 'number' ? (width - g0.right) : width - 30;
+    return {
+      plotTop: g0.top,
+      plotBottom: plotBottom,
+      plotLeft: left,
+      plotRight: right,
+      data: (isMain ? window.BT_klineData : window.BT_indexData)
+    };
+  });
 }
 
 // Slider cursor 切换：图表底部 ~34px（bottom=16 + height=18）是 slider 区域
@@ -322,15 +360,11 @@ function BT_getBaseOption() {
     tooltip: {
       show: false,   // 禁用 ECharts 内置 tooltip，改用自定义 DOM tooltip（不挡 K线）
       trigger: 'axis'
-      // 注意：tooltip.show=false 时，下面的 axisPointer 配置也会失效
-      // 十字光标必须放在顶层 axisPointer（见下），并显式指定 type='cross'
     },
-    // 顶层 axisPointer（独立于 tooltip）—— 控制十字光标显示
-    //   type='cross' → 十字（横线+竖线）
-    //   link → 4 个 grid 同步（K线/量/MACD/资金）
-    //   lineStyle → 浅灰半透明（不抢眼但能看清位置）
-    //   label.backgroundColor → 关掉默认灰色背景（之前总有个灰块跟着鼠标走）
-    //   show='auto' → 鼠标 hover 时显示（默认行为）
+    // 顶层 axisPointer：仅作为 hover 时的轴向提示兜底。
+    // ★ 注意：本页 tooltip.show=false，ECharts 5 的 axisPointer 展示链路会因此被跳过
+    //   （实测 hover 时 canvas 像素完全不变）。真正的十字光标由 BT_setupCrosshairOverlay()
+    //   用独立 canvas 自绘，不依赖 ECharts 内部行为。
     axisPointer: {
       type: 'cross',
       link: { xAxisIndex: 'all' },
@@ -1149,6 +1183,8 @@ function BT_toggleShowIndex() {
 // 窗口尺寸变化时重排
 window.addEventListener('resize', function() {
   if (BT_chart) BT_chart.resize();
+  // 图表容器尺寸变了，十字光标覆盖层需同步（否则拉伸/偏移会错位）
+  if (typeof BT_crosshair !== 'undefined' && BT_crosshair.redraw) BT_crosshair.redraw();
 });
 
 // ===== 光标 / 固定缩放 工具函数 =====
@@ -1507,6 +1543,8 @@ function BT_initIndexChart() {
   BT_indexChart.setOption(baseOption);
   // 启用指数图的自定义 tooltip
   BT_setupIndexTooltip();
+  // 指数图同样绑定自绘十字光标
+  BT_attachCrosshair('btChartIndex', BT_indexChart, false);
 }
 
 // 渲染指数图表（接 fetchKLine 的返回数据 → K线 + MA + 成交量 + MACD）

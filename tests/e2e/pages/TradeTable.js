@@ -13,7 +13,20 @@ class TradeTable extends BasePage {
       table: '#tradeTable',
       tbody: '#tradeBody',
       row: '#tradeBody tr',
-      clearAllBtn: 'button:has-text("清空记录")',
+      // ★ 实际 UI 文案是「🗑️ 清空交易」，且位于「⚙️ 设置」弹窗（#settingsModal）的
+      //   "危险操作"区；清空走二次确认弹窗（需输入验证码），不是原生 confirm()。
+      // ★ 页面上有多个「⚙️ 设置」按钮（header 内两个不可见的走 openAppSettings），
+      //   只有调用 openSettingsModal() 的那个是数据管理弹窗入口 → 用 onclick 精确定位。
+      settingsBtn: 'button[onclick="openSettingsModal()"]',
+      settingsModal: '#settingsModal',
+      clearAllBtn: 'button:has-text("清空交易")',
+      expandColsBtn: 'button:has-text("展开全部列")',
+
+      // 清空二次确认弹窗
+      clearConfirmModal: '#clearConfirmModal',
+      clearConfirmInput: '#clearConfirmInput',
+      clearConfirmBtn: '#clearConfirmBtn',
+
       exportCSVBtn: 'button:has-text("导出 CSV")',
       exportJSONBtn: 'button:has-text("导出 JSON")',
       importJSONBtn: 'button:has-text("导入 JSON")',
@@ -24,14 +37,77 @@ class TradeTable extends BasePage {
       sortBuyType: '#sortBuyType',
       sortOrder: '#sortOrder',
 
-      // 删除确认
-      deleteConfirmModal: '#deleteConfirmModal',
-      deleteSymbol: '#deleteSymbol',
-      deleteDir: '#deleteDir',
-      deleteEntry: '#deleteEntry',
-      confirmDeleteBtn: '#deleteConfirmModal button:has-text("确认删除")',
-      cancelDeleteBtn: '#deleteConfirmModal button:has-text("取消")',
+      // 删除：行内 🗑 按钮（事件委托 data-action="delete"）
+      // → openDeleteConfirm() 用 ui.js 的 showConfirm() 动态创建确认弹窗
+      //   （不是原生 confirm()，也没有固定的 #deleteConfirmModal 元素）
+      deleteRowBtn: 'button[data-action="delete"], button[title="删除"]',
+      uiConfirmOverlay: '.ui-modal-overlay',
+      uiConfirmOkBtn: '.ui-modal-overlay .btn-primary',
+      uiConfirmCancelBtn: '.ui-modal-overlay .btn-gray',
+      // 编辑弹窗内的删除按钮
+      editModalDeleteBtn: '#te_deleteBtn',
+      editModal: '#tradeEditModal',
+      editModalTitle: '#te_title',
     };
+  }
+
+  /**
+   * 等待 ui.js 的确认弹窗出现
+   */
+  async waitForUiConfirm() {
+    await this.page.waitForSelector(this.selectors.uiConfirmOverlay, { state: 'visible', timeout: 10000 });
+  }
+
+  /**
+   * 点击 ui 确认弹窗的确认按钮
+   */
+  async acceptUiConfirm() {
+    await this.page.click(this.selectors.uiConfirmOkBtn);
+    await this.page.waitForSelector(this.selectors.uiConfirmOverlay, { state: 'detached', timeout: 5000 }).catch(() => {});
+    await this.waitForAutoSave(600);
+  }
+
+  /**
+   * 点击 ui 确认弹窗的取消按钮
+   */
+  async dismissUiConfirm() {
+    await this.page.click(this.selectors.uiConfirmCancelBtn);
+    await this.page.waitForSelector(this.selectors.uiConfirmOverlay, { state: 'detached', timeout: 5000 }).catch(() => {});
+    await this.waitForAutoSave(300);
+  }
+
+  /**
+   * 打开「设置」弹窗（清空类操作都在这里）
+   */
+  async openSettingsModal() {
+    await this.page.click(this.selectors.settingsBtn);
+    await this.page.waitForSelector(this.selectors.settingsModal, { state: 'visible' });
+  }
+
+  /**
+   * 关闭「设置」弹窗
+   */
+  async closeSettingsModal() {
+    await this.page.evaluate(() => {
+      if (typeof closeSettingsModal === 'function') closeSettingsModal();
+    });
+    await this.page.waitForSelector(this.selectors.settingsModal, { state: 'hidden', timeout: 5000 }).catch(() => {});
+  }
+
+  /**
+   * 展开被折叠的次要列（备注/出场日期等 col-secondary 默认 display:none，
+   * 不展开则无法 fill —— 这是页面刻意的列折叠设计）
+   */
+  async expandColumns() {
+    const btn = this.page.locator(this.selectors.expandColsBtn);
+    if (await btn.count()) {
+      const text = await btn.first().textContent();
+      // 仅在"展开"状态时点击（按钮文案为「展开 ▼」）
+      if (/展开/.test(text || '') && !/收起/.test(text || '')) {
+        await btn.first().click();
+        await this.page.waitForTimeout(300);
+      }
+    }
   }
 
   /**
@@ -102,6 +178,9 @@ class TradeTable extends BasePage {
     }[field];
 
     if (inputSelector) {
+      // ★ 备注 / 出场日期属于 col-secondary 次要列，默认折叠（display:none），
+      //   必须先展开才能 fill —— 否则 Playwright 会一直等元素可见直到超时。
+      await this.expandColumns();
       const input = row.locator(inputSelector).first();
       await input.fill(String(value));
       await input.dispatchEvent('change');
@@ -120,30 +199,28 @@ class TradeTable extends BasePage {
 
   /**
    * 删除某品种的交易
+   * 行内删除按钮是 🗑 图标 + 事件委托（data-action="delete"），
+   * 因此用 title/data-action 定位而非 :has-text("删除")。
+   * 它会调 openDeleteConfirm() → ui.js showConfirm() 弹出确认框。
    */
   async deleteTrade(symbol) {
     const row = this.getRowBySymbol(symbol);
-    await row.locator('button:has-text("删除")').click();
-    // 删除确认弹窗
-    await this.page.waitForSelector(this.selectors.deleteConfirmModal, { state: 'visible' });
+    await row.locator(this.selectors.deleteRowBtn).first().click();
+    await this.waitForUiConfirm();
   }
 
   /**
-   * 确认删除
+   * 确认删除（ui 确认弹窗）
    */
   async confirmDelete() {
-    this.page.once('dialog', (d) => d.accept());
-    await this.page.click(this.selectors.confirmDeleteBtn);
-    await this.page.waitForSelector(this.selectors.deleteConfirmModal, { state: 'hidden', timeout: 5000 }).catch(() => {});
-    await this.waitForAutoSave();
+    await this.acceptUiConfirm();
   }
 
   /**
-   * 取消删除
+   * 取消删除（ui 确认弹窗）
    */
   async cancelDelete() {
-    await this.page.click(this.selectors.cancelDeleteBtn);
-    await this.page.waitForSelector(this.selectors.deleteConfirmModal, { state: 'hidden' });
+    await this.dismissUiConfirm();
   }
 
   /**
@@ -170,12 +247,23 @@ class TradeTable extends BasePage {
   }
 
   /**
-   * 清空所有
+   * 清空所有交易
+   * ★ 清空入口在「⚙️ 设置」弹窗的"危险操作"区（不是页面上直接可见），
+   *   且清空流程为"二次确认弹窗 + 输入验证码"（不再是原生 confirm()）：
+   *   打开设置 → 点「🗑️ 清空交易」→ 输入验证码 → 点「确认清空」
    */
   async clearAll() {
-    this.page.once('dialog', (d) => d.accept());
+    await this.openSettingsModal();
     await this.page.click(this.selectors.clearAllBtn);
-    await this.waitForAutoSave(1500);
+    await this.page.waitForSelector(this.selectors.clearConfirmModal, { state: 'visible' });
+    // 弹窗里的验证码取自 #clearConfirmCode（不同动作验证码不同）
+    const code = await this.page.textContent('#clearConfirmCode');
+    await this.page.fill(this.selectors.clearConfirmInput, (code || '').trim());
+    await this.page.waitForTimeout(200);
+    await this.page.click(this.selectors.clearConfirmBtn);
+    await this.page.waitForSelector(this.selectors.clearConfirmModal, { state: 'hidden', timeout: 5000 }).catch(() => {});
+    await this.closeSettingsModal();
+    await this.waitForAutoSave(800);
   }
 
   /**
