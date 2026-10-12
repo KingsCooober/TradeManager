@@ -50,7 +50,6 @@ function BT_collectState() {
   var ma1 = document.getElementById('ma1');
   var ma2 = document.getElementById('ma2');
   var ma3 = document.getElementById('ma3');
-  var ma4 = document.getElementById('ma4');
   // 关键：保存 BT_visibleBars（内存变量）而不是 vbEl.value（select 显示值），
   //       这样 +/- 缩放后产生的非标称值（如 167）才能正确恢复
   var vbToSave = (typeof BT_visibleBars === 'number' && BT_visibleBars > 0)
@@ -63,7 +62,6 @@ function BT_collectState() {
     ma1: ma1 && ma1.value,
     ma2: ma2 && ma2.value,
     ma3: ma3 && ma3.value,
-    ma4: ma4 && ma4.value,
     showIndex:    document.getElementById('showIndex') && document.getElementById('showIndex').checked,
     cursorIdx:    BT_currentIdx,
     // ★ 修复：初始资金此前不持久化，刷新后回落到默认 100 万并重算现金，
@@ -141,7 +139,7 @@ function BT_init() {
     if (typeof saved.ma1 === 'string') document.getElementById('ma1').value = saved.ma1;
     if (typeof saved.ma2 === 'string') document.getElementById('ma2').value = saved.ma2;
     if (typeof saved.ma3 === 'string') document.getElementById('ma3').value = saved.ma3;
-    if (typeof saved.ma4 === 'string') document.getElementById('ma4').value = saved.ma4;
+    // 注：ma4 已移除（均线由 4 条改为 3 条），旧存档里的 ma4 忽略即可
     // ★ 恢复初始资金（与 BT_saveState 的 initCapital 对应）。
     //   必须在下面 BT_loadTrades/BT_recomputeCash 之前生效，否则现金会按默认本金重算。
     if (typeof saved.initCapital === 'number' && saved.initCapital > 0) {
@@ -161,24 +159,33 @@ function BT_init() {
       }
     }
     // 同步恢复 BT_maPeriods 内存变量（否则 K线图还会用默认值）
-    var _restoredMA = [];
+    // ★ 迁移（均线由 4 条改为 3 条）：
+    //   1) 存档若等于"历史默认值"，说明用户从未自定义 → 直接用新默认 5/10/20；
+    //      否则改了默认值用户却看不到变化（持久化状态会一直覆盖它）。
+    //   2) 存档若仍有第 4 条（用户以前自定义过 4 条）→ 截断为前 3 条，
+    //      因为界面上已无第 4 个输入框，保留第 4 条会画出无法编辑的均线。
+    //   注意：必须先取**全部 4 个**（含旧 ma4）再判断，
+    //   否则 '10,20,144,169' 会被先截成 '10,20,144'，永远匹配不上历史默认值。
+    var _rawMA = [];
     ['ma1', 'ma2', 'ma3', 'ma4'].forEach(function(id) {
       var _vv = parseInt(saved[id]);
-      if (!isNaN(_vv) && _vv > 0 && _vv <= 400) _restoredMA.push(_vv);
+      if (!isNaN(_vv) && _vv > 0 && _vv <= 400) _rawMA.push(_vv);
     });
-    // ★ 迁移：localStorage 里若存的是"旧默认值"，说明用户从未自定义过均线，
-    //   应改用新默认值；否则改了默认值用户却看不到变化（持久化状态会一直覆盖它）。
-    //   用户自己改过的值（不等于旧默认）一律保留，不做覆盖。
-    var _OLD_MA_DEFAULT = '5,10,20,60';
-    if (_restoredMA.join(',') === _OLD_MA_DEFAULT) {
-      _restoredMA = BT_MA_DEFAULT.slice();
-      // 同步写回输入框，避免界面显示旧值
-      for (var _mi = 0; _mi < 4; _mi++) {
+    var _LEGACY_MA_DEFAULTS = ['5,10,20,60', '10,20,144,169'];
+    var _restoredMA;
+    if (_LEGACY_MA_DEFAULTS.indexOf(_rawMA.join(',')) >= 0) {
+      _restoredMA = BT_MA_DEFAULT.slice();   // 历史默认值 → 迁移为新默认
+    } else {
+      _restoredMA = _rawMA.slice(0, 3);      // 用户自定义 → 保留（超过 3 条则截断）
+    }
+    if (_restoredMA.length > 0) {
+      // 统一写回输入框，保证界面与内存一致（含截断/迁移后的情况）
+      for (var _mi = 0; _mi < _restoredMA.length && _mi < 3; _mi++) {
         var _el = document.getElementById('ma' + (_mi + 1));
         if (_el) _el.value = _restoredMA[_mi];
       }
+      BT_maPeriods = _restoredMA;
     }
-    if (_restoredMA.length > 0) BT_maPeriods = _restoredMA;
   }
   // 兜底：BT_visibleBars 若仍是初始默认值（即用户从未调过缩放），
   //       就从下拉框取当前选中值同步一次。
@@ -202,7 +209,7 @@ function BT_init() {
   BT_initZoomLockUI();
 
   // 4) 绑定 MA 周期输入框 change → 重画 + 持久化
-  ['ma1', 'ma2', 'ma3', 'ma4'].forEach(function(id) {
+  ['ma1', 'ma2', 'ma3'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', function() { BT_updateMAPeriods(); BT_saveState(); });
   });

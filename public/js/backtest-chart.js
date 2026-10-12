@@ -2,12 +2,12 @@
  * 回测页 — ECharts 图表（K线 + MA + 成交量 + MACD + 买卖标记）
  *
  * 单个 ECharts 实例 + 3 个 grid（xAxis 联动共享）:
- *   - 主图 (60% 高): 蜡烛 + MA1~MA4
+ *   - 主图: 蜡烛 + MA1~MA3
  *   - 成交量 (15% 高): 红涨绿跌柱状图
  *   - MACD (25% 高): DIF/DEA 折线 + MACD 柱
  *
  * 关键设计：
- *   - 自定义均线：MA1~MA4 周期从页面输入框读取
+ *   - 自定义均线：MA1~MA3 周期从页面输入框读取
  *   - 买卖标记：通过 markPoint 叠加，BT_refreshChartMarkers() 增量刷新
  *   - 光标：监听 'updateAxisPointer' 事件，实时把光标日期+收盘价写到底部 actionbar
  */
@@ -15,8 +15,8 @@
 var BT_chart = null;            // ECharts 实例
 var BT_renderCustomTooltip = null;  // 自定义 DOM tooltip 渲染函数（由 BT_setupCustomTooltip 初始化）
 var BT_klineData = null;        // 当前 K 线完整数据 {dates, ohlc, volumes, ma5/10/20, macd, count, ...}
-// MA 周期默认值：单一来源（HTML 里的 ma1~ma4 初始 value 需与其保持一致）
-var BT_MA_DEFAULT = [10, 20, 144, 169];
+// MA 周期默认值：单一来源（HTML 里的 ma1~ma3 初始 value 需与其保持一致）
+var BT_MA_DEFAULT = [5, 10, 20];
 var BT_maPeriods = BT_MA_DEFAULT.slice();  // MA 周期（从输入框实时读取）
 var BT_showFlags = { ma: true, vol: true };  // MACD/资金面板已按用户要求移除  // 显示开关
 // 固定显示窗口：默认只显示最近 60 根 K线（让单根 K线 视觉宽度固定）
@@ -110,14 +110,16 @@ function BT_calcZoomRange(idx, mode) {
 // 颜色（与项目内其他图表保持一致）
 var BT_COLOR_UP   = '#ef476f';  // A 股红涨
 var BT_COLOR_DOWN = '#2d9f7f';  // A 股绿跌
-// ★ MA 色板按主题取值：原先固定 '#000000'，暗色主题下 MA1 线与图例全是黑色不可见。
-//   亮色：黑/亮黄/深灰/浅灰；暗色：白/亮黄/浅灰/中灰（深灰在暗底不可见，一并换掉）。
+// MA 色板按主题取值：原先固定 '#000000'，暗色主题下 MA1 线与图例全是黑色不可见。
+//   共 3 条均线，配色语义（按用户指定）：
+//     MA1 黑灰色   MA2 深黄色   MA3 蓝色
+//   亮色主题用较深的黑/黄/蓝，暗色主题相应提亮，保证在两种背景上都清晰可辨。
 //   消费点统一走 BT_maColors()，主题切换时由 BT_applyTheme 触发重绘。
 function BT_maColors() {
   var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
   return isDark
-    ? ['#ffffff', '#FACC15', '#CBD5E1', '#94A3B8']
-    : ['#000000', '#FACC15', '#374151', '#94A3B8'];
+    ? ['#CBD5E1', '#E0A800', '#5B8DEF']   // 暗色：浅灰 / 深黄提亮 / 蓝提亮
+    : ['#374151', '#C99700', '#2563EB'];  // 亮色：黑灰 / 深黄 / 蓝
 }
 
 // 初始化图表实例
@@ -287,7 +289,19 @@ function BT_applyTheme() {
     try { BT_renderMAOnly(); } catch (e) { /* 无数据时忽略 */ }
   }
   // 右栏 MA 数值文字也按主题换色
-  try { BT_renderMaList('curMa', 'cur'); BT_renderMaList('idxMa', 'idx'); } catch (e) {}
+  // ★ 修复：BT_renderMaList 会**重建** DOM 行（旧节点被清空），因此必须随后回填数值，
+  //   否则切换主题后右栏 MA 值会全部变成 "--"（此前漏了这一步回填）。
+  try {
+    BT_renderMaList('curMa', 'cur');
+    BT_renderMaList('idxMa', 'idx');
+    if (BT_klineData && BT_currentIdx != null) {
+      BT_fillMaValues('curMa', 'cur', BT_klineData, BT_currentIdx);
+    }
+    if (BT_indexData && BT_currentIdx != null && BT_indexData.dates.length) {
+      var _idxClamp = Math.min(BT_currentIdx, BT_indexData.dates.length - 1);
+      if (_idxClamp >= 0) BT_fillMaValues('idxMa', 'idx', BT_indexData, _idxClamp);
+    }
+  } catch (e) { /* 无数据时忽略 */ }
 }
 
 // 基础 option 框架（不依赖具体数据，初始化时调用一次）
@@ -1022,9 +1036,9 @@ function BT_setupIndexTooltip() {
 // 修改 MA 周期：保留空 slot（用户可清空），但**不**重画整个图，只更新 MA 系列 → 不动 xAxis/dataZoom/grid
 function BT_updateMAPeriods() {
   var inputs = [document.getElementById('ma1'), document.getElementById('ma2'),
-                document.getElementById('ma3'), document.getElementById('ma4')];
+                document.getElementById('ma3')];
   var newPeriods = [];
-  for (var i = 0; i < 4; i++) {
+  for (var i = 0; i < 3; i++) {
     var raw = inputs[i] && inputs[i].value && String(inputs[i].value).trim();
     if (!raw) continue;   // 空字符串 → 跳过（清空该 slot）
     var v = parseInt(raw);
@@ -1685,7 +1699,7 @@ function BT_syncIndexZoom() {
 
 // 同步指数图光标（让指数图显示与主图一致的十字光标位置）
 // 调用方：BT_setCursor（程序化移动光标）、mousemove（鼠标 hover）、updateAxisPointer
-// 关键：指数图 series 顺序：K线=0, MA1=1, MA2=2, MA3=3, MA4=4, 成交=5, DIF=6, DEA=7, MACD=8
+// 关键：指数图 series 顺序：K线=0, MA1=1, MA2=2, MA3=3, 成交=4=8
 function BT_syncIndexCursor(idx) {
   if (!BT_indexChart || !BT_indexData) return;
   if (typeof idx !== 'number' || idx < 0 || idx >= BT_indexData.dates.length) return;
