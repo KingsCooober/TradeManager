@@ -317,12 +317,12 @@ function BT_getBaseOption() {
       label: { backgroundColor: 'transparent', color: 'transparent', borderWidth: 0 }
     },
     grid: [
-      { left: 60, right: 30, top: 18,   height: 400 },   // K线 400px
-      { left: 60, right: 30, top: 423,  height: 80 },    // 成交量 80px（日期标签显示在其下方）
+      { left: 60, right: 30, top: 18,   height: 320 },   // K线 320px
+      { left: 60, right: 30, top: 343,  height: 70 },    // 成交量 70px（日期标签显示在其下方）
       // MACD 与资金曲线均已移除：grid[2]/grid[3] 保留占位（height 0）以维持
       // series/xAxis/yAxis 索引稳定（指数图复用本 option，按下标访问，删元素会错位）
-      { left: 60, right: 30, top: 503,  height: 0 },
-      { left: 60, right: 30, top: 503,  height: 0 }
+      { left: 60, right: 30, top: 413,  height: 0 },
+      { left: 60, right: 30, top: 413,  height: 0 }
     ],
     xAxis: [
       { type: 'category', data: [], gridIndex: 0, scale: true, boundaryGap: false,
@@ -787,9 +787,9 @@ function BT_updateVisibleGrids() {
   if (!BT_chart) return;
   var showVol    = BT_showFlags.vol;
 
-  // 固定像素高度（与 #btChart { height: 552px } 配套：18+400+5+80+日期标签~14+滑块34 ≈ 551）
-  var KLINE_PX  = 400;   // K线主图
-  var VOL_PX    = 80;    // 成交量
+  // 固定像素高度（与 #btChart { height: 462px } 配套：18+320+5+70+日期标签~14+滑块24+底部留白 ≈ 462）
+  var KLINE_PX  = 320;   // K线主图
+  var VOL_PX    = 70;    // 成交量
   var GAP = 5;           // 子图间 gap
   var TOP_PX = 18;       // 顶部 18px 留白（容 Y轴 label）
 
@@ -1521,14 +1521,14 @@ function BT_initIndexChart() {
   if (!dom) return;
   BT_indexChart = echarts.init(dom, null, { renderer: 'canvas' });
   var baseOption = BT_getBaseOption();
-  // 调整 grid 比例：K线 400 / 量 80（绝对像素，容器 552px，与主图 #btChart 同高）
-  //   10 + 400 + 5 + 80 + 日期标签 ~14 + 底部留白 ~43 = 552
+  // 调整 grid 比例：K线 320 / 量 70（绝对像素，容器 462px，与主图 #btChart 同高）
+  //   10 + 320 + 5 + 70 + 日期标签 ~14 + 底部留白 ~43 = 462
   //   MACD 已移除：grid[2] 收起；grid[3]（原资金）保持隐藏占位
   baseOption.grid = [
-    { left: 50, right: 20, top: 10,   height: 400 },   // K线 400px
-    { left: 50, right: 20, top: 415,  height: 80 },    // 成交量 80px（日期标签显示在其下方）
-    { left: 50, right: 20, top: 495,  height: 0 },     // MACD（隐藏占位）
-    { left: 50, right: 20, top: 495,  height: 0 }      // 资金曲线（隐藏占位）
+    { left: 50, right: 20, top: 10,   height: 320 },   // K线 320px
+    { left: 50, right: 20, top: 335,  height: 70 },    // 成交量 70px（日期标签显示在其下方）
+    { left: 50, right: 20, top: 405,  height: 0 },     // MACD（隐藏占位）
+    { left: 50, right: 20, top: 405,  height: 0 }      // 资金曲线（隐藏占位）
   ];
   // MACD 与资金曲线的 yAxis/xAxis 均隐藏
   baseOption.yAxis[2] = Object.assign({}, baseOption.yAxis[2], { show: false });

@@ -111,7 +111,7 @@
   padding: 8px;
   margin-bottom: 12px;
 }
-#btChart { width: 100%; height: 552px; min-width: 0; }  /* K线 400 + 量 80 + 日期标签 + 滑块 = 552px，不留空白 */
+#btChart { width: 100%; height: 462px; min-width: 0; }  /* K线 320 + 量 70 + 日期标签 + 滑块 = 462px，不留空白 */
 
 /* 大盘指数窗口 */
 .bt-index-body {
@@ -330,14 +330,20 @@
   gap: 6px;
 }
 .bt-tradebar .bt-btn-group .btn { padding: 6px 14px; white-space: nowrap; }
+/* 快捷键提示：并入交易条同一行，作为行内说明文字（不再单独占一行） */
 .bt-tradebar .bt-tip-inline {
-  margin-top: 8px;
   font-size: 11px;
   color: var(--text-secondary, #666);
-  background: var(--bg-subtle, #f5f7fa);
-  padding: 5px 8px;
-  border-radius: 4px;
-  line-height: 1.5;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-shrink: 1;
+}
+/* 行内提示在窄屏可换行（避免挤掉按钮） */
+@media (max-width: 1400px) {
+  .bt-tradebar .bt-tip-inline { white-space: normal; }
 }
 
 .bt-stats {
@@ -505,7 +511,7 @@
       <div class="bt-index-head">
         <span class="bt-index-title" id="indexTitle">📈 上证指数</span>
       </div>
-      <div id="btChartIndex" style="width: 100%; height: 552px;"></div>
+      <div id="btChartIndex" style="width: 100%; height: 462px;"></div>
     </div>
     <!-- 指数 K线 数据栏（在指数图右边，与主图操作栏对称）-->
     <div class="bt-actionbar bt-index-actionbar" aria-label="指数数据栏">
@@ -549,7 +555,7 @@
     </div>
   </div>
 
-  <!-- 交易操作条（横向，位于主图下方）+ 快捷键提示 -->
+  <!-- 交易操作条（单行横向，位于主图下方）：左侧仓位/现价/快捷键，右侧全部按钮 -->
   <div class="bt-tradebar">
     <div class="bt-tradebar-row">
       <div class="bt-group bt-group-pos">
@@ -565,8 +571,15 @@
         <input type="number" id="btPrice" step="0.01" min="0.01" placeholder="默认=光标日收盘">
       </div>
 
+      <!-- 快捷键提示：并入同一行左侧，不再单独占一行 -->
+      <div class="bt-tip bt-tip-inline">
+        💡 <strong>←/→</strong> 移光标 · <strong>空格</strong> 下一根 ·
+        <strong>B</strong> 买入 · <strong>S</strong> 卖出 · <strong>Home/End</strong> 跳首/尾
+      </div>
+
       <div class="bt-tradebar-spacer"></div>
 
+      <!-- 右侧按钮组：导航 + 买卖，统一靠右排列 -->
       <div class="bt-btn-group bt-btn-group-nav">
         <button class="btn btn-primary" id="btnNextBar" onclick="BT_nextBar()" title="光标移到下一根K线（→ 或空格）">⏭ 下一根</button>
         <button class="btn btn-primary" id="btnPrevBar" onclick="BT_prevBar()" title="光标移到上一根K线（←）">⏮ 上一根</button>
@@ -576,12 +589,6 @@
         <button class="btn btn-success" id="btnSell" onclick="BT_sell()" title="按现价卖出（快捷键 S）">🟩 卖出</button>
         <button class="btn btn-warning" id="btnClearPos" onclick="BT_clearPosition()" title="按现价清空持仓">清仓</button>
       </div>
-    </div>
-
-    <div class="bt-tip bt-tip-inline">
-      💡 快捷键：<strong>←/→</strong> 移光标 · <strong>空格</strong> 下一根 ·
-      <strong>B</strong> 买入 · <strong>S</strong> 卖出 · <strong>Home/End</strong> 跳首/尾 ·
-      成交价默认取光标日<strong>收盘价</strong>（可在「现价」框覆盖）
     </div>
   </div>
 
@@ -667,7 +674,7 @@
 
 <!-- 回测专用模块（顺序：交易 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=8"></script>
-<script src="js/backtest-chart.js?v=84"></script>
+<script src="js/backtest-chart.js?v=85"></script>
 <script src="js/backtest-main.js?v=31"></script>
 
 <script>
