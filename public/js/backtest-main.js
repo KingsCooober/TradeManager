@@ -227,17 +227,8 @@ function BT_init() {
     if (el) el.addEventListener('change', BT_saveState);
   });
 
-  // 7) 标的输入框回车 → 加载
-  var symbolInput = document.getElementById('btSymbol');
-  if (symbolInput) {
-    symbolInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') BT_loadData();
-    });
-    // 输入自动转小写
-    symbolInput.addEventListener('input', function() {
-      symbolInput.value = symbolInput.value.toLowerCase();
-    });
-  }
+  // 7) 标的输入框：搜索下拉 + 回车加载
+  BT_initSymbolPicker();
 
   // 8) 显示根数变化 → 重新设置 dataZoom 范围（不重画）
   var vbEl = document.getElementById('btVisibleBars');
@@ -352,11 +343,227 @@ function BT_updateHeaderSyncUI() {
   }
 }
 
+// ==================== 标的搜索下拉（名称 / 拼音 / 代码） ====================
+// 解决"必须手输 sh600000"的不便：
+//   - 输入中文名称（浦发银行）或拼音首字母（pfyh）→ 远程搜索候选
+//   - 输入纯数字（600000）→ 直接本地补前缀，同时远程给出候选
+//   - ↑/↓ 选择、Enter 确认、Esc 关闭；点选候选直接填入
+//   - 远程失败静默降级：不影响手动输入与加载（搜索是辅助功能）
+var _btSymTimer = null;        // 输入防抖
+var _btSymSeq = 0;             // 请求序号，丢弃过期响应
+var _btSymItems = [];          // 当前候选项
+var _btSymActive = -1;         // 高亮下标
+var _btSymSuppress = false;    // 选中后抑制一次 input 事件（避免又触发搜索）
+
+// 纯数字 / 后缀写法 → shXXXXXX / szXXXXXX（与后端 normalizeSymbol 同规则，前端先做一遍）
+function BT_localNormalizeSymbol(input) {
+  var raw = String(input == null ? '' : input).trim().toLowerCase();
+  if (!raw) return null;
+  var m = raw.match(/^(sh|sz)\s*(\d{6})$/);
+  if (m) return m[1] + m[2];
+  m = raw.match(/^(\d{6})\s*\.\s*(sh|sz)$/);
+  if (m) return m[2] + m[1];
+  m = raw.match(/^(\d{6})$/);
+  if (m) {
+    var c = m[1][0];
+    if (c === '6' || c === '9') return 'sh' + m[1];
+    if (c === '0' || c === '2' || c === '3') return 'sz' + m[1];
+  }
+  return null;
+}
+
+function BT_symbolListEl() { return document.getElementById('btSymbolList'); }
+
+function BT_closeSymbolList() {
+  var list = BT_symbolListEl();
+  var input = document.getElementById('btSymbol');
+  if (list) { list.hidden = true; list.innerHTML = ''; }
+  if (input) input.setAttribute('aria-expanded', 'false');
+  _btSymItems = [];
+  _btSymActive = -1;
+}
+
+function BT_renderSymbolList(items, hint) {
+  var list = BT_symbolListEl();
+  if (!list) return;
+  _btSymItems = items || [];
+  _btSymActive = _btSymItems.length ? 0 : -1;
+  if (!_btSymItems.length) {
+    list.innerHTML = '<div class="bt-symbol-empty">' + (hint || '没有匹配的标的') + '</div>';
+  } else {
+    var html = _btSymItems.map(function (it, i) {
+      return '<div class="bt-symbol-item' + (i === 0 ? ' active' : '') + '" role="option" data-idx="' + i + '">'
+        + '<span class="sym-name">' + BT_escapeHtml(it.name) + '</span>'
+        + '<span class="sym-code">' + BT_escapeHtml(it.symbol) + '</span>'
+        + '<span class="sym-mkt">' + BT_escapeHtml(it.market || '') + '</span>'
+        + '</div>';
+    }).join('');
+    list.innerHTML = html + '<div class="bt-symbol-hint">↑↓ 选择 · Enter 确认 · Esc 关闭</div>';
+  }
+  list.hidden = false;
+  var input = document.getElementById('btSymbol');
+  if (input) input.setAttribute('aria-expanded', 'true');
+}
+
+function BT_escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function BT_hightlightSymbolItem(idx) {
+  var list = BT_symbolListEl();
+  if (!list) return;
+  var nodes = list.querySelectorAll('.bt-symbol-item');
+  for (var i = 0; i < nodes.length; i++) {
+    if (i === idx) {
+      nodes[i].classList.add('active');
+      if (nodes[i].scrollIntoView) nodes[i].scrollIntoView({ block: 'nearest' });
+    } else {
+      nodes[i].classList.remove('active');
+    }
+  }
+  _btSymActive = idx;
+}
+
+// 选中候选项 → 填入带前缀代码并加载
+function BT_pickSymbol(idx) {
+  var it = _btSymItems[idx];
+  if (!it) return;
+  var input = document.getElementById('btSymbol');
+  if (!input) return;
+  _btSymSuppress = true;   // 抑制随后触发的 input 事件
+  input.value = it.symbol;
+  BT_closeSymbolList();
+  if (typeof BT_saveStateNow === 'function') BT_saveStateNow();
+  if (typeof BT_loadData === 'function') BT_loadData();
+}
+
+// 远程搜索（防抖 + 序号守卫）
+function BT_fetchSymbolSuggestions(q) {
+  var seq = ++_btSymSeq;
+  var url = '/api/market/search?q=' + encodeURIComponent(q);
+  var fetcher = (typeof authFetch === 'function') ? authFetch : (typeof fetch === 'function' ? fetch : null);
+  if (!fetcher) return;
+  fetcher(url).then(function (res) {
+    if (!res || !res.ok) throw new Error('HTTP ' + (res && res.status));
+    return res.json();
+  }).then(function (data) {
+    if (seq !== _btSymSeq) return;               // 已有更新的搜索
+    var input = document.getElementById('btSymbol');
+    if (!input || document.activeElement !== input) return;   // 已失焦则不弹
+    var items = (data && data.results) || [];
+    if (!items.length) {
+      // 没有候选：给个提示，但保留用户输入让回车仍可尝试
+      BT_renderSymbolList([], '没有匹配的标的（可直接输 sh/sz+6位数字）');
+    } else {
+      BT_renderSymbolList(items);
+    }
+  }).catch(function () {
+    if (seq !== _btSymSeq) return;
+    // 搜索失败静默降级：不弹错误，不阻断手动输入
+    BT_closeSymbolList();
+  });
+}
+
+function BT_initSymbolPicker() {
+  var input = document.getElementById('btSymbol');
+  var list = BT_symbolListEl();
+  if (!input || !list) return;
+
+  // 输入 → 防抖搜索
+  input.addEventListener('input', function () {
+    if (_btSymSuppress) { _btSymSuppress = false; return; }
+    var raw = input.value.trim();
+    if (_btSymTimer) { clearTimeout(_btSymTimer); _btSymTimer = null; }
+    if (!raw) { BT_closeSymbolList(); return; }
+    // 已带前缀的完整代码 → 无需搜索，直接关掉候选
+    if (/^(sh|sz)\d{6}$/i.test(raw)) { BT_closeSymbolList(); return; }
+    _btSymTimer = setTimeout(function () {
+      _btSymTimer = null;
+      BT_fetchSymbolSuggestions(raw);
+    }, 250);
+  });
+
+  // 键盘：↑/↓ 选择、Enter 确认、Esc 关闭
+  input.addEventListener('keydown', function (e) {
+    var open = !list.hidden;
+    if (e.key === 'ArrowDown' && open) {
+      e.preventDefault();
+      if (_btSymItems.length) BT_hightlightSymbolItem((_btSymActive + 1) % _btSymItems.length);
+      return;
+    }
+    if (e.key === 'ArrowUp' && open) {
+      e.preventDefault();
+      if (_btSymItems.length) BT_hightlightSymbolItem((_btSymActive - 1 + _btSymItems.length) % _btSymItems.length);
+      return;
+    }
+    if (e.key === 'Escape' && open) {
+      e.preventDefault();
+      BT_closeSymbolList();
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // 有高亮候选 → 选中它；否则按输入内容加载（纯数字先补前缀）
+      if (open && _btSymActive >= 0 && _btSymItems[_btSymActive]) {
+        BT_pickSymbol(_btSymActive);
+        return;
+      }
+      var norm = BT_localNormalizeSymbol(input.value);
+      if (norm) {
+        _btSymSuppress = true;
+        input.value = norm;
+      }
+      BT_closeSymbolList();
+      if (typeof BT_loadData === 'function') BT_loadData();
+    }
+  });
+
+  // 鼠标选择（用 mousedown 抢在 blur 之前）
+  list.addEventListener('mousedown', function (e) {
+    var item = e.target.closest ? e.target.closest('.bt-symbol-item') : null;
+    if (!item) return;
+    e.preventDefault();   // 阻止 input 失焦
+    var idx = parseInt(item.getAttribute('data-idx'), 10);
+    if (!isNaN(idx)) BT_pickSymbol(idx);
+  });
+  list.addEventListener('mousemove', function (e) {
+    var item = e.target.closest ? e.target.closest('.bt-symbol-item') : null;
+    if (!item) return;
+    var idx = parseInt(item.getAttribute('data-idx'), 10);
+    if (!isNaN(idx) && idx !== _btSymActive) BT_hightlightSymbolItem(idx);
+  });
+
+  // 失焦关闭（延迟，避免点选时先关掉）
+  input.addEventListener('blur', function () {
+    setTimeout(function () {
+      if (document.activeElement !== input) BT_closeSymbolList();
+    }, 150);
+  });
+  // 聚焦且已有候选内容 → 重新展开
+  input.addEventListener('focus', function () {
+    if (_btSymItems.length) {
+      list.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+  });
+}
+
 // 加载 K 线数据
 async function BT_loadData(silent) {
   var symbolEl = document.getElementById('btSymbol');
   var yearsEl  = document.getElementById('btYears');
   var symbol = (symbolEl && symbolEl.value || '').trim().toLowerCase();
+  // ★ 归一化：接受纯数字（600000）/ 后缀写法（600000.sh）→ sh600000 / sz000001
+  //   这样用户不必记住前缀；无法归一化时再报格式错误。
+  if (!/^(sh|sz|bj)\d{6}$/.test(symbol)) {
+    var norm = BT_localNormalizeSymbol(symbol);
+    if (norm) {
+      symbol = norm;
+      if (symbolEl) symbolEl.value = norm;   // 回填，让界面显示归一化后的代码
+    }
+  }
   if (!/^(sh|sz|bj)\d{6}$/.test(symbol)) {
     if (!silent) BT_toast('标的格式错误，应为 sh/sz/bj + 6 位数字（如 sh600000）', 'error');
     return;

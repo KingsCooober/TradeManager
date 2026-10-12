@@ -1191,6 +1191,32 @@ app.get('/api/market/stock-names', auth.authMiddleware, async (req, res) => {
   }
 });
 
+// 标的搜索（按名称 / 拼音首字母 / 纯数字代码 / 带前缀代码）
+//   用于回测页标的输入框的自动补全下拉，解决"必须手输 shXXXXXX"的不便。
+//   返回 { results: [{ symbol, code, name, market, pinyin }] }
+//   上游失败时返回空列表而不是 500 —— 搜索是辅助功能，
+//   不应因为上游抖动把页面搞报错（前端失败时退回手动输入）。
+app.get('/api/market/search', auth.authMiddleware, async (req, res) => {
+  const q = (req.query.q || '').toString().trim();
+  if (!q) return res.json({ results: [] });
+  if (q.length > 30) return res.status(400).json({ error: '关键词过长' });
+  try {
+    const results = await market.searchSymbols(q, 10);
+    res.json({ results });
+  } catch (e) {
+    console.error('[market] 标的搜索失败:', e.message);
+    res.json({ results: [], error: '搜索服务暂不可用' });
+  }
+});
+
+// 标的归一化（纯数字 / 后缀写法 → shXXXXXX / szXXXXXX）
+//   前端在提交加载前调用，避免用户为了省事输 600000 而加载失败。
+app.get('/api/market/normalize-symbol', auth.authMiddleware, (req, res) => {
+  const raw = (req.query.symbol || '').toString().trim();
+  const symbol = market.normalizeSymbol(raw);
+  res.json({ input: raw, symbol, ok: !!symbol });
+});
+
 // ===== 通用数据 API（所有新功能的统一存储接口）=====
 // 设计理念：前端只需 DataStore.collection('xxx')，后端自动处理存储与同步
 // userId 从 JWT token 中获取，无需在 URL 中传递

@@ -121,6 +121,82 @@ async function fetchQuotes(symbols) {
 // 新浪行情 fallback（腾讯返回 missing 时使用）
 //   入参：symbols = ['sh600000', 'sz000001', ...]
 //   出参：{ 'sh600000': '浦发银行', ... }（找不到的 key 不会出现）
+// 把用户输入归一化为 shXXXXXX / szXXXXXX
+//   支持：sh600000 / 600000 / SZ000001 / 600000.SH 等常见写法
+//   纯 6 位数字按 A 股代码段推断交易所：
+//     6/9 开头 → 沪市；0/2/3 开头 → 深市；4/8 开头（北交所/三板）不推断
+//   返回 null 表示无法归一化（需要走名称搜索）
+function normalizeSymbol(input) {
+  const raw = String(input == null ? '' : input).trim().toLowerCase();
+  if (!raw) return null;
+  // 已带前缀
+  let m = raw.match(/^(sh|sz)\s*(\d{6})$/);
+  if (m) return m[1] + m[2];
+  // 后缀写法 600000.sh / 000001.sz
+  m = raw.match(/^(\d{6})\s*\.\s*(sh|sz)$/);
+  if (m) return m[2] + m[1];
+  // 纯 6 位数字 → 按代码段推断
+  m = raw.match(/^(\d{6})$/);
+  if (m) {
+    const code = m[1];
+    const c = code[0];
+    if (c === '6' || c === '9') return 'sh' + code;   // 沪市主板/科创板(688)/B股
+    if (c === '0' || c === '2' || c === '3') return 'sz' + code;  // 深市主板/创业板
+    return null;   // 4/8 开头（北交所/新三板）回测接口不支持
+  }
+  return null;
+}
+
+// 按关键词搜索标的（支持中文名称 / 拼音首字母 / 纯数字代码 / 带前缀代码）
+//   数据源：东方财富搜索建议接口 searchapi.eastmoney.com
+//   返回：[{ symbol:'sh600000', code:'600000', name:'浦发银行', market:'沪A' }, ...]
+//   关键：MktNum=1 → 沪市(sh)，MktNum=0 → 深市(sz)；
+//         结果混有板块/三板/港股等，只保留 6 位纯数字的沪深 A 股，
+//         因为回测接口只支持 sh/sz 的 A 股 K 线。
+async function searchSymbols(keyword, limit = 10) {
+  const kw = String(keyword == null ? '' : keyword).trim();
+  if (!kw) return [];
+  const lim = Math.max(1, Math.min(20, parseInt(limit, 10) || 10));
+  const url = 'https://searchapi.eastmoney.com/api/suggest/get'
+    + '?input=' + encodeURIComponent(kw)
+    + '&type=14&token=D43BF722C8E33BDC906FB84D85E326E8'
+    + '&count=' + lim;
+  const buf = await httpsGet(url);
+  let json;
+  try { json = JSON.parse(buf.toString('utf8')); } catch (e) { return []; }
+  const table = json && json.QuotationCodeTable;
+  const rows = (table && Array.isArray(table.Data)) ? table.Data : [];
+  const out = [];
+  const seen = {};
+  for (const r of rows) {
+    if (!r || !r.Code || !r.Name) continue;
+    const mkt = String(r.MktNum);
+    if (mkt !== '1' && mkt !== '0') continue;          // 排除板块/港股/美股
+    const code = String(r.Code);
+    if (!/^\d{6}$/.test(code)) continue;               // 排除非 6 位代码
+    // 只保留回测接口支持的 A 股代码段：
+    //   沪市：60(主板) / 68(科创板) / 90(B股)
+    //   深市：00(主板) / 30(创业板) / 20(B股)
+    //   排除 4/8 开头（北交所/新三板）—— 东财会以 MktNum=0 返回，但 K 线接口不支持
+    const isShA = (mkt === '1') && /^(60|68|90)/.test(code);
+    const isSzA = (mkt === '0') && /^(00|30|20)/.test(code);
+    if (!isShA && !isSzA) continue;
+    const prefix = (mkt === '1') ? 'sh' : 'sz';
+    const symbol = prefix + code;
+    if (seen[symbol]) continue;
+    seen[symbol] = 1;
+    out.push({
+      symbol,
+      code,
+      name: String(r.Name),
+      market: String(r.SecurityTypeName || (prefix === 'sh' ? '沪A' : '深A')),
+      pinyin: String(r.PinYin || '')
+    });
+    if (out.length >= lim) break;
+  }
+  return out;
+}
+
 //   注意：自动探测 sh/sz 前缀（部分老数据 prefix 可能写反，比如 sh301377 实际是 sz）
 //   原因：东方财富/新浪 / 腾讯对同一支股只接受 1 个正确 prefix
 async function fetchNamesFromSina(symbols) {
@@ -782,6 +858,8 @@ module.exports = {
   fetchKLine,
   fetchQuotes,
   fetchNamesFromSina,
+  searchSymbols,
+  normalizeSymbol,
   getKLineSnapshot,
   getKLineSnapshotForSymbol,
   INDEX_MAP

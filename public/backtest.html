@@ -41,14 +41,68 @@
   font-size: 13px;
   width: 100px;
 }
-.bt-controlbar input[type="text"] { width: 130px; }
-.bt-controlbar input.ma-input { width: 50px; text-align: center; }
+/* 标的框放宽：需容纳中文名称与占位提示（如 "浦发银行"） */
+.bt-controlbar input[type="text"] { width: 170px; }
+/* MA 周期框：默认值 144/169 是三位数，50px 会被数字输入框的上下箭头挤掉末位。
+   这里加宽并隐藏 spinner（周期用键盘输入，不需要点箭头），保证三位数完整可见。 */
+.bt-controlbar input.ma-input {
+  width: 58px; text-align: center;
+  -moz-appearance: textfield; appearance: textfield;
+}
+.bt-controlbar input.ma-input::-webkit-outer-spin-button,
+.bt-controlbar input.ma-input::-webkit-inner-spin-button {
+  -webkit-appearance: none; margin: 0;
+}
 .bt-controlbar .bt-group {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 10px; background: var(--bg-subtle, #f5f7fa);
   border-radius: 6px;
 }
 .bt-controlbar .bt-actions { margin-left: auto; display: flex; gap: 8px; }
+
+/* ===== 标的搜索下拉（名称/拼音/代码） ===== */
+.bt-symbol-box { position: relative; display: inline-block; }
+.bt-symbol-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 260px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border-color, #d0d4dc);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+  padding: 4px;
+}
+.bt-symbol-list[hidden] { display: none; }
+.bt-symbol-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary, #222);
+  line-height: 1.3;
+}
+.bt-symbol-item:hover,
+.bt-symbol-item.active { background: var(--bg-subtle, #eef1f6); }
+.bt-symbol-item .sym-name { flex: 1 1 auto; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bt-symbol-item .sym-code { color: var(--text-secondary, #888); font-family: monospace; font-size: 12px; }
+.bt-symbol-item .sym-mkt {
+  font-size: 11px; color: var(--text-secondary, #999);
+  border: 1px solid var(--border-color, #d0d4dc); border-radius: 3px;
+  padding: 0 4px; flex-shrink: 0;
+}
+.bt-symbol-empty {
+  padding: 8px 10px; font-size: 12px; color: var(--text-secondary, #888); text-align: center;
+}
+.bt-symbol-hint {
+  padding: 5px 8px 3px; font-size: 11px; color: var(--text-secondary, #999); text-align: center;
+}
 
 .bt-chart-wrap {
   background: var(--bg-card);
@@ -376,7 +430,15 @@
   <div class="bt-controlbar">
     <div class="bt-group">
       <label>标的:</label>
-      <input type="text" id="btSymbol" value="sh600000" maxlength="9" placeholder="如 sh600000">
+      <!-- 标的搜索：支持中文名称 / 拼音首字母 / 纯数字代码 / 带前缀代码
+           输入时弹出候选下拉，选中后自动填入带前缀的代码 -->
+      <div class="bt-symbol-box">
+        <input type="text" id="btSymbol" value="sh600000" maxlength="20"
+               placeholder="名称/代码搜索"
+               autocomplete="off" role="combobox" aria-expanded="false"
+               aria-autocomplete="list" aria-controls="btSymbolList">
+        <div class="bt-symbol-list" id="btSymbolList" role="listbox" hidden></div>
+      </div>
     </div>
     <div class="bt-group">
       <label>回看:</label>
@@ -606,7 +668,7 @@
 <!-- 回测专用模块（顺序：交易 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=8"></script>
 <script src="js/backtest-chart.js?v=84"></script>
-<script src="js/backtest-main.js?v=30"></script>
+<script src="js/backtest-main.js?v=31"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）
