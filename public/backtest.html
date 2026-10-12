@@ -126,7 +126,7 @@
   padding: 8px;
   margin-bottom: 12px;
 }
-#btChart { width: 100%; height: 462px; min-width: 0; }  /* K线 320 + 量 70 + 日期标签 + 滑块 = 462px，不留空白 */
+#btChart { width: 100%; height: 432px; min-width: 0; }  /* K线 300 + 量 60 + 日期标签 + 滑块 = 432px，不留空白 */
 
 /* 大盘指数窗口 */
 .bt-index-body {
@@ -144,24 +144,12 @@
   width: 180px;
   flex-shrink: 0;
 }
-.bt-index-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 12px;
-  background: var(--bg-subtle, #f5f7fa);
-  border: 1px solid var(--border-color, #e3e6ed);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  white-space: nowrap;
-  overflow-x: auto;
-}
-.bt-index-title { font-size: 14px; font-weight: 600; color: var(--color-blue, #4361ee); white-space: nowrap; }
+/* 指数图标题栏已移除（标题移入右侧数据栏），以下样式不再使用 */
 .bt-index-meta { font-size: 12px; color: var(--text-secondary, #666); font-family: monospace; white-space: nowrap; }
+/* 指数图不再是"标题栏 + 图表"拼接，因此恢复四角圆角与完整边框 */
 #btChartIndex {
   border: 1px solid var(--border-color, #e3e6ed);
-  border-top: none;
-  border-radius: 0 0 8px 8px;
+  border-radius: 8px;
 }
 
 /* 横向布局：K线主图 + 右侧操作栏 */
@@ -201,6 +189,19 @@
   margin-bottom: 4px;
   text-transform: uppercase;
   font-weight: 600;
+}
+/* 面板标题里的补充信息（标的名称 / 指数名称）：正常大小写、更醒目一点 */
+.bt-actionbar .bt-cursor .bt-panel-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-blue, #4361ee);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .bt-actionbar .bt-cursor .bt-cursor-date {
   font-size: 13px;
@@ -380,10 +381,13 @@
   min-width: 0;
 }
 
-/* 右侧指标卡：竖排单列（原为底部通栏网格） */
-.bt-stats-side {
+/* 右侧指标卡：单列竖排（按用户要求，原为两列）
+   ★ 注意元素同时带 .bt-stats 与 .bt-stats-side 两个类，而 .bt-stats 的
+   grid-template-columns 定义在下方、特异性相同会覆盖本规则，
+   因此这里用 .bt-stats.bt-stats-side 提高特异性确保单列生效。 */
+.bt-stats.bt-stats-side {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin-bottom: 0;
 }
@@ -398,7 +402,7 @@
   .bt-main-layout { flex-direction: column; }
   .bt-main-left { flex: 1 1 auto; max-width: none; width: 100%; }
   .bt-main-right { width: 100%; }
-  .bt-stats-side { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .bt-stats.bt-stats-side { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 }
 
 .bt-stats {
@@ -561,18 +565,15 @@
     <div class="bt-main-left">
 
   <!-- 大盘指数走势图（上方窗口，与主图同步缩放）-->
-  <!-- 与主图共用 .bt-chart-wrap 布局：左侧 K线 + 右侧 180px 指数数据栏（跟主图完全对称）-->
+  <!-- 标题移到右侧数据栏顶部（原本独占一条横栏，占高度且与数据栏重复）-->
   <div class="bt-chart-wrap bt-index-section" id="btIndexSection" style="margin-bottom: 8px;">
     <div class="bt-index-body">
-      <div class="bt-index-head">
-        <span class="bt-index-title" id="indexTitle">📈 上证指数</span>
-      </div>
-      <div id="btChartIndex" style="width: 100%; height: 462px;"></div>
+      <div id="btChartIndex" style="width: 100%; height: 432px;"></div>
     </div>
     <!-- 指数 K线 数据栏（在指数图右边，与主图操作栏对称）-->
     <div class="bt-actionbar bt-index-actionbar" aria-label="指数数据栏">
       <div class="bt-cursor" id="idxPanel">
-        <div class="bt-panel-title">指数 K线</div>
+        <div class="bt-panel-title" id="indexTitle">📈 上证指数</div>
         <div class="bt-cursor-date" id="idxDate">--</div>
         <div class="bt-cursor-ohlc">
           <div><span>开</span><b id="idxOpen">--</b></div>
@@ -594,7 +595,8 @@
     <!-- 右侧：只放光标 K线 数据（与指数图右侧数据栏对称等高） -->
     <div class="bt-actionbar bt-cursor-bar">
       <div class="bt-cursor" id="curPanel">
-        <div class="bt-panel-title">标的 K线</div>
+        <!-- 标的名称（如 sh600000 浦发银行），加载后由 BT_updateCursorDisplay 填充 -->
+        <div class="bt-panel-title">标的 K线<span class="bt-panel-sub" id="curSymbolName"></span></div>
         <div class="bt-cursor-date" id="curDate">--</div>
         <div class="bt-cursor-ohlc">
           <div><span>开</span><b id="curOpen">--</b></div>
@@ -736,8 +738,8 @@
 
 <!-- 回测专用模块（顺序：交易 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=8"></script>
-<script src="js/backtest-chart.js?v=87"></script>
-<script src="js/backtest-main.js?v=33"></script>
+<script src="js/backtest-chart.js?v=88"></script>
+<script src="js/backtest-main.js?v=34"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

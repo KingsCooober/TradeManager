@@ -339,12 +339,12 @@ function BT_getBaseOption() {
       label: { backgroundColor: 'transparent', color: 'transparent', borderWidth: 0 }
     },
     grid: [
-      { left: 60, right: 30, top: 18,   height: 320 },   // K线 320px
-      { left: 60, right: 30, top: 343,  height: 70 },    // 成交量 70px（日期标签显示在其下方）
+      { left: 60, right: 30, top: 18,   height: 300 },   // K线 300px
+      { left: 60, right: 30, top: 323,  height: 60 },    // 成交量 60px（日期标签显示在其下方）
       // MACD 与资金曲线均已移除：grid[2]/grid[3] 保留占位（height 0）以维持
       // series/xAxis/yAxis 索引稳定（指数图复用本 option，按下标访问，删元素会错位）
-      { left: 60, right: 30, top: 413,  height: 0 },
-      { left: 60, right: 30, top: 413,  height: 0 }
+      { left: 60, right: 30, top: 383,  height: 0 },
+      { left: 60, right: 30, top: 383,  height: 0 }
     ],
     xAxis: [
       { type: 'category', data: [], gridIndex: 0, scale: true, boundaryGap: false,
@@ -367,9 +367,11 @@ function BT_getBaseOption() {
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
         axisLabel: { color: isDark ? '#aaa' : '#666' },
         splitLine: { lineStyle: { color: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' } } },
+      // 成交量：按用户要求不再显示纵轴数值（避免与上方价格轴标签挤在一起）
+      //   仍保留 min:0 / splitNumber 以维持柱状图的缩放基准
       { gridIndex: 1, min: 0, splitNumber: 2,
         axisLine: { lineStyle: { color: isDark ? '#555' : '#ccc' } },
-        axisLabel: { color: isDark ? '#aaa' : '#666', fontSize: 10 },
+        axisLabel: { show: false },
         splitLine: { show: false } },
       // 第 3 个 yAxis 原属 MACD，现已隐藏（保留占位维持索引稳定）
       { gridIndex: 2, show: false,
@@ -808,9 +810,9 @@ function BT_updateVisibleGrids() {
   if (!BT_chart) return;
   var showVol    = BT_showFlags.vol;
 
-  // 固定像素高度（与 #btChart { height: 462px } 配套：18+320+5+70+日期标签~14+滑块24+底部留白 ≈ 462）
-  var KLINE_PX  = 320;   // K线主图
-  var VOL_PX    = 70;    // 成交量
+  // 固定像素高度（与 #btChart { height: 432px } 配套：18+300+5+60+日期标签~14+滑块24+底部留白 ≈ 432）
+  var KLINE_PX  = 300;   // K线主图
+  var VOL_PX    = 60;    // 成交量
   var GAP = 5;           // 子图间 gap
   var TOP_PX = 18;       // 顶部 18px 留白（容 Y轴 label）
 
@@ -1172,6 +1174,14 @@ function BT_updateCursorDisplay() {
     if (el) el.textContent = text;
   };
   set('curDate', dates[idx]);
+  // 标的名称（如 浦发银行）：加载数据时由后端返回，显示在面板标题下
+  var nameEl = document.getElementById('curSymbolName');
+  if (nameEl) {
+    var symTxt = (typeof BT_currentSymbol !== 'undefined' && BT_currentSymbol) ? BT_currentSymbol : '';
+    var nm = (typeof BT_currentSymbolName !== 'undefined' && BT_currentSymbolName) ? BT_currentSymbolName : '';
+    var label = nm ? (nm + (symTxt ? ' ' + symTxt : '')) : (symTxt || '');
+    nameEl.textContent = label;
+  }
   set('curOpen',  _fmt(ohlc[0], 2));
   set('curClose', _fmt(ohlc[1], 2));
   // ★ ohlc 数组顺序是 [open, close, low, high]（见 server/market-quote.js:596），
@@ -1474,14 +1484,14 @@ function BT_initIndexChart() {
   if (!dom) return;
   BT_indexChart = echarts.init(dom, null, { renderer: 'canvas' });
   var baseOption = BT_getBaseOption();
-  // 调整 grid 比例：K线 320 / 量 70（绝对像素，容器 462px，与主图 #btChart 同高）
-  //   10 + 320 + 5 + 70 + 日期标签 ~14 + 底部留白 ~43 = 462
+  // 调整 grid 比例：K线 300 / 量 60（绝对像素，容器 432px，与主图 #btChart 同高）
+  //   10 + 300 + 5 + 60 + 日期标签 ~14 + 底部留白 ~43 = 432
   //   MACD 已移除：grid[2] 收起；grid[3]（原资金）保持隐藏占位
   baseOption.grid = [
-    { left: 50, right: 20, top: 10,   height: 320 },   // K线 320px
-    { left: 50, right: 20, top: 335,  height: 70 },    // 成交量 70px（日期标签显示在其下方）
-    { left: 50, right: 20, top: 405,  height: 0 },     // MACD（隐藏占位）
-    { left: 50, right: 20, top: 405,  height: 0 }      // 资金曲线（隐藏占位）
+    { left: 50, right: 20, top: 10,   height: 300 },   // K线 300px
+    { left: 50, right: 20, top: 315,  height: 60 },    // 成交量 60px（日期标签显示在其下方）
+    { left: 50, right: 20, top: 375,  height: 0 },     // MACD（隐藏占位）
+    { left: 50, right: 20, top: 375,  height: 0 }      // 资金曲线（隐藏占位）
   ];
   // MACD 与资金曲线的 yAxis/xAxis 均隐藏
   baseOption.yAxis[2] = Object.assign({}, baseOption.yAxis[2], { show: false });
