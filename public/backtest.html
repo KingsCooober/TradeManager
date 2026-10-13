@@ -126,7 +126,11 @@
   padding: 8px;
   margin-bottom: 12px;
 }
-#btChart { width: 100%; height: 432px; min-width: 0; }  /* K线 300 + 量 60 + 日期标签 + 滑块 = 432px，不留空白 */
+/* K线图高度由 BT_fitChartHeights() 按视口剩余空间设置（原来写死 432px，
+   两张图 864px 加上下边距使页面总高 1474px，交易栏被推到首屏外，
+   表现为"点了上一根/下一根没反应"——其实是点到了页面外）。
+   这里给出最小值兜底，真实高度在 JS 里算。 */
+#btChart { width: 100%; min-width: 0; min-height: 240px; }
 
 /* 大盘指数窗口 */
 .bt-index-body {
@@ -150,6 +154,7 @@
 #btChartIndex {
   border: 1px solid var(--border-color, #e3e6ed);
   border-radius: 8px;
+  min-height: 240px;   /* 真实高度由 BT_fitChartHeights() 计算 */
 }
 
 /* 横向布局：K线主图 + 右侧操作栏 */
@@ -157,7 +162,12 @@
   display: flex;
   gap: 12px;
   margin-bottom: 12px;
-  align-items: flex-start;
+  /* ★ 由图表高度决定 wrap 高度，而不是反过来。
+    以前是 flex-start + 右侧数据栏(align-self:stretch)可能比图表高，
+    wrap 就被撑高，实测多出 18px，把交易栏继续往首屏外推。
+    现在 stretch 让 wrap 高度 = max(图表, 侧栏)，而侧栏是 align-self 里的
+    弹性布局、不会超过图表设定好的高度。 */
+  align-items: stretch;
 }
 
 .bt-actionbar {
@@ -370,11 +380,19 @@
      右列随之拉伸，9 张指标卡等分填满，底部不留空白 */
   align-items: stretch;
   margin-bottom: 12px;
+  min-height: 0;
 }
 .bt-main-left {
   /* 左侧图表列自适应：占满"总宽 - 右侧固定指标栏"，指标栏收窄后图表自然变宽 */
   flex: 1 1 auto;
   min-width: 0;
+  /* ★ 允许纵向收缩：以前两张图各写死 432px、左列固定 979px，页面总高
+     1474px，任何视口都要滚 374px，"上一根/下一根"被推到首屏外 ——
+     用户点了没反应，实际是点到滚动条/页面空白处。
+     现在高度交给 JS 按视口剩余空间算（BT_fitChartHeights）。 */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .bt-main-right {
   /* 右侧指标栏：固定窄宽度（数字不长，无需更宽），
@@ -585,7 +603,7 @@
   <!-- 标题移到右侧数据栏顶部（原本独占一条横栏，占高度且与数据栏重复）-->
   <div class="bt-chart-wrap bt-index-section" id="btIndexSection" style="margin-bottom: 8px;">
     <div class="bt-index-body">
-      <div id="btChartIndex" style="width: 100%; height: 432px;"></div>
+      <div id="btChartIndex" style="width: 100%;"></div>
     </div>
     <!-- 指数 K线 数据栏（在指数图右边，与主图操作栏对称）-->
     <div class="bt-actionbar bt-index-actionbar" aria-label="指数数据栏">
@@ -755,8 +773,8 @@
 
 <!-- 回测专用模块（顺序：交易 → 十字光标 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=8"></script>
-<script src="js/backtest-crosshair.js?v=4"></script>
-<script src="js/backtest-chart.js?v=93"></script>
+<script src="js/backtest-crosshair.js?v=5"></script>
+<script src="js/backtest-chart.js?v=94"></script>
 <script src="js/backtest-main.js?v=36"></script>
 
 <script>

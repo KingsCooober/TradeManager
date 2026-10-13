@@ -312,6 +312,15 @@ function BT_init() {
     setTimeout(function() { BT_loadData(/*silent*/ true); }, 50);
   }
 
+  // 12.1) 按视口高度计算图表高度（保证交易栏的「上一根/下一根」按钮
+  //       始终在首屏内 —— 以前写死 432px×2 会把按钮挤出首屏，
+  //       用户点了没反应，实际是点到了页面外）
+  if (typeof BT_fitChartHeights === 'function') {
+    BT_fitChartHeights();
+    // 字体/布局晚一帧才稳定，再补一次
+    setTimeout(function() { BT_fitChartHeights(); }, 100);
+  }
+
   // 13) 页面隐藏/卸载前把防抖中的状态立即落盘（否则最后一次操作会丢）
   window.addEventListener('pagehide', BT_saveStateNow);
   window.addEventListener('beforeunload', BT_saveStateNow);

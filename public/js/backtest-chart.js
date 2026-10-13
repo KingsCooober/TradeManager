@@ -1081,20 +1081,28 @@ function BT_updateVisibleGrids() {
   if (!BT_chart) return;
   var showVol    = BT_showFlags.vol;
 
-  // 固定像素高度（与 #btChart { height: 432px } 配套：18+300+5+60+日期标签~14+滑块24+底部留白 ≈ 432）
-  var KLINE_PX  = 300;   // K线主图
-  var VOL_PX    = 60;    // 成交量
-  var GAP = 5;           // 子图间 gap
-  var TOP_PX = 18;       // 顶部 18px 留白（容 Y轴 label）
+  // ★ 高度不再写死 432/300/60，而是按当前容器高度等比分配。
+  //   原因：以前容器固定 432px，两张图 864px 加边距让页面总高 1474px，
+  //   任何视口都要滚动才能点到交易栏的「上一根/下一根」按钮 ——
+  //   用户反馈"点了没反应"，其实是点到了首屏外。
+  //   现在容器高度由 BT_fitChartHeights() 按视口剩余空间设定，
+  //   这里只负责把该高度拆分给 K线 / 成交量两块。
+  var H = BT_chart.getHeight() || 432;
+  // 预留：顶部 18（y 轴标签）+ 底部约 38（x 轴日期标签 + 底部留白）
+  var TOP_PX = 18;
+  var BOTTOM_PX = 38;
+  var usable = Math.max(180, H - TOP_PX - BOTTOM_PX);
+  var showVolPx = showVol;
+  var GAP = showVolPx ? 5 : 0;
+  var VOL_PX = showVolPx ? Math.round(usable * 0.16) : 0;   // 成交量约占 16%
+  var KLINE_PX = usable - GAP - VOL_PX;
 
-  // 关键：当某个 subplot 隐藏时，下方 grid 要顶上来填空白
   var mainTop = TOP_PX;
   var volTop  = mainTop + KLINE_PX + GAP;
-  // MACD 与资金曲线均已移除，主图只有 K线 + 成交量两段
-  var bottomY = volTop + (showVol ? VOL_PX : 0);
+  var bottomY = volTop + (showVolPx ? VOL_PX : 0);
 
-  var volGrid = showVol ? { left: 60, right: 30, top: volTop, height: VOL_PX }
-                        : { top: mainTop + KLINE_PX, height: 0 };
+  var volGrid = showVolPx ? { left: 60, right: 30, top: volTop, height: VOL_PX }
+                          : { top: mainTop + KLINE_PX, height: 0 };
   // grid[2]/grid[3] 始终 height 0（保留占位维持 series/xAxis/yAxis 索引稳定）
   var macdGrid   = { top: bottomY, height: 0 };
   var equityGrid = { top: bottomY, height: 0 };
@@ -1395,6 +1403,8 @@ function BT_toggleShowIndex() {
     section.style.display = enabled ? '' : 'none';
   }
   // 隐藏/显示后 ECharts 容器尺寸变化，需要 resize
+  // ★ 必须先重算图表高度（指数图隐藏后主图可以独享空间），再 resize 才准确
+  BT_scheduleFitChartHeights();
   if (BT_chart) {
     setTimeout(function() { BT_chart.resize(); }, 50);
   }
@@ -1417,8 +1427,96 @@ function BT_toggleShowIndex() {
   }
 }
 
+// ===== 图表高度自适应（保证「上一根/下一根」按钮始终在首屏内）=====
+// 以前两张图各写死 432px，左列 979px，页面总高 1474px —— 任何视口都要滚动，
+// 交易栏被推到首屏外，用户点按钮"没反应"（实际点在页面外）。
+// 现在按视口剩余空间反算图表高度：优先保证交易栏 + 控制栏完整可见。
+var BT_MIN_CHART_H = 240;      // 图表最小高度（低于此高度 K 线就看不清了）
+var BT_MAX_CHART_H = 432;      // 图表最大高度（高于此宽度收益递减）
+var _fitRafId = null;
+
+function BT_fitChartHeights() {
+  var wrapIdx = document.getElementById('btIndexSection');
+  var domIdx = document.getElementById('btChartIndex');
+  var domMain = document.getElementById('btChart');
+  if (!domIdx || !domMain) return;
+
+  // 可用高度 = 视口 - 头部 - 控制栏 - 交易栏 - 底部两个列表各自的外边距
+  // 关键：左右两列的数据栏**不允许**撑高 wrap，所以这里直接把侧栏高度锁死，
+  // 由 JS 设定的图表高度唯一决定布局高度。
+  var vh = window.innerHeight || 800;
+  var top = 0;
+  var el;
+  el = document.getElementById('appHeader');      if (el) top += el.getBoundingClientRect().height;
+  el = document.querySelector('.bt-controlbar');  if (el) top += el.getBoundingClientRect().height + 12;
+  var tradebar = document.querySelector('.bt-tradebar');
+  var tradebarH = tradebar ? tradebar.getBoundingClientRect().height : 51;
+  var bottom = 24 + 12;   // .bt-page 底部内边距 + .bt-main-layout 外边距
+
+  var idxVisible = !!(wrapIdx && wrapIdx.style.display !== 'none');
+  var slots = idxVisible ? 2 : 1;
+  // .bt-chart-wrap 自身有 1px border + 8px padding（上下共 18px）会把图表撑高，
+  // 图表设定 240px 时整个 wrap 实际 258px。这里用真实 chrome 高度修正。
+  var chrome = 0;
+  if (wrapIdx) {
+    var cs = getComputedStyle(wrapIdx);
+    var bt = parseFloat(cs.borderTopWidth) || 0;
+    var bb = parseFloat(cs.borderBottomWidth) || 0;
+    var pt = parseFloat(cs.paddingTop) || 0;
+    var pb = parseFloat(cs.paddingBottom) || 0;
+    chrome = bt + bb + pt + pb;
+  }
+  var mainWrap = domMain.parentNode;
+  if (mainWrap && mainWrap !== wrapIdx) {
+    var cs2 = getComputedStyle(mainWrap);
+    chrome = Math.max(chrome, (parseFloat(cs2.borderTopWidth) || 0) + (parseFloat(cs2.borderBottomWidth) || 0) +
+      (parseFloat(cs2.paddingTop) || 0) + (parseFloat(cs2.paddingBottom) || 0));
+  }
+  var mbIdx = wrapIdx ? (parseFloat(getComputedStyle(wrapIdx).marginBottom) || 0) : 0;
+  var mbMain = mainWrap ? (parseFloat(getComputedStyle(mainWrap).marginBottom) || 0) : 0;
+  var gap = mbIdx + mbMain;
+
+  var avail = vh - top - tradebarH - bottom - gap - chrome * slots;
+  var each = Math.floor(avail / slots);
+  each = Math.max(BT_MIN_CHART_H, Math.min(BT_MAX_CHART_H, each));
+
+  // 侧栏锁死到图表高度，防止内容把 wrap 撑高
+  ['.bt-index-actionbar', '.bt-cursor-bar'].forEach(function (sel) {
+    var bars = document.querySelectorAll(sel);
+    for (var i = 0; i < bars.length; i++) {
+      bars[i].style.maxHeight = each + 'px';
+      bars[i].style.height = each + 'px';
+    }
+  });
+
+  var changed = false;
+  if (domIdx.style.height !== each + 'px') { domIdx.style.height = each + 'px'; changed = true; }
+  if (domMain.style.height !== each + 'px') { domMain.style.height = each + 'px'; changed = true; }
+  if (!changed) return;
+
+  if (BT_chart) { BT_chart.resize(); BT_updateVisibleGrids(); }
+  if (BT_indexChart) {
+    BT_indexChart.resize();
+    if (typeof BT_updateIndexGrids === 'function') BT_updateIndexGrids();
+  }
+  if (typeof BT_paintCrosshair === 'function') BT_paintCrosshair();
+}
+
+// 防抖：resize 期间连续触发，合并到一帧
+function BT_scheduleFitChartHeights() {
+  if (_fitRafId != null) return;
+  var raf = (typeof requestAnimationFrame === 'function')
+    ? requestAnimationFrame
+    : function (cb) { return setTimeout(cb, 16); };
+  _fitRafId = raf(function () {
+    _fitRafId = null;
+    BT_fitChartHeights();
+  });
+}
+
 // 窗口尺寸变化时重排
 window.addEventListener('resize', function() {
+  BT_scheduleFitChartHeights();
   if (BT_chart) BT_chart.resize();
   // 图表容器尺寸变了，十字光标覆盖层需同步（否则拉伸/偏移会错位）
   if (typeof BT_crosshair !== 'undefined' && BT_crosshair.redraw) BT_crosshair.redraw();
@@ -1689,12 +1787,12 @@ function BT_initIndexChart() {
   if (!dom) return;
   BT_indexChart = echarts.init(dom, null, { renderer: 'canvas' });
   var baseOption = BT_getBaseOption();
-  // 调整 grid 比例：K线 300 / 量 60（绝对像素，容器 432px，与主图 #btChart 同高）
-  //   10 + 300 + 5 + 60 + 日期标签 ~14 + 底部留白 ~43 = 432
+  // grid 高度不写死：由 BT_updateIndexGrids() 按容器实际高度拆分
+  //   （以前写死 300/60，容器固定 432px，两张图把交易栏挤出首屏）
   //   MACD 已移除：grid[2] 收起；grid[3]（原资金）保持隐藏占位
   baseOption.grid = [
-    { left: 50, right: 20, top: 10,   height: 300 },   // K线 300px
-    { left: 50, right: 20, top: 315,  height: 60 },    // 成交量 60px（日期标签显示在其下方）
+    { left: 50, right: 20, top: 10,   height: 300 },   // K线（随后按容器高度重算）
+    { left: 50, right: 20, top: 315,  height: 60 },    // 成交量（同上）
     { left: 50, right: 20, top: 375,  height: 0 },     // MACD（隐藏占位）
     { left: 50, right: 20, top: 375,  height: 0 }      // 资金曲线（隐藏占位）
   ];
@@ -1713,6 +1811,29 @@ function BT_initIndexChart() {
   // 4th arg：hover 索引回传 → 驱动主图光标 + 两侧数据栏（两图同步）
   BT_attachCrosshair('btChartIndex', BT_indexChart, false, function (idx) {
     BT_hoverSyncFrom(idx, 'index');
+  });
+  // 按当前容器高度拆分 grid
+  BT_updateIndexGrids();
+}
+
+// 指数图 grid 高度拆分（容器高度由 BT_fitChartHeights 设定）
+function BT_updateIndexGrids() {
+  if (!BT_indexChart) return;
+  var H = BT_indexChart.getHeight() || 432;
+  var TOP_PX = 10;
+  var BOTTOM_PX = 34;   // x 轴日期标签 + 底部留白
+  var usable = Math.max(160, H - TOP_PX - BOTTOM_PX);
+  var GAP = 5;
+  var VOL_PX = Math.round(usable * 0.16);
+  var KLINE_PX = Math.max(80, usable - GAP - VOL_PX);
+  var volTop = TOP_PX + KLINE_PX + GAP;
+  BT_indexChart.setOption({
+    grid: [
+      { left: 50, right: 20, top: TOP_PX,  height: KLINE_PX },
+      { left: 50, right: 20, top: volTop,  height: VOL_PX },
+      { left: 50, right: 20, top: volTop + VOL_PX, height: 0 },
+      { left: 50, right: 20, top: volTop + VOL_PX, height: 0 }
+    ]
   });
 }
 

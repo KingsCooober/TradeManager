@@ -410,11 +410,19 @@ test.describe('12 - 回测练习页', () => {
       const mainH = await page.evaluate(() => Math.round(document.getElementById('btChart').getBoundingClientRect().height));
       const idxH = await page.evaluate(() => Math.round(document.getElementById('btChartIndex').getBoundingClientRect().height));
 
-      expect(mainH).toBe(idxH);
-      expect(s.mainGrid[0].height).toBe(300);
-      expect(s.mainGrid[1].height).toBe(60);
-      expect(s.idxGrid[0].height).toBe(300);
-      expect(s.idxGrid[1].height).toBe(60);
+      // ★ 高度不再写死 432/300/60：改为按视口剩余空间自适应
+      //   （写死会让交易栏的「上一根/下一根」被挤出首屏，用户点不到）。
+      //   这里断言"两图等高 + 高度在合理区间 + grid 按容器高度等比分配"。
+      expect(mainH, '两图应等高').toBe(idxH);
+      expect(mainH, '图表高度应在 [240, 432] 内').toBeGreaterThanOrEqual(240);
+      expect(mainH, '图表高度不应超过上限').toBeLessThanOrEqual(432);
+
+      // grid[0]（K线）+ grid[1]（成交量）应铺满容器扣掉上下留白后的可用高度
+      const klineH = s.mainGrid[0].height;
+      const volH = s.mainGrid[1].height;
+      expect(klineH, 'K线区应占大部分高度').toBeGreaterThan(volH * 2);
+      expect(klineH + volH, 'K线 + 成交量 应接近容器高度').toBeLessThanOrEqual(mainH);
+      expect(klineH + volH, '不应在容器里留大片空白').toBeGreaterThan(mainH - 80);
     });
 
     test('K 线数据应完好（candlestick 四元数组，未被其它 series 覆盖）', async ({ page }) => {
@@ -445,6 +453,35 @@ test.describe('12 - 回测练习页', () => {
       expect(st.leftWidth, '左列应占据大部分宽度').toBeGreaterThan(st.rightWidth * 3);
       expect(st.topAligned, '两栏顶部对齐').toBe(true);
       expect(st.bottomAligned, '两栏底部等高').toBe(true);
+    });
+
+    // 回归：交易栏（「上一根/下一根」按钮）必须在首屏内可见
+    //（修复前两张图各写死 432px，左列 979px，页面总高 1474px，
+    //  按钮被推到 y=1126；窗口高度 < 1160 时用户点了"没反应"，
+    //  实际是点到首屏外的滚动条/空白处）
+    test('「上一根/下一根」按钮应在首屏内可见（无需滚动）', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page, { viewport: { width: 1800, height: 1000 } });
+      await bt.loadData();
+      await page.waitForTimeout(400);
+
+      const r = await page.evaluate(() => {
+        const b = (id) => {
+          const el = document.getElementById(id);
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom };
+        };
+        return {
+          vh: window.innerHeight,
+          next: b('btnNextBar'),
+          prev: b('btnPrevBar'),
+          buy: b('btnBuy'),
+        };
+      });
+
+      expect(r.next.bottom, '「下一根」按钮应在首屏内').toBeLessThanOrEqual(r.vh);
+      expect(r.prev.bottom, '「上一根」按钮应在首屏内').toBeLessThanOrEqual(r.vh);
+      expect(r.buy.bottom, '「买入」按钮应在首屏内').toBeLessThanOrEqual(r.vh);
     });
 
     test('交易底栏应为单行，仓位与按钮靠右且顺序正确', async ({ page }) => {
