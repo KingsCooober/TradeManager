@@ -206,6 +206,8 @@
           hide(inst); return;
         }
         onHover(idx);
+        // 回传给页面：驱动另一张图的光标与两侧数据栏（两图互相同步）
+        if (typeof o.onHoverIdx === 'function') o.onHoverIdx(idx);
       };
       zr.on('mousemove', onZrMove);
       inst.onZrMove = onZrMove;
@@ -245,6 +247,21 @@
   global.BT_crosshair = {
     attach: attach,
     detach: detach,
+    /**
+     * 由外部（例如另一张图 hover 时）指定下标绘制光标。
+     * 只画线，不回调 onHover / onHoverIdx，避免两图互相触发形成死循环。
+     */
+    drawAt: function (domId, idx) {
+      var inst = instances[domId];
+      if (!inst || idx == null || isNaN(idx)) return;
+      syncSize(inst);
+      draw(inst, idx, inst.getOpts() || {});
+    },
+    /** 隐藏指定图表的光标 */
+    hideAt: function (domId) {
+      var inst = instances[domId];
+      if (inst) hide(inst);
+    },
     /** 容器尺寸变化后同步所有已绑定图表的 overlay 尺寸并重绘 */
     redraw: function () {
       Object.keys(instances).forEach(function (k) {

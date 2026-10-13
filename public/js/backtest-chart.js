@@ -54,6 +54,23 @@ function BT_scheduleCursorRender() {
   });
 }
 
+/**
+ * 主图光标位置变更入口（hover / 两图同步共用同一条链路）
+ * 只更新状态并排期渲染，不直接动 DOM —— 渲染统一收敛到下一帧。
+ *
+ * ★ 说明：本函数必须定义在顶层（而非 BT_initChart 内部闭包），
+ *   否则指数图 hover → BT_hoverSyncFrom → 驱动主图数据栏这条链路会断开。
+ */
+function BT_onCursorMove(idx) {
+  if (idx == null || !BT_klineData) return;
+  if (!(idx >= 0 && idx < BT_klineData.dates.length)) return;
+  if (idx === BT_currentIdx) return;
+  BT_currentIdx = idx;
+  BT_currentDate = BT_klineData.dates[idx];
+  BT_currentClose = BT_klineData.ohlc[idx][1];
+  BT_scheduleCursorRender();
+}
+
 // K 线显示根数：改为固定档位（只允许 90 / 120，默认 90），不再支持连续缩放。
 //   ★ 原为 20~350 连续缩放（+/- 按钮 + 比例锁定），按用户要求取消，
 //     因为窗口宽度固定后，"看多少根"只需两档即可，缩放反而增加误操作。
@@ -145,15 +162,6 @@ function BT_initChart() {
   //
   // ★ 性能：鼠标移动频率远高于渲染帧率，统一收敛到一个 rAF 合并处理器，
   //   一帧内无论触发多少次，只渲染一次。
-  function BT_onCursorMove(idx) {
-    if (idx == null || !BT_klineData) return;
-    if (!(idx >= 0 && idx < BT_klineData.dates.length)) return;
-    if (idx === BT_currentIdx) return;
-    BT_currentIdx = idx;
-    BT_currentDate = BT_klineData.dates[idx];
-    BT_currentClose = BT_klineData.ohlc[idx][1];
-    BT_scheduleCursorRender();
-  }
 
   // 主驱动：zrender mousemove → offsetX 换算索引
   var _zrMain = BT_chart.getZr();
@@ -247,7 +255,10 @@ function BT_initChart() {
   BT_setupCustomTooltip();
 
   // 十字光标（自绘 canvas 覆盖层；ECharts 内置 axisPointer 在 tooltip.show=false 下不生效）
-  BT_attachCrosshair('btChart', BT_chart, true);
+  // 4th arg：hover 索引回传 → 驱动指数图光标 + 两侧数据栏（两图同步）
+  BT_attachCrosshair('btChart', BT_chart, true, function (idx) {
+    BT_hoverSyncFrom(idx, 'main');
+  });
 }
 
 /**
@@ -256,7 +267,7 @@ function BT_initChart() {
  * @param {object} chart ECharts 实例
  * @param {boolean} isMain 主图（成交量在最底部）；指数图无成交量，绘图区只到 K线底部
  */
-function BT_attachCrosshair(domId, chart, isMain) {
+function BT_attachCrosshair(domId, chart, isMain, onHoverIdx) {
   if (typeof BT_crosshair === 'undefined') return;
   BT_crosshair.attach(domId, chart, function () {
     var opt = chart.getOption();
@@ -284,8 +295,96 @@ function BT_attachCrosshair(domId, chart, isMain) {
       // 不可见 K 线，导致"没有 K 线的地方也出现光标"。以它作为下界钳制。
       minIdx: chart.convertFromPixel({ xAxisIndex: 0 }, left),
       maxIdx: chart.convertFromPixel({ xAxisIndex: 0 }, right),
-      data: (isMain ? window.BT_klineData : window.BT_indexData)
+      data: (isMain ? window.BT_klineData : window.BT_indexData),
+      // onHoverIdx：让本图 hover 出的索引回传给共享光标状态，
+      //   从而驱动另一张图的光标 + 两侧数据栏（两图互相同步）
+      onHoverIdx: onHoverIdx || null
     };
+  });
+}
+
+/**
+ * 两张图共享的光标同步：任一图 hover 到某根 K 线，
+ * 另一张图的光标与两侧数据栏都要跟着走。
+ *
+ * @param {number} idx   数据索引
+ * @param {string} from  'main' | 'index' —— 事件来源图
+ */
+function BT_hoverSyncFrom(idx, from) {
+  if (typeof idx !== 'number' || idx < 0) return;
+  if (from === 'main') {
+    // 主图 hover：更新主图光标状态（含两侧数据栏），并把光标同步到指数图
+    if (typeof BT_onCursorMove === 'function') BT_onCursorMove(idx);
+    var iIdx = BT_mapMainIdxToIndex(idx);
+    if (iIdx != null) {
+      BT_crosshairMoveTo('btChartIndex', iIdx);
+    } else {
+      BT_hideCrosshairAt('btChartIndex');
+    }
+  } else {
+    // 指数图 hover：先把指数索引映射回主图索引（两图日期可能不同长），
+    // 再走同一条主图链路，保证两侧数据栏都刷新
+    var mainIdx = BT_mapIndexIdxToMain(idx);
+    if (mainIdx != null) {
+      if (typeof BT_onCursorMove === 'function') BT_onCursorMove(mainIdx);
+      // 主图自身的光标：指数图 hover 时主图没有鼠标事件，必须显式补画
+      BT_crosshairMoveTo('btChart', mainIdx);
+    } else {
+      // 该日期在主图数据里不存在 → 主图光标不应停留在上一根造成误导
+      BT_hideCrosshairAt('btChart');
+    }
+    // 指数图自身的光标 + 指数右栏（用指数的 idx，映射失败也要能显示）
+    BT_crosshairMoveTo('btChartIndex', idx);
+    if (typeof BT_updateIndexInfo === 'function') BT_scheduleIndexInfoRender(idx);
+  }
+}
+
+/**
+ * 把主图索引映射为指数图索引（按日期对齐；找不到返回 null）
+ */
+function BT_mapMainIdxToIndex(idx) {
+  if (!BT_indexData || !BT_klineData) return null;
+  var d = BT_klineData.dates[idx];
+  if (!d) return null;
+  var i = BT_indexData.dates.indexOf(d);
+  return i >= 0 ? i : null;
+}
+
+/**
+ * 把指数图索引映射为主图索引（按日期对齐；找不到就返回 null）
+ */
+function BT_mapIndexIdxToMain(idx) {
+  if (!BT_indexData || !BT_klineData) return null;
+  var d = BT_indexData.dates[idx];
+  if (!d) return null;
+  var i = BT_klineData.dates.indexOf(d);
+  return i >= 0 ? i : null;
+}
+
+/**
+ * 把指定图的光标画到 idx 处（不触发数据栏更新，避免循环）
+ */
+function BT_crosshairMoveTo(domId, idx) {
+  if (typeof BT_crosshair === 'undefined' || !BT_crosshair.drawAt) return;
+  BT_crosshair.drawAt(domId, idx);
+}
+
+/** 隐藏指定图的光标 */
+function BT_hideCrosshairAt(domId) {
+  if (typeof BT_crosshair === 'undefined' || !BT_crosshair.hideAt) return;
+  BT_crosshair.hideAt(domId);
+}
+
+// 指数右栏刷新也走 rAF 合并：与主图右栏同一帧输出，避免 hover 时两栏错帧闪烁
+var _idxInfoRafId = null;
+function BT_scheduleIndexInfoRender(idx) {
+  if (_idxInfoRafId != null) return;
+  var raf = (typeof requestAnimationFrame === 'function')
+    ? requestAnimationFrame
+    : function (cb) { return setTimeout(cb, 16); };
+  _idxInfoRafId = raf(function () {
+    _idxInfoRafId = null;
+    if (typeof BT_updateIndexInfo === 'function') BT_updateIndexInfo(idx);
   });
 }
 
@@ -1290,14 +1389,16 @@ function BT_updateCursorDisplay() {
   // MACD 面板已移除（用户要求）
 }
 
-// 指数图光标位置同步显示（与主图光标 idx 对齐）
-function BT_updateIndexInfo() {
+// 指数图光标位置同步显示（默认与主图光标 idx 对齐）
+// @param {number} forceIdx 明确指定的指数索引（hover 指数图时两图日期不同长，不能盲用主图 idx）
+function BT_updateIndexInfo(forceIdx) {
   if (!BT_indexData || BT_currentIdx == null) return;
-  var idx = BT_currentIdx;
-  if (idx < 0 || idx >= BT_indexData.dates.length) {
+  var idx = forceIdx;
+  if (typeof idx !== 'number' || idx < 0 || idx >= BT_indexData.dates.length) {
     // 指数图根数不够时的兜底：用最后根
-    idx = BT_indexData.dates.length - 1;
+    idx = Math.min(BT_currentIdx, BT_indexData.dates.length - 1);
   }
+  if (idx < 0) idx = 0;
   var ohlc = BT_indexData.ohlc[idx];
   var dates = BT_indexData.dates;
 
@@ -1562,7 +1663,10 @@ function BT_initIndexChart() {
   // 启用指数图的自定义 tooltip
   BT_setupIndexTooltip();
   // 指数图同样绑定自绘十字光标
-  BT_attachCrosshair('btChartIndex', BT_indexChart, false);
+  // 4th arg：hover 索引回传 → 驱动主图光标 + 两侧数据栏（两图同步）
+  BT_attachCrosshair('btChartIndex', BT_indexChart, false, function (idx) {
+    BT_hoverSyncFrom(idx, 'index');
+  });
 }
 
 // 渲染指数图表（接 fetchKLine 的返回数据 → K线 + MA + 成交量 + MACD）

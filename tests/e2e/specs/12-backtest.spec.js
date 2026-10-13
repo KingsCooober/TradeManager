@@ -551,6 +551,67 @@ test.describe('12 - 回测练习页', () => {
       expect(B.idxDate, '指数图右栏也应同步').toBe(B.date);
     });
 
+    // 回归：两图 hover 必须互相驱动（此前只有鼠标所在那张图有光标，
+    //      且指数图 hover 时两侧数据栏完全不刷新，光标与数据都对不上）
+    test('指数图/主图 hover 应双向同步（十字光标 + 两侧数据栏）', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      // 覆盖层像素扫描：虚线有间隙，按 alpha>0 的像素总数判断是否绘制
+      const drawn = (domId) => page.evaluate((id) => {
+        const l = document.querySelector('#' + id + ' .bt-crosshair-layer');
+        if (!l) return -1;
+        const c = l.getContext('2d');
+        const d = c.getImageData(0, 0, l.width, l.height).data;
+        let n = 0;
+        for (let p = 3; p < d.length; p += 4) if (d[p] > 0) n++;
+        return n;
+      }, domId);
+
+      const panel = () => page.evaluate(() => {
+        const t = (id) => { const e = document.getElementById(id); return e ? e.textContent.trim() : null; };
+        return {
+          idx: window.BT_currentIdx,
+          curDate: t('curDate'), idxDate: t('idxDate'),
+          curClose: t('curClose'), idxClose: t('idxClose')
+        };
+      });
+
+      const mainBox = await page.locator('#btChart').boundingBox();
+      const idxBox = await page.locator('#btChartIndex').boundingBox();
+      const CROSS_PX = 200;   // 只有十字线被绘制时才会超过这个量级
+
+      // ---- 方向一：hover 主图 → 指数图光标 + 指数右栏跟随 ----
+      await page.mouse.move(mainBox.x + mainBox.width * 0.30, mainBox.y + mainBox.height * 0.30);
+      await page.waitForTimeout(600);
+      const m1 = await panel();
+      expect((await drawn('btChart')), '主图 hover 时主图应有光标').toBeGreaterThan(CROSS_PX);
+      expect((await drawn('btChartIndex')), 'hover 主图时指数图也应画出光标').toBeGreaterThan(CROSS_PX);
+      expect(m1.curDate && m1.curDate !== '--', '主图右栏日期应填充').toBe(true);
+      expect(m1.idxDate, 'hover 主图时指数右栏也应同步到这个日期').toBe(m1.curDate);
+
+      await page.mouse.move(mainBox.x + mainBox.width * 0.70, mainBox.y + mainBox.height * 0.30);
+      await page.waitForTimeout(600);
+      const m2 = await panel();
+      expect(m2.curDate, '主图右栏应随鼠标切换 K线').not.toBe(m1.curDate);
+      expect(m2.idxDate, '指数右栏应跟着切到同一根').toBe(m2.curDate);
+
+      // ---- 方向二：hover 指数图 → 主图光标 + 两侧数据栏跟随 ----
+      await page.mouse.move(idxBox.x + idxBox.width * 0.20, idxBox.y + idxBox.height * 0.30);
+      await page.waitForTimeout(600);
+      const i1 = await panel();
+      expect((await drawn('btChartIndex')), '指数图 hover 时指数图应有光标').toBeGreaterThan(CROSS_PX);
+      expect((await drawn('btChart')), 'hover 指数图时主图也应画出光标').toBeGreaterThan(CROSS_PX);
+      expect(i1.idxDate && i1.idxDate !== '--', '指数右栏日期应填充').toBe(true);
+      expect(i1.curDate, 'hover 指数图时主图右栏应同步到同一根').toBe(i1.idxDate);
+
+      await page.mouse.move(idxBox.x + idxBox.width * 0.60, idxBox.y + idxBox.height * 0.30);
+      await page.waitForTimeout(600);
+      const i2 = await panel();
+      expect(i2.idxDate, '指数右栏应随鼠标切换 K线').not.toBe(i1.idxDate);
+      expect(i2.curDate, '主图右栏应跟着切到同一根').toBe(i2.idxDate);
+    });
+
     // 回归：清仓确认后立刻连点「下一根」不应丢点击
     //（ui.js 的 showConfirm 淡出动画期间曾有 200ms 仍拦截整屏点击，
     //  导致快速连点被静默吞掉，表现为"下一根只走了一根/步数对不上"）
