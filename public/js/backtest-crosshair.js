@@ -164,7 +164,9 @@
     syncSize(inst);
 
     var onHover = function (idx) {
-      if (idx == null || idx < 0) { hide(inst); return; }
+      // idx 非法时**不清除**：光标常驻，保留上一次的有效位置。
+      // （ECharts 兜底事件里 dataIndex 可能为 undefined，以前会直接把光标清掉。）
+      if (idx == null || idx < 0) { return; }
       var o = inst.getOpts(idx) || {};
       draw(inst, idx, o);
     };
@@ -185,25 +187,28 @@
         var o = inst.getOpts() || {};
         var idx = chart.convertFromPixel({ xAxisIndex: 0 }, offX);
         // convertFromPixel 可能返回小数，取整并做边界校验
-        if (idx == null || isNaN(idx)) { hide(inst); return; }
+        if (idx == null || isNaN(idx)) { return; }
         idx = Math.round(idx);
         // ★ 边界钳制：鼠标落在绘图区**之外**（左侧 y 轴刻度、右侧留白、
         //   底部缩放滑块等）时，convertFromPixel 仍会换算出一个索引，
         //   导致"没有 K 线的地方也出现光标，显示范围与实际可见 K 线不一致"。
-        //   此处按绘图区实际覆盖的索引区间钳制，越界直接隐藏光标。
+        //
+        //   ★ 这里改为"忽略本次移动"而不是"隐藏光标"：光标常驻语义下，
+        //     鼠标只是路过图外（例如去点右上角按钮），光标应停在原位，
+        //     而不是闪一下消失。真正需要清除的场景只有数据/窗口变更。
         if (o.plotLeft != null && o.plotRight != null) {
-          if (offX < o.plotLeft || offX > o.plotRight) { hide(inst); return; }
+          if (offX < o.plotLeft || offX > o.plotRight) { return; }
         }
         if (o.minIdx != null && o.maxIdx != null &&
             !isNaN(o.minIdx) && !isNaN(o.maxIdx)) {
           var lo = Math.min(o.minIdx, o.maxIdx);
           var hi = Math.max(o.minIdx, o.maxIdx);
-          if (idx < lo || idx > hi) { hide(inst); return; }
+          if (idx < lo || idx > hi) { return; }
         }
         // ★ 纵向同理：底部 dataZoom 滑块不在 K 线区域内，
-        //   指针在那里时应让位给拖动手势，不再叠加十字光标。
+        //   指针在那里时应让位给拖动手势，光标保持在原位
         if (offY != null && o.plotBottom != null && offY > o.plotBottom) {
-          hide(inst); return;
+          return;
         }
         onHover(idx);
         // 回传给页面：驱动另一张图的光标与两侧数据栏（两图互相同步）
@@ -212,7 +217,11 @@
       zr.on('mousemove', onZrMove);
       inst.onZrMove = onZrMove;
       // zrender 的 globalout 同样需要独立解绑
-      zr.on('globalout', function () { hide(inst); });
+      // ★ 不再在 globalout 里直接 hide：光标要常驻（鼠标移出后仍显示当前位置）。
+      //   这里只做一个"重新绘制"，把可能因尺寸变化/主题切换造成的残影清掉。
+      zr.on('globalout', function () {
+        if (typeof global.BT_repaintCrosshair === 'function') global.BT_repaintCrosshair();
+      });
     }
 
     // 仍保留 ECharts 事件作为补充（部分场景下 mousemove / showTip 可用）
@@ -229,8 +238,15 @@
 
     chart.on('updateAxisPointer', onUpdate);
     chart.on('mousemove', onMove);
-    chart.on('globalout', function () { hide(inst); });
-    if (chart.getZr) chart.getZr().on('globalout', function () { hide(inst); });
+    // ★ 同样不在 globalout / mouseout 里清掉光标（光标常驻语义）
+    chart.on('globalout', function () {
+      if (typeof global.BT_repaintCrosshair === 'function') global.BT_repaintCrosshair();
+    });
+    if (chart.getZr) {
+      chart.getZr().on('globalout', function () {
+        if (typeof global.BT_repaintCrosshair === 'function') global.BT_repaintCrosshair();
+      });
+    }
   }
 
   function detach(domId) {
@@ -243,6 +259,12 @@
     if (inst.overlay && inst.overlay.parentNode) inst.overlay.parentNode.removeChild(inst.overlay);
     delete instances[domId];
   }
+
+  // 提供全局重绘入口：光标"常驻"，鼠标移出 / 容器尺寸变化时
+  // 由页面（backtest-chart.js 的 BT_paintCrosshair）决定画在哪里 / 是否隐藏。
+  global.BT_repaintCrosshair = function () {
+    if (typeof global.BT_paintCrosshair === 'function') global.BT_paintCrosshair();
+  };
 
   global.BT_crosshair = {
     attach: attach,
@@ -267,8 +289,9 @@
       Object.keys(instances).forEach(function (k) {
         var inst = instances[k];
         syncSize(inst);
-        hide(inst);
       });
+      // 尺寸同步完再由页面按当前光标重绘（光标常驻）
+      if (typeof global.BT_repaintCrosshair === 'function') global.BT_repaintCrosshair();
     }
   };
 })(window);

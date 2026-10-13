@@ -97,11 +97,63 @@ class BacktestPage {
 
   // ---------- 状态读取 ----------
 
-  /** 主图 dataZoom 窗口 */
+  /** 主图 dataZoom 窗口（百分比） */
   async mainZoom() {
     return this.page.evaluate(() => {
       const dz = window.BT_chart.getOption().dataZoom[1];
       return { start: +dz.start.toFixed(2), end: +dz.end.toFixed(2) };
+    });
+  }
+
+  /**
+   * 当前可见窗口（数据索引）—— [start, end)
+   * 断言"窗口是否滚动"要用这个，不是百分比（百分比有换算误差）
+   */
+  async windowState() {
+    return this.page.evaluate(() => ({
+      start: window.BT_winStartIdx,
+      end: window.BT_winEndIdx,
+    }));
+  }
+
+  /** 光标是否在当前窗口内 */
+  async isCursorInWindow() {
+    return this.page.evaluate(() => {
+      const w = window.BT_getWindowRange();
+      return window.BT_currentIdx >= w.start && window.BT_currentIdx < w.end;
+    });
+  }
+
+  /** 给定窗口与光标索引，判断光标是否落在窗口内（纯函数，便于断言可读） */
+  windowContains(win, cursor) {
+    return cursor >= win.start && cursor < win.end;
+  }
+
+  /**
+   * 把光标移动到窗口边缘并返回 { cursor, win }
+   * @param {'left'|'right'} side
+   */
+  async setCursorToEdge(side) {
+    return this.page.evaluate((s) => {
+      const w = window.BT_getWindowRange();
+      const idx = s === 'left' ? w.start : w.end - 1;
+      window.BT_setCursor(idx);
+      const nw = window.BT_getWindowRange();
+      return { cursor: window.BT_currentIdx, win: { start: nw.start, end: nw.end } };
+    }, side);
+  }
+
+  /**
+   * 把光标移动到窗口正中，返回 { cursor, win }
+   * 用于"窗口不应滚动"用例的前置准备
+   */
+  async setCursorToWindowCenter() {
+    return this.page.evaluate(() => {
+      const w = window.BT_getWindowRange();
+      const mid = Math.floor((w.start + w.end) / 2);
+      window.BT_setCursor(mid);
+      const nw = window.BT_getWindowRange();
+      return { cursor: window.BT_currentIdx, win: { start: nw.start, end: nw.end } };
     });
   }
 
@@ -238,16 +290,16 @@ class BacktestPage {
 
   async clickPrevBar(times = 1) {
     for (let i = 0; i < times; i++) {
-      await this.page.click('#btnPrevBar');
-      await this.page.waitForTimeout(300);
+      await this.page.click('#btnPrevBar', { force: true, noWaitAfter: true });
     }
+    await this.page.waitForTimeout(times > 1 ? times * 250 : 350);
   }
 
   async clickNextBar(times = 1) {
     for (let i = 0; i < times; i++) {
-      await this.page.click('#btnNextBar');
-      await this.page.waitForTimeout(300);
+      await this.page.click('#btnNextBar', { force: true, noWaitAfter: true });
     }
+    await this.page.waitForTimeout(times > 1 ? times * 250 : 350);
   }
 
   /** 设置主题（走真实路径：storage 事件触发 BT_applyTheme） */

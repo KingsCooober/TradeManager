@@ -67,23 +67,65 @@ test.describe('12 - 回测练习页', () => {
       const { bt } = await enterBacktestWithAuth(page);
       await bt.loadData();
 
-      const before = { ...(await bt.cursorState()), zoom: await bt.mainZoom() };
+      const before = { ...(await bt.cursorState()), win: await bt.windowState() };
 
+      // 光标在窗口最右端 → 点「上一根」光标必动，窗口不动（见下一条用例覆盖滚动）
+      expect(bt.windowContains(before.win, before.cursor), '光标初始应在窗口内').toBe(true);
       await bt.clickPrevBar();
-      const afterPrev = { ...(await bt.cursorState()), zoom: await bt.mainZoom() };
+      const afterPrev = { ...(await bt.cursorState()), win: await bt.windowState() };
 
-      // 光标必须后退一格
-      expect(afterPrev.cursor).toBe(before.cursor - 1);
-      // 关键断言：窗口必须跟着滚动（这正是当时失效的点：光标动了、窗口不动）
-      expect(afterPrev.zoom.start, '窗口左边界应随光标左移').toBeLessThan(before.zoom.start);
+      expect(afterPrev.cursor, '光标必须后退一格').toBe(before.cursor - 1);
       // 面板与指数图同步
-      expect(afterPrev.date).not.toBe(before.date);
-      expect(afterPrev.idxDate).toBe(afterPrev.date);
+      expect(afterPrev.date, '右栏日期应随之变化').not.toBe(before.date);
+      expect(afterPrev.idxDate, '指数图右栏应同步').toBe(afterPrev.date);
 
       await bt.clickNextBar();
-      const afterNext = { ...(await bt.cursorState()), zoom: await bt.mainZoom() };
-      expect(afterNext.cursor).toBe(before.cursor);
-      expect(Math.abs(afterNext.zoom.start - before.zoom.start)).toBeLessThan(0.6);
+      const afterNext = { ...(await bt.cursorState()), win: await bt.windowState() };
+      expect(afterNext.cursor, '再点「下一根」应回到原位').toBe(before.cursor);
+    });
+
+    // ★ 新行为（替代旧的"窗口每点一次就平移"）：光标在窗口内部时窗口必须完全不动，
+    //   只有光标顶到窗口边缘后继续点，窗口才跟着滚一格。
+    test('光标在窗口内时点按，窗口应完全不动', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      // 把光标放到窗口正中
+      const start = await bt.setCursorToWindowCenter();
+      expect(start.win.start < start.cursor && start.cursor < start.win.end - 1,
+        '光标应落在窗口内部').toBe(true);
+
+      await bt.clickPrevBar(2);
+      const afterPrev = { ...(await bt.cursorState()), win: await bt.windowState() };
+      expect(afterPrev.win, '窗口左/右边界都不应变化').toEqual(start.win);
+      expect(afterPrev.cursor, '光标仍应逐格后退').toBe(start.cursor - 2);
+
+      await bt.clickNextBar(2);
+      const afterNext = { ...(await bt.cursorState()), win: await bt.windowState() };
+      expect(afterNext.win, '窗口仍不应变化').toEqual(start.win);
+      expect(afterNext.cursor, '光标应回到起始位置').toBe(start.cursor);
+    });
+
+    // ★ 光标到达窗口边缘后继续点按，窗口才滚动（两端都要覆盖）
+    test('光标到达窗口边缘后继续点按，窗口应滚动一格', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      // 光标贴窗口左端 → 点「上一根」→ 窗口左移
+      const l = await bt.setCursorToEdge('left');
+      expect(bt.windowContains(l.win, l.cursor), '光标应贴在窗口左端').toBe(true);
+      await bt.clickPrevBar();
+      const afterLeft = await bt.windowState();
+      expect(afterLeft.start, '窗口左端应左移一格').toBe(l.win.start - 1);
+      expect(afterLeft.end, '窗口右端应同步左移').toBe(l.win.end - 1);
+
+      // 光标贴窗口右端 → 点「下一根」→ 窗口右移
+      const r = await bt.setCursorToEdge('right');
+      expect(bt.windowContains(r.win, r.cursor), '光标应贴在窗口右端').toBe(true);
+      await bt.clickNextBar();
+      const afterRight = await bt.windowState();
+      expect(afterRight.start, '窗口左端应右移一格').toBe(r.win.start + 1);
+      expect(afterRight.end, '窗口右端应同步右移').toBe(r.win.end + 1);
     });
 
     test('连续点击 5 次应逐格移动（不跳格）', async ({ page }) => {
@@ -105,7 +147,7 @@ test.describe('12 - 回测练习页', () => {
       await bt.loadData();
 
       // 把光标放到最早一根，此时窗口已左对齐
-      await page.evaluate(() => window.BT_setCursor(0, 'pinRight'));
+      await page.evaluate(() => window.BT_setCursor(0));
       await page.waitForTimeout(400);
 
       await bt.clickPrevBar();
@@ -139,11 +181,24 @@ test.describe('12 - 回测练习页', () => {
       await page.selectOption('#btVisibleBars', '120');
       await page.waitForTimeout(800);
 
-      const before = { ...(await bt.cursorState()), zoom: await bt.mainZoom() };
+      const before = { ...(await bt.cursorState()), win: await bt.windowState() };
+      // 光标在最右端（初始状态），点「上一根」→ 光标动、窗口不动
+      expect(before.cursor, '初始光标应在窗口右端').toBe(before.win.end - 1);
       await bt.clickPrevBar();
-      const after = { ...(await bt.cursorState()), zoom: await bt.mainZoom() };
-      expect(after.cursor).toBe(before.cursor - 1);
-      expect(after.zoom.start).toBeLessThan(before.zoom.start);
+      const after = { ...(await bt.cursorState()), win: await bt.windowState() };
+      expect(after.cursor, '光标应后退一格').toBe(before.cursor - 1);
+      expect(after.win, '光标离开右端后窗口不应滚动').toEqual(before.win);
+
+      // 继续点到左端，再继续点 → 窗口才开始左移
+      // 光标当前在 after.cursor，窗口左端是 before.win.start
+      //（用键盘批量推进比逐次点击快得多，语义完全等价）
+      const stepsToLeft = after.cursor - before.win.start;   // 到左端还需几步
+      for (let i = 0; i < stepsToLeft + 1; i++) {
+        await page.keyboard.press('ArrowLeft');
+      }
+      await page.waitForTimeout(1200);
+      const atLeft = await bt.windowState();
+      expect(atLeft.start, '光标到达左端后窗口应左移').toBe(before.win.start - 1);
     });
   });
 
@@ -503,16 +558,48 @@ test.describe('12 - 回测练习页', () => {
       expect(A.hy, '应能定位到横线').toBeGreaterThan(0);
       expect(B.vx, '竖线应随鼠标右移').toBeGreaterThan(A.vx + 100);
 
-      // 移出图表 → 隐藏
+      // 移出图表 → 光标**常驻不消失**（鼠标离开后仍停在最后一根所在位置）
       await page.mouse.move(box.x - 200, box.y - 200);
       await page.waitForTimeout(500);
-      expect((await layerInfo('btChart')).drawn, '移出后应隐藏').toBe(0);
+      expect((await layerInfo('btChart')).drawn, '移出后光标应保留').toBeGreaterThan(200);
 
       // 指数图同样生效
       const idxBox = await page.locator('#btChartIndex').boundingBox();
       await page.mouse.move(idxBox.x + idxBox.width * 0.4, idxBox.y + idxBox.height * 0.3);
       await page.waitForTimeout(500);
       expect((await layerInfo('btChartIndex')).drawn, '指数图 hover 也应显示').toBeGreaterThan(200);
+    });
+
+    // 回归：光标常驻 —— 之前 globalout 会清掉覆盖层，
+    //       没鼠标 hover 时图上什么都没有，用户看不到当前停在哪根
+    test('未 hover 时十字光标也应始终显示', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      const drawn = (domId) => page.evaluate((id) => {
+        const l = document.querySelector('#' + id + ' .bt-crosshair-layer');
+        if (!l) return -1;
+        const d = l.getContext('2d').getImageData(0, 0, l.width, l.height).data;
+        let n = 0;
+        for (let p = 3; p < d.length; p += 4) if (d[p] > 0) n++;
+        return n;
+      }, domId);
+
+      // 页面刚加载完、鼠标从未进入过图表
+      expect((await drawn('btChart')), '主图光标应常驻').toBeGreaterThan(200);
+      expect((await drawn('btChartIndex')), '指数图光标应常驻').toBeGreaterThan(200);
+
+      // 点「上一根」后光标应跟着移动到新位置（仍可见）
+      await bt.clickPrevBar();
+      expect((await drawn('btChart')), '移动光标后仍应可见').toBeGreaterThan(200);
+
+      // hover 一次再移出，光标不应消失
+      const box = await page.locator('#btChart').boundingBox();
+      await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.3);
+      await page.waitForTimeout(400);
+      await page.mouse.move(box.x - 300, box.y - 300);
+      await page.waitForTimeout(600);
+      expect((await drawn('btChart')), 'hover 后移出，光标仍应保留').toBeGreaterThan(200);
     });
 
     // 回归：十字光标显示后，右侧 K线 数据栏也必须同步刷新
@@ -620,7 +707,7 @@ test.describe('12 - 回测练习页', () => {
       await bt.loadData();
 
       await page.evaluate(() => {
-        BT_setCursor(100, 'pinRight');
+        BT_setCursor(100);
         BT_doBuy(BT_currentDate, BT_currentClose, 1000);
       });
       await page.waitForTimeout(400);
@@ -648,18 +735,30 @@ test.describe('12 - 回测练习页', () => {
     // 回归：光标只应出现在实际有 K 线的绘图区内
     //（此前 convertFromPixel 会把绘图区外的坐标也换算成索引，
     //  导致 y 轴左侧 / 右侧留白 / 底部滑块上都会"吸附"到某根 K 线并画光标）
+    //
+    // ★ 注意：光标现在是"常驻"的（鼠标移出不消失），
+    //   所以断言对象从"像素数量"改成"竖线所在 x 是否仍在绘图区内"。
     test('光标不应出现在绘图区之外（y轴/留白/滑块）', async ({ page }) => {
       const { bt } = await enterBacktestWithAuth(page);
       await bt.loadData();
 
-      const drawn = () => page.evaluate(() => {
+      // 扫描覆盖层找竖线的 x（虚线有间隙，按"命中最多"统计）
+      const vlineX = () => page.evaluate(() => {
         const l = document.querySelector('#btChart .bt-crosshair-layer');
-        if (!l) return -1;
+        if (!l) return { px: -1, drawn: 0 };
         const c = l.getContext('2d');
-        const d = c.getImageData(0, 0, l.width, l.height).data;
-        let n = 0;
-        for (let p = 3; p < d.length; p += 4) if (d[p] > 0) n++;
-        return n;
+        const w = l.width, h = l.height;
+        const d = c.getImageData(0, 0, w, h).data;
+        const colHits = new Array(w).fill(0);
+        let drawn = 0;
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            if (d[(y * w + x) * 4 + 3] > 20) { colHits[x]++; drawn++; }
+          }
+        }
+        let px = -1, maxC = 0;
+        for (let x = 0; x < w; x++) if (colHits[x] > maxC) { maxC = colHits[x]; px = x; }
+        return { px: maxC >= 5 ? px : -1, drawn };
       });
       const geom = await page.evaluate(() => {
         const o = BT_chart.getOption();
@@ -670,25 +769,29 @@ test.describe('12 - 回测练习页', () => {
       const box = await page.locator('#btChart').boundingBox();
       const midY = Math.round(geom.H * 0.3);
 
-      // 绘图区内 → 应显示
+      // 绘图区内 → 光标应显示，且竖线落在绘图区内
       await page.mouse.move(box.x + 500, box.y + midY);
       await page.waitForTimeout(450);
-      expect(await drawn(), '绘图区内应显示光标').toBeGreaterThan(200);
+      const inside = await vlineX();
+      expect(inside.drawn, '绘图区内应显示光标').toBeGreaterThan(200);
+      expect(inside.px, '竖线 x 应可定位').toBeGreaterThan(0);
+      expect(inside.px, '竖线应在绘图区左边界右侧').toBeGreaterThan(geom.left - 2);
+      expect(inside.px, '竖线应在绘图区右边界左侧').toBeLessThan(geom.right + 2);
 
-      // y 轴左侧（刻度区）→ 不应显示
-      await page.mouse.move(box.x + Math.max(2, geom.left - 30), box.y + midY);
-      await page.waitForTimeout(450);
-      expect(await drawn(), 'y 轴左侧不应显示光标').toBe(0);
-
-      // 绘图区右侧留白 → 不应显示
-      await page.mouse.move(box.x + Math.min(geom.W - 2, geom.right + 20), box.y + midY);
-      await page.waitForTimeout(450);
-      expect(await drawn(), '右侧留白不应显示光标').toBe(0);
-
-      // 底部缩放滑块 → 不应显示
-      await page.mouse.move(box.x + Math.round(geom.W / 2), box.y + geom.H - 10);
-      await page.waitForTimeout(450);
-      expect(await drawn(), '缩放滑块上不应显示光标').toBe(0);
+      // 鼠标移到绘图区外：光标不消失（常驻），但**不能**跟着跑到绘图区外
+      const outsidePoints = [
+        ['y 轴左侧', box.x + Math.max(2, geom.left - 30), box.y + midY],
+        ['右侧留白', box.x + Math.min(geom.W - 2, geom.right + 20), box.y + midY],
+        ['底部滑块', box.x + Math.round(geom.W / 2), box.y + geom.H - 10],
+      ];
+      for (const [label, x, y] of outsidePoints) {
+        await page.mouse.move(x, y);
+        await page.waitForTimeout(450);
+        const s = await vlineX();
+        expect(s.drawn, `${label}：光标应常驻保留`).toBeGreaterThan(200);
+        expect(s.px, `${label}：竖线仍应留在绘图区内`).toBeGreaterThan(geom.left - 2);
+        expect(s.px, `${label}：竖线仍应留在绘图区内`).toBeLessThan(geom.right + 2);
+      }
     });
   });
 

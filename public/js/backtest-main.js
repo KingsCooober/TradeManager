@@ -266,11 +266,11 @@ function BT_init() {
       case 'b': case 'B': BT_buy();  e.preventDefault(); break;
       case 's': case 'S': BT_sell(); e.preventDefault(); break;
       case 'Home':
-        if (typeof BT_setCursor === 'function') BT_setCursor(0, 'pinRight');
+        if (typeof BT_setCursor === 'function') BT_setCursor(0);
         e.preventDefault(); break;
       case 'End':
         if (typeof BT_setCursor === 'function') {
-          BT_setCursor(BT_klineData.dates.length - 1, 'pinRight');
+          BT_setCursor(BT_klineData.dates.length - 1);
         }
         e.preventDefault(); break;
     }
@@ -613,10 +613,12 @@ async function BT_loadData(silent) {
     BT_renderTrades();
     BT_renderStats();
 
-    // 自动定位光标：每次加载都跳到最后一根（最新K线），保证窗口最右就是最新数据
+    // 自动定位光标：每次加载都跳到最后一根（最新K线），窗口回到"最近 vis 根"
     // 切换标的 / 刷新页面 / 改时间范围 → 都重新看最新
+    // （BT_renderKLine 内已调 BT_initWindow 重置窗口；这里再把光标钉到最右一根，
+    //  兼顾存档里保存着"上次看到第几根"的场景）
     var targetIdx = data.dates.length - 1;
-    BT_setCursor(targetIdx, 'pinRight');  // 把光标钉在窗口最右
+    BT_setCursor(targetIdx);
 
     // 主图加载完后，重新拉指数图（让 count 与主图一致 → 时间范围对齐）
     if (typeof BT_loadIndex === 'function') BT_loadIndex(/*silent*/ true);
@@ -778,26 +780,22 @@ function BT_clearTrades() {
 }
 
 // 下一根K线（光标右移一格）
-// ★ 语义就是"光标 +1"，窗口由 BT_setCursor 负责跟随滚动。
-//   历史实现曾以"窗口右边界 +1"为基准（意图是让窗口整屏滚动），
-//   但这在窗口已左对齐时会产生跳格：光标在 0、窗口右边界在 ~90 时，
-//   点「下一根」会直接跳到 91。改为逐格移动后，两端边界行为一致。
+// ★ 语义就是"光标 +1"。窗口不跟着平移：
+//   光标在窗口内部时窗口完全不动，只有光标顶到窗口最右端、
+//   还需要继续前进时，窗口才整体右移一根（见 BT_moveCursorTo）。
+//   这样连续点按能停在中间任意一根细看，而不是永远贴在最右边。
 function BT_nextBar() {
   if (!BT_klineData || !BT_klineData.dates.length) { BT_toast('请先加载 K 线', 'warn'); return; }
   var max = BT_klineData.dates.length - 1;
   var cur = (BT_currentIdx == null) ? max : BT_currentIdx;
-  var next = Math.min(max, cur + 1);
-  BT_setCursor(next, 'pinRight');
-  BT_saveState();
+  BT_setCursor(Math.min(max, cur + 1));
 }
 
 // 上一根K线（光标左移一格）—— 与 nextBar 完全镜像
 function BT_prevBar() {
   if (!BT_klineData || !BT_klineData.dates.length) { BT_toast('请先加载 K 线', 'warn'); return; }
   var cur = (BT_currentIdx == null) ? 0 : BT_currentIdx;
-  var prev = Math.max(0, cur - 1);
-  BT_setCursor(prev, 'pinRight');
-  BT_saveState();
+  BT_setCursor(Math.max(0, cur - 1));
 }
 
 // BT_ensureZoomRangeHealthy 已移除（死代码）：

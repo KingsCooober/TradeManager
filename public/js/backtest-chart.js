@@ -19,19 +19,13 @@ var BT_klineData = null;        // 当前 K 线完整数据 {dates, ohlc, volume
 var BT_MA_DEFAULT = [5, 10, 20];
 var BT_maPeriods = BT_MA_DEFAULT.slice();  // MA 周期（从输入框实时读取）
 var BT_showFlags = { ma: true, vol: true };  // MACD/资金面板已按用户要求移除  // 显示开关
-// 固定显示窗口：默认只显示最近 60 根 K线（让单根 K线 视觉宽度固定）
-// 数据少于 60 根时显示全部；可在 BT_KLINE_WINDOW 修改
-var BT_KLINE_WINDOW = 60;
 var BT_currentIdx = null;       // 光标所在的 K 线索引（也存 localStorage）
 // 默认 90 根（与 HTML 下拉的 selected 一致）。根数只允许 90/120 两档，
 // 由 BT_ALLOWED_VISIBLE_BARS 白名单校验（见下方），不再支持连续缩放。
 var BT_DEFAULT_VISIBLE_BARS = 90;   // 默认可见根数（唯一来源）
 var BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;   // 固定显示的 K 线根数
-// 注：原 BT_zoomLocked（比例锁定）已彻底移除。
-//   它曾被用来让"取消缩放"后窗口不随光标漂移，结果连带把「上一根/下一根」
-//   的窗口滚动也一并禁掉了（按钮看着像失效）。
-//   现在窗口始终跟随光标，缩放档位仅由「显示」下拉（90/120）决定。
-var BT_userZoomRange = null;    // 用户拖动 slider 自定义的窗口 {start: %, end: %}；null 表示用默认 pinRight
+// 窗口左右边界改用数据索引维护（BT_winStartIdx / BT_winEndIdx，见下方定义），
+// 不再保存成 dataZoom 百分比。原 BT_zoomLocked / BT_userZoomRange 均已移除。
 var _inDataZoomApply = false;   // 死循环保护：我们自己 setOption 时阻断 dataZoom 回调
 
 // ===== 光标渲染的 rAF 合并 =====
@@ -51,7 +45,115 @@ function BT_scheduleCursorRender() {
     // 同步指数图光标 + 右侧指数面板
     if (typeof BT_syncIndexCursor === 'function') BT_syncIndexCursor(BT_currentIdx);
     if (typeof BT_updateIndexInfo === 'function') BT_updateIndexInfo();
+    // ★ 十字光标常驻：hover 结束后不再消失
+    if (typeof BT_paintCrosshair === 'function') BT_paintCrosshair();
   });
+}
+
+// ===== 可见窗口（用「数据索引」表达，不用百分比）=====
+// 原实现把窗口存成 dataZoom 的百分比（BT_userZoomRange），再反复换算回索引，
+// 每层换算都引入取整误差，导致：
+//   - 光标在窗口中间时点「下一根」，窗口会跟着平移（用户要的是"先走光标，到头再动窗口"）
+//   - 窗口宽度在 90/120 之间漂移，肉眼可见 K 线根数与下拉档位不一致
+// 现在统一以索引维护：窗口 = [winStartIdx, winStartIdx + vis)，vis 固定 90/120。
+var BT_winStartIdx = 0;        // 当前窗口左端对应的数据索引（含）
+var BT_winEndIdx = 0;          // 当前窗口右端对应的数据索引（不含）
+var BT_initialWindowDone = false;  // 数据首次加载后是否已初始化过窗口
+
+/** 当前窗口可见的数据索引区间 [start, end)（end 不含） */
+function BT_getWindowRange() {
+  return { start: BT_winStartIdx, end: BT_winEndIdx };
+}
+
+/** 按索引窗口写 dataZoom；同时把相同窗口同步到指数图 */
+function BT_applyWindow() {
+  if (!BT_chart || !BT_klineData) return;
+  var total = BT_klineData.dates.length;
+  if (total <= 0) return;
+  var vis = Math.min(BT_visibleBars, total);
+  // 钳制：start 不能 < 0，end 不能超过 total，且宽度恒定 = vis
+  var start = Math.max(0, Math.min(BT_winStartIdx, total - vis));
+  BT_winStartIdx = start;
+  BT_winEndIdx = Math.min(total, start + vis);
+
+  var denom = Math.max(1, total - 1);
+  var sPct = start / denom * 100;
+  var ePct = BT_winEndIdx / denom * 100;
+
+  _inDataZoomApply = true;
+  try {
+    BT_chart.setOption({ dataZoom: [{ start: sPct, end: ePct }, { start: sPct, end: ePct }] });
+  } finally {
+    setTimeout(function () { _inDataZoomApply = false; }, 0);
+  }
+  // 同步指数图的窗口（按日期对齐，见 BT_syncIndexZoom）
+  if (typeof BT_syncIndexZoom === 'function') BT_syncIndexZoom();
+}
+
+/**
+ * 初始化/重置可见窗口：光标钉在最右一根，窗口展示最近 vis 根。
+ * 数据首次加载、切换标的、时间范围变化时调用。
+ */
+function BT_initWindow(cursorIdx) {
+  if (!BT_klineData) return;
+  var total = BT_klineData.dates.length;
+  var vis = Math.min(BT_visibleBars, total);
+  if (cursorIdx == null || cursorIdx < 0 || cursorIdx >= total) cursorIdx = total - 1;
+  BT_currentIdx = cursorIdx;
+  BT_currentDate = BT_klineData.dates[cursorIdx];
+  BT_currentClose = BT_klineData.ohlc[cursorIdx][1];
+  // pinRight：光标在窗口最右一根
+  BT_winStartIdx = Math.max(0, Math.min(total - vis, cursorIdx - vis + 1));
+  BT_applyWindow();
+  BT_initialWindowDone = true;
+}
+
+/**
+ * 移动光标到 targetIdx —— 「上一根 / 下一根」的唯一入口。
+ *
+ * ★ 窗口策略（本次重构的核心）：
+ *   1. 光标在窗口内部 → 只移动光标，窗口**不动**（这样连续点按能逐根细看）
+ *   2. 光标到达/越过窗口右端 → 窗口右移一根（光标始终贴在右边缘）
+ *   3. 光标到达/越过窗口左端 → 窗口左移一根（光标始终贴在左边缘）
+ *
+ * 旧实现每次都用 pinRight 重算窗口，等于"每点一次整屏平移一根"，
+ * 光标永远贴在最右边，中间 K 线一根都停不下来。
+ */
+function BT_moveCursorTo(targetIdx) {
+  if (!BT_klineData) return;
+  var total = BT_klineData.dates.length;
+  if (total === 0) return;
+  if (targetIdx < 0) targetIdx = 0;
+  if (targetIdx > total - 1) targetIdx = total - 1;
+
+  // 窗口未初始化（例如加载后立刻点按）→ 先按当前光标初始化
+  if (!BT_initialWindowDone) {
+    BT_initWindow(targetIdx);
+  } else {
+    BT_currentIdx = targetIdx;
+    BT_currentDate = BT_klineData.dates[targetIdx];
+    BT_currentClose = BT_klineData.ohlc[targetIdx][1];
+
+    var win = BT_getWindowRange();
+    // 右侧越界 → 整体右移，光标贴右缘
+    if (targetIdx >= win.end) {
+      BT_winStartIdx = targetIdx - Math.min(BT_visibleBars, total) + 1;
+      BT_applyWindow();
+    } else if (targetIdx < win.start) {
+      // 左侧越界 → 整体左移，光标贴左缘
+      BT_winStartIdx = targetIdx;
+      BT_applyWindow();
+    }
+    // 其余情况：光标在窗口内 → 窗口完全不动
+  }
+
+  // 数据栏 / 统计 / 指数图 / 十字光标统一刷新
+  BT_updateCursorDisplay();
+  if (typeof BT_renderStats === 'function') BT_renderStats();
+  if (typeof BT_syncIndexCursor === 'function') BT_syncIndexCursor(BT_currentIdx);
+  if (typeof BT_updateIndexInfo === 'function') BT_updateIndexInfo();
+  if (typeof BT_paintCrosshair === 'function') BT_paintCrosshair();
+  if (typeof BT_saveState === 'function') BT_saveState();
 }
 
 /**
@@ -91,40 +193,6 @@ function BT_getVisibleBars() {
 }
 
 // 计算 zoom 范围（百分比）
-// mode = 'center' → idx 居中（默认，兼容旧逻辑）
-// mode = 'pinRight' → idx 落在窗口最右边缘（"下一根K线" 用这个）
-// mode = 'pinLeft' → idx 落在窗口最左边缘
-function BT_calcZoomRange(idx, mode) {
-  if (!BT_klineData) return { start: 0, end: 100 };
-  var total = BT_klineData.dates.length;
-  if (total <= 0) return { start: 0, end: 100 };
-  var vis = Math.min(BT_visibleBars, total);
-  if (idx == null) idx = (BT_currentIdx == null ? total - 1 : BT_currentIdx);
-  mode = mode || 'center';
-  var startIdx, endIdx;
-  if (mode === 'pinRight') {
-    endIdx   = Math.min(total, idx + 1);     // idx 在窗口最右（含 idx 自身）
-    startIdx = Math.max(0, endIdx - vis);
-    // 若窗口左端还能再扩（idx 距左端 > vis），保持窗口宽度不变
-    if (endIdx - startIdx < vis && startIdx > 0) {
-      startIdx = Math.max(0, endIdx - vis);
-    }
-  } else if (mode === 'pinLeft') {
-    startIdx = Math.max(0, idx);
-    endIdx   = Math.min(total, startIdx + vis);
-  } else {
-    // center: idx 居中
-    var half = vis / 2;
-    startIdx = Math.max(0, Math.min(total - vis, idx - half));
-    endIdx   = startIdx + vis;
-  }
-  // 转百分比（ECharts dataZoom 的 start/end 对应索引百分比）
-  var denom = Math.max(1, total - 1);
-  var sPct = (startIdx / denom) * 100;
-  var ePct = (endIdx   / denom) * 100;
-  return { start: sPct, end: ePct };
-}
-
 // 颜色（与项目内其他图表保持一致）
 var BT_COLOR_UP   = '#ef476f';  // A 股红涨
 var BT_COLOR_DOWN = '#2d9f7f';  // A 股绿跌
@@ -164,11 +232,17 @@ function BT_initChart() {
   //   一帧内无论触发多少次，只渲染一次。
 
   // 主驱动：zrender mousemove → offsetX 换算索引
+  // ★ 与自绘十字光标（backtest-crosshair.js）保持同一套钳制规则：
+  //   鼠标落在绘图区外（y 轴刻度 / 右侧留白 / 底部滑块）时**忽略**本次移动，
+  //   光标停在原位。否则 convertFromPixel 仍能换算出窗口外的索引，
+  //   光标会"吸附"到不可见的 K 线上，与十字光标的实际位置对不上。
   var _zrMain = BT_chart.getZr();
   if (_zrMain && _zrMain.on) {
     _zrMain.on('mousemove', function (e) {
       var offX = e && e.offsetX;
       if (offX == null) return;
+      var offY = e && e.offsetY;
+      if (!BT_isInsidePlot(BT_chart, offX, offY)) return;
       var raw = BT_chart.convertFromPixel({ xAxisIndex: 0 }, offX);
       if (raw == null || isNaN(raw)) return;
       BT_onCursorMove(Math.round(raw));
@@ -176,14 +250,17 @@ function BT_initChart() {
   }
 
   // 兼容兜底：若某些场景下 ECharts 事件恢复可用，仍走同一条路径
-  BT_chart.on('mousemove', function (params) { BT_onCursorMove(params && params.dataIndex); });
+  BT_chart.on('mousemove', function (params) {
+    if (params && params.dataIndex != null) BT_onCursorMove(params.dataIndex);
+  });
   BT_chart.on('updateAxisPointer', function (event) {
     var xAxisInfo = event && event.axesInfo && event.axesInfo[0];
     if (xAxisInfo && xAxisInfo.value !== undefined) BT_onCursorMove(xAxisInfo.value);
   });
 
-  // 监听用户拖动 dataZoom（slider / inside）→ 同步 BT_userZoomRange 和 BT_visibleBars
-  // 这样后续 +/- 按钮和 select 切换都能尊重用户手动调整的窗口位置，不再粗暴重置
+  // 监听用户拖动 dataZoom（slider / inside）→ 把百分比窗口换算回索引窗口
+  // 缩放已取消，宽度只允许 90/120：拖动后根数会漂移，必须吸附回最近档位，
+  // 否则出现"下拉框显示 90，实际显示 137 根"的不一致。
   // ECharts 5.x 的 dataZoom 事件 params 结构在不同场景下不一样：
   //   - 真实拖动 slider：{ start, end, from, dataZoomId, ... }（顶层属性）
   //   - 批量操作（多个 dataZoom 联动）：{ batch: [{ start, end, ... }] }（batch 数组）
@@ -200,46 +277,30 @@ function BT_initChart() {
       return;
     }
     if (typeof s !== 'number' || typeof e !== 'number') return;
-    // 同步指数图（先做，避免被下面的 width check 阻断）
-    if (typeof BT_syncIndexZoom === 'function') BT_syncIndexZoom();
-    // 记录用户自定义窗口
-    BT_userZoomRange = { start: s, end: e };
-    // 反算窗口宽度（约多少根 K 线）→ 吸附到最近的允许档位（90 / 120）
-    //   ★ 缩放已取消：拖动滑块不再产生任意根数，只能落到 90 或 120，
-    //     避免出现"下拉框显示 90 但实际显示 137 根"的不一致。
+
     var total = BT_klineData.dates.length;
-    if (total > 1) {
-      var bars = Math.round((e - s) / 100 * (total - 1));
-      var snapped = BT_ALLOWED_VISIBLE_BARS[0];
-      var best = Infinity;
-      for (var bi = 0; bi < BT_ALLOWED_VISIBLE_BARS.length; bi++) {
-        var d = Math.abs(BT_ALLOWED_VISIBLE_BARS[bi] - bars);
-        if (d < best) { best = d; snapped = BT_ALLOWED_VISIBLE_BARS[bi]; }
-      }
-      if (snapped !== BT_visibleBars) {
-        BT_visibleBars = snapped;
-        BT_syncVisibleBarsSelect();   // 同步下拉框显示（不触发 change）
-      }
+    if (total <= 1) return;
+    // 换算成索引窗口（对端取整，保证覆盖足量可见根）
+    var startIdx = Math.max(0, Math.floor(s / 100 * (total - 1)));
+    var endIdx   = Math.min(total, Math.ceil(e / 100 * (total - 1)));
+    var bars = Math.max(1, endIdx - startIdx);
+    // 吸附到最近的允许档位
+    var snapped = BT_ALLOWED_VISIBLE_BARS[0];
+    var best = Infinity;
+    for (var bi = 0; bi < BT_ALLOWED_VISIBLE_BARS.length; bi++) {
+      var d = Math.abs(BT_ALLOWED_VISIBLE_BARS[bi] - bars);
+      if (d < best) { best = d; snapped = BT_ALLOWED_VISIBLE_BARS[bi]; }
     }
-
-    // 关键：ECharts slider moveHandle 拖到边界时会把窗口压扁（start/end 趋近相同）
-    // 检测到宽度 < 1.5% 时立即强制重置为标准宽度
-    var MIN_WIDTH = 1.5;
-    if (e - s < MIN_WIDTH) {
-      var total = BT_klineData.dates.length;
-      var correctVisPct = BT_visibleBars / (total - 1) * 100;
-      var newStart = Math.max(0, Math.min(s, 100 - correctVisPct));
-      var newEnd = Math.min(100, newStart + correctVisPct);
-      BT_userZoomRange = { start: newStart, end: newEnd };
-      _inDataZoomApply = true;
-      BT_chart.setOption({ dataZoom: [
-        { start: newStart, end: newEnd },
-        { start: newStart, end: newEnd }
-      ]});
-      setTimeout(function() { _inDataZoomApply = false; }, 0);
+    var vis = Math.min(snapped, total);
+    // 用吸附后的窗口覆盖状态，再走统一的 setOption 通道
+    BT_winStartIdx = Math.max(0, Math.min(startIdx, total - vis));
+    if (snapped !== BT_visibleBars) {
+      BT_visibleBars = snapped;
+      BT_syncVisibleBarsSelect();   // 同步下拉框显示（不触发 change）
     }
+    BT_applyWindow();
 
-    // 窗口变化时刷新 max/min 标记
+    // 窗口变化时刷新买卖标记
     BT_refreshChartMarkers();
   });
 
@@ -262,43 +323,80 @@ function BT_initChart() {
 }
 
 /**
+ * 计算某张图的绘图区几何信息（绘图区矩形 + 对应的数据索引区间）。
+ * 十字光标覆盖层与"光标数据栏"驱动共用它，保证两边的钳制规则永远一致。
+ *
+ * @param {object} chart ECharts 实例
+ * @param {boolean} isMain 主图（成交量在最底部）；指数图无成交量
+ */
+function BT_getPlotGeom(chart, isMain) {
+  if (!chart) return null;
+  var opt = chart.getOption();
+  var grids = opt.grid || [];
+  var g0 = grids[0] || { top: 18, left: 60, right: 30 };
+  var gVol = grids[1];
+  // 竖线底端：主图到成交量底；指数图只有 K线（grid[1] 在指数图是量，若存在则到底，否则到 K线底）
+  var plotBottom;
+  if (gVol && gVol.height > 0) {
+    plotBottom = gVol.top + gVol.height;
+  } else {
+    plotBottom = g0.top + (g0.height || 0);
+  }
+  var width = chart.getWidth();
+  var left = typeof g0.left === 'number' ? g0.left : (g0.left || 60);
+  var right = typeof g0.right === 'number' ? (width - g0.right) : width - 30;
+  var minIdx = chart.convertFromPixel({ xAxisIndex: 0 }, left);
+  var maxIdx = chart.convertFromPixel({ xAxisIndex: 0 }, right);
+  return {
+    plotTop: g0.top,
+    plotBottom: plotBottom,
+    plotLeft: left,
+    plotRight: right,
+    // 绘图区左/右边界对应的数据索引：鼠标在留白处时索引会"越界"到不可见的 K 线，
+    // 用它作为上下界钳制（这正是"没有 K 线的地方也出现光标"的根因）。
+    minIdx: minIdx,
+    maxIdx: maxIdx,
+    data: (isMain ? window.BT_klineData : window.BT_indexData)
+  };
+}
+
+/**
+ * 判断 (offX, offY) 是否落在某张图的绘图区内（K线 + 成交量区域，不含滑块）。
+ * 用在"光标数据栏"的驱动上，与十字光标覆盖层同一套规则。
+ */
+function BT_isInsidePlot(chart, offX, offY) {
+  var g = BT_getPlotGeom(chart, chart === BT_chart);
+  if (!g) return false;
+  if (g.plotLeft != null && g.plotRight != null) {
+    if (offX < g.plotLeft || offX > g.plotRight) return false;
+  }
+  if (g.plotBottom != null && offY != null && offY > g.plotBottom) return false;
+  return true;
+}
+
+/**
  * 绑定十字光标并提供绘图区几何信息
  * @param {string} domId 容器 id
  * @param {object} chart ECharts 实例
  * @param {boolean} isMain 主图（成交量在最底部）；指数图无成交量，绘图区只到 K线底部
+ * @param {function} [onHoverIdx] hover 出的索引回调（驱动两图同步）
  */
 function BT_attachCrosshair(domId, chart, isMain, onHoverIdx) {
   if (typeof BT_crosshair === 'undefined') return;
+  var hasCb = (typeof onHoverIdx === 'function');
   BT_crosshair.attach(domId, chart, function () {
-    var opt = chart.getOption();
-    var grids = opt.grid || [];
-    var g0 = grids[0] || { top: 18, left: 60, right: 30 };
-    var gVol = grids[1];
-    // 竖线底端：主图到成交量底；指数图只有 K线（grid[1] 在指数图是量，若存在则到底，否则到 K线底）
-    var plotBottom;
-    if (isMain && gVol && gVol.height > 0) {
-      plotBottom = gVol.top + gVol.height;
-    } else if (!isMain && gVol && gVol.height > 0) {
-      plotBottom = gVol.top + gVol.height;
-    } else {
-      plotBottom = g0.top + (g0.height || 0);
-    }
-    var width = chart.getWidth();
-    var left = typeof g0.left === 'number' ? g0.left : (g0.left || 60);
-    var right = typeof g0.right === 'number' ? (width - g0.right) : width - 30;
+    var g = BT_getPlotGeom(chart, isMain) || {};
     return {
-      plotTop: g0.top,
-      plotBottom: plotBottom,
-      plotLeft: left,
-      plotRight: right,
-      // 绘图区左边界对应的数据索引：鼠标在左侧留白时索引会"越界"到更早的
-      // 不可见 K 线，导致"没有 K 线的地方也出现光标"。以它作为下界钳制。
-      minIdx: chart.convertFromPixel({ xAxisIndex: 0 }, left),
-      maxIdx: chart.convertFromPixel({ xAxisIndex: 0 }, right),
-      data: (isMain ? window.BT_klineData : window.BT_indexData),
+      plotTop: g.plotTop,
+      plotBottom: g.plotBottom,
+      plotLeft: g.plotLeft,
+      plotRight: g.plotRight,
+      minIdx: g.minIdx,
+      maxIdx: g.maxIdx,
+      data: g.data,
       // onHoverIdx：让本图 hover 出的索引回传给共享光标状态，
       //   从而驱动另一张图的光标 + 两侧数据栏（两图互相同步）
-      onHoverIdx: onHoverIdx || null
+      onHoverIdx: hasCb ? onHoverIdx : null
     };
   });
 }
@@ -373,6 +471,35 @@ function BT_crosshairMoveTo(domId, idx) {
 function BT_hideCrosshairAt(domId) {
   if (typeof BT_crosshair === 'undefined' || !BT_crosshair.hideAt) return;
   BT_crosshair.hideAt(domId);
+}
+
+/**
+ * 按 BT_currentIdx 重绘两张图的光标。
+ *
+ * ★ 光标常驻：鼠标移出图表后不再消失（此前 globalout 会清掉覆盖层，
+ *   表现为"没鼠标的时候图上什么都没有"）。这里把"光标位置"
+ *   和"鼠标是否在图上"解耦 —— 只有数据变更/窗口滚动/主题切换才需要重绘。
+ */
+function BT_paintCrosshair() {
+  if (typeof BT_crosshair === 'undefined' || BT_currentIdx == null) return;
+  // 主图：光标必须落在当前窗口内，否则画出去会误导
+  if (BT_klineData) {
+    var win = BT_getWindowRange();
+    if (BT_currentIdx >= win.start && BT_currentIdx < win.end) {
+      BT_crosshairMoveTo('btChart', BT_currentIdx);
+    } else {
+      BT_hideCrosshairAt('btChart');
+    }
+  }
+  // 指数图：按日期把主图索引换算过去
+  if (BT_indexData && BT_klineData) {
+    var iIdx = BT_mapMainIdxToIndex(BT_currentIdx);
+    if (iIdx != null) {
+      BT_crosshairMoveTo('btChartIndex', iIdx);
+    } else {
+      BT_hideCrosshairAt('btChartIndex');
+    }
+  }
 }
 
 // 指数右栏刷新也走 rAF 合并：与主图右栏同一帧输出，避免 hover 时两栏错帧闪烁
@@ -465,6 +592,8 @@ function BT_applyTheme() {
       if (_idxClamp >= 0) BT_fillMaValues('idxMa', 'idx', BT_indexData, _idxClamp);
     }
   } catch (e) { /* 无数据时忽略 */ }
+  // 主题切换后图表重绘，十字光标覆盖层需按当前光标重画（常驻）
+  if (typeof BT_paintCrosshair === 'function') BT_paintCrosshair();
 }
 
 // 基础 option 框架（不依赖具体数据，初始化时调用一次）
@@ -760,8 +889,8 @@ function BT_refreshEquityCurve() {
 function BT_renderKLine(data) {
   if (!BT_chart) BT_initChart();
   BT_klineData = data;
-  // 切换标的 / 重新加载 → 清掉"用户自定义窗口"，回到 pinRight 默认（光标钉在窗口最右）
-  BT_userZoomRange = null;
+  // 切换标的 / 重新加载 → 窗口回到默认（光标钉在窗口最右），见 BT_initWindow
+  BT_initialWindowDone = false;
   // 检测是否月线降级数据（后端因接口限制自动降级）→ 显示顶部 banner
   if (data && data.__period === 'month') {
     BT_showPeriodBanner('📅 当前为月线模式（接口不支持日级 10 年，月线可展示 17+ 年长期趋势）');
@@ -934,24 +1063,15 @@ function BT_renderKLine(data) {
   // 同步底部光标 + 标记
   BT_refreshChartMarkers();
 
-  // 默认光标：最后一根
-  if (BT_currentIdx == null || BT_currentIdx >= dates.length || BT_currentIdx < 0) {
-    BT_currentIdx = dates.length - 1;
-  }
-  BT_currentDate = dates[BT_currentIdx];
-  BT_currentClose = ohlc[BT_currentIdx][1];
-
-  // 根据"显示根数"应用固定缩放：加载后把光标钉在窗口最右（让用户立刻看到最新K线在最右边缘）
-  // 注意：BT_visibleBars 不在这里从 select 同步，避免 +/- 调整后被 select 默认值覆盖
-  //       初始化时由 BT_init() 在 BT_loadState 之后统一同步一次；BT_userZoomRange 已在函数顶部清空
-  // 走 BT_applyVisibleBars() 是为了与 +/-/dataZoom 事件走相同路径（带防死循环保护）
-  BT_applyVisibleBars();
+  // 初始化可见窗口：默认光标 = 最后一根（最新K线），窗口展示最近 vis 根
+  BT_initWindow(BT_currentIdx);
 
   // 通过 dispatchAction 把 axisPointer 移到 BT_currentIdx
   BT_chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: BT_currentIdx });
 
-  // 同步底部光标显示
+  // 同步底部光标显示 + 十字光标常驻
   BT_updateCursorDisplay();
+  if (typeof BT_paintCrosshair === 'function') BT_paintCrosshair();
   BT_renderStats();
 }
 
@@ -1435,17 +1555,15 @@ function BT_updateIndexInfo(forceIdx) {
   // MACD 面板已移除（用户要求）
 }
 
-// 设置光标到指定索引（被 BT_nextBar/BT_prevBar/外部调用）
-// mode: 'auto' = 居中（默认，鼠标 hover 时光标在窗口中间）
-//       'pinRight' = 钉到窗口最右（"下一根K线"专用）
-//       'pinLeft'  = 钉到窗口最左
-// 用户曾拖动 slider（BT_userZoomRange != null）时，保留窗口宽度、让 idx 落在最右
+// 设置光标到指定索引（外部调用入口：Home/End 键、加载后定位等）
+// 语义 = 移动光标 + 按需滚动窗口，与「上一根/下一根」完全同一条链路。
 //
-// ★★ 重要教训：这里原先判断 `if (!BT_zoomLocked)`，而取消缩放时
-//    我把 BT_zoomLocked 设成了恒 true，导致「上一根/下一根」只移动光标、
-//    窗口不再滚动 —— 用户看到的症状就是"按钮失效"。
-//    「取消缩放」指的是用户不能借按钮改窗口宽度，与"窗口是否跟随光标滚动"无关，
-//    因此这里不再受 BT_zoomLocked 影响，窗口始终跟随光标。
+// ★★ 历史教训（保留注释，避免有人改回去）：
+//    - 曾用 `if (!BT_zoomLocked)` 守卫窗口更新，取消缩放后 BT_zoomLocked 恒 true，
+//      导致窗口永不滚动，用户看到"按钮失效"。
+//    - 又曾改成"每次都用 pinRight 重算窗口"，光标永远贴最右，
+//      中间 K 线一根都停不下来（本次重构解决的问题）。
+//    现在窗口边界用索引维护，光标在窗口内时窗口完全不动。
 function BT_setCursor(idx, mode) {
   if (!BT_chart || !BT_klineData) return;
   var total = BT_klineData.dates.length;
@@ -1459,108 +1577,37 @@ function BT_setCursor(idx, mode) {
   }
   if (idx < 0) idx = 0;
   if (idx >= total) idx = total - 1;
-  BT_currentIdx = idx;
-  BT_currentDate = BT_klineData.dates[idx];
-  BT_currentClose = BT_klineData.ohlc[idx][1];
 
-  // 调整 dataZoom：让窗口跟随光标（pinRight 时光标贴窗口最右）
-  var zr;
-  if (BT_userZoomRange && BT_userZoomRange.end > BT_userZoomRange.start) {
-    // 曾拖动 slider → 保留当前窗口宽度，只平移让 idx 落在最右
-    zr = BT_calcZoomRangeForIdx(idx, BT_visibleBars, BT_userZoomRange);
-  } else {
-    // 默认行为：按 mode 计算（pinRight/auto/pinLeft）
-    zr = BT_calcZoomRange(idx, mode || 'auto');
-  }
-  _inDataZoomApply = true;
-  try {
-    BT_chart.setOption({ dataZoom: [{ start: zr.start, end: zr.end }, { start: zr.start, end: zr.end }] });
-    BT_userZoomRange = { start: zr.start, end: zr.end };
-  } finally {
-    setTimeout(function() { _inDataZoomApply = false; }, 0);
-  }
-  BT_chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: idx });
-  // 同步指数图（先同步 zoom 窗口 → 再同步光标位置）
-  // 关键：BT_setCursor 自己 setOption 主图 dataZoom，_inDataZoomApply 屏蔽了 dataZoom 事件，
-  //       所以 BT_syncIndexZoom 不会自动触发 → 必须手动调
-  if (typeof BT_syncIndexZoom === 'function') BT_syncIndexZoom();
-  if (typeof BT_syncIndexCursor === 'function') BT_syncIndexCursor(idx);
+  // 'pinRight' 是「下一根」语义；其余 mode 一概按"光标到目标位置，窗口按需滚动"处理
+  BT_moveCursorTo(idx);
 
-  BT_updateCursorDisplay();
-  BT_updateIndexInfo();      // 同步指数右栏
-  BT_renderStats();
-  if (typeof BT_renderCustomTooltip === 'function') BT_renderCustomTooltip(idx);
+  BT_chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: BT_currentIdx });
+  if (typeof BT_renderCustomTooltip === 'function') BT_renderCustomTooltip(BT_currentIdx);
 }
 
-// 应用"显示根数"变更：调整 dataZoom，不重画
-// 模式：保持光标在窗口最右（pinRight），这样 +/- 后光标不会跳
-// 改进：如果用户拖动过 slider（BT_userZoomRange != null），保留 start 位置只调整 end
-// 注意：BT_visibleBars 已经由调用方设置好（包括 BT_renderKLine 自动扩窗逻辑），
-//       这里只读 select 同步一次（用户主动改 select 时），如果值已匹配则跳过
+// 应用"显示根数"变更：调整窗口宽度，尽量保持光标可见
+// 注意：BT_visibleBars 已由调用方设置好（select change / dataZoom 吸附），这里只负责落地
 function BT_applyVisibleBars() {
   if (!BT_chart || !BT_klineData) return;
-  // 先从 select 读最新值（用户主动改 select / BT_renderKLine 自动扩窗 / +/- 后等场景）
+  // select change 到达时 value 已更新 → 从 select 读最新档位
   var selVis = BT_getVisibleBars();
-  if (selVis !== BT_visibleBars) {
-    BT_visibleBars = selVis;
-  }
-  var zr;
-  if (BT_userZoomRange && BT_userZoomRange.end > BT_userZoomRange.start) {
-    // 用户曾拖动 slider → 保留 start 位置，调整 end 让窗口宽度 = BT_visibleBars
-    zr = BT_calcZoomRangeFromRange(BT_userZoomRange, BT_visibleBars);
-  } else {
-    zr = BT_calcZoomRange(BT_currentIdx, 'pinRight');
-  }
-  _inDataZoomApply = true;
-  try {
-    BT_chart.setOption({ dataZoom: [{ start: zr.start, end: zr.end }, { start: zr.start, end: zr.end }] });
-    BT_userZoomRange = { start: zr.start, end: zr.end };   // 同步回全局，供后续 +/- 沿用
-  } finally {
-    setTimeout(function() { _inDataZoomApply = false; }, 0);
-  }
-  // 同步指数图（窗口宽度）
-  if (typeof BT_syncIndexZoom === 'function') BT_syncIndexZoom();
-}
-
-// 基于给定的 {start,end} 窗口和目标宽度 vis，保留 start 调整 end；边界自动收紧
-function BT_calcZoomRangeFromRange(range, vis) {
-  if (!BT_klineData || vis < 1) return { start: 0, end: 100 };
+  if (selVis !== BT_visibleBars) BT_visibleBars = selVis;
   var total = BT_klineData.dates.length;
-  if (total <= 1) return { start: 0, end: 100 };
-  var visPct = vis / (total - 1) * 100;   // vis 根对应的百分比宽度
-  var maxStart = Math.max(0, 100 - visPct);
-  var startPct = Math.min(range.start, maxStart);
-  var endPct   = Math.min(100, startPct + visPct);
-  return { start: startPct, end: endPct };
-}
-
-// 让 idx 落在窗口最右，窗口宽度 = vis（"下一根/上一根 K线"按钮用）
-// 关键：传入 currentRange 时保留用户拖到的窗口宽度，避免 idx 接近 0 时窗口被压扁
-function BT_calcZoomRangeForIdx(idx, vis, currentRange) {
-  if (!BT_klineData || vis < 1) return { start: 0, end: 100 };
-  var total = BT_klineData.dates.length;
-  if (total <= 1) return { start: 0, end: 100 };
-
-  // 优先用 currentRange 宽度（保留用户拖动 slider 后的窗口宽度）
-  var visPct;
-  if (currentRange && currentRange.end > currentRange.start) {
-    visPct = currentRange.end - currentRange.start;
-  } else {
-    visPct = vis / (total - 1) * 100;
+  if (total === 0) return;
+  var vis = Math.min(BT_visibleBars, total);
+  if (BT_currentIdx == null) BT_currentIdx = total - 1;
+  // 优先保证光标仍在窗口内；窗口尽量保持原位（不硬跳回最右）
+  var start = BT_winStartIdx;
+  if (BT_currentIdx < start) {
+    start = BT_currentIdx;
+  } else if (BT_currentIdx >= start + vis) {
+    start = BT_currentIdx - vis + 1;
   }
-
-  var idxPct = idx / (total - 1) * 100;
-  // 边界保护：idx 太靠左（idxPct < visPct），窗口装不下完整宽度 → 左对齐、保留宽度
-  if (idxPct < visPct) {
-    return { start: 0, end: visPct };
-  }
-  // 边界保护：idx 太靠右，窗口不能超出 100% → 右对齐
-  if (idxPct > 100) {
-    return { start: Math.max(0, 100 - visPct), end: 100 };
-  }
-  var endPct = idxPct;
-  var startPct = Math.max(0, Math.min(endPct - visPct, 100 - visPct));
-  return { start: startPct, end: endPct };
+  start = Math.max(0, Math.min(start, total - vis));
+  BT_winStartIdx = start;
+  BT_applyWindow();
+  // 窗口宽度变了，光标覆盖层要重画
+  if (typeof BT_paintCrosshair === 'function') BT_paintCrosshair();
 }
 
 // ===== 缩放已取消（按用户要求）=====
