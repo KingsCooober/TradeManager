@@ -55,12 +55,20 @@ function BT_scheduleCursorRender() {
 // 每层换算都引入取整误差，导致：
 //   - 光标在窗口中间时点「下一根」，窗口会跟着平移（用户要的是"先走光标，到头再动窗口"）
 //   - 窗口宽度在 90/120 之间漂移，肉眼可见 K 线根数与下拉档位不一致
-// 现在统一以索引维护：窗口 = [winStartIdx, winStartIdx + vis)，vis 固定 90/120。
-var BT_winStartIdx = 0;        // 当前窗口左端对应的数据索引（含）
-var BT_winEndIdx = 0;          // 当前窗口右端对应的数据索引（不含）
+// 现在统一以索引维护，并且**端点是闭区间 [start, end]**。
+//
+// ★★ 闭区间是必须的（踩过的坑）：
+//   ECharts dataZoom 的 start/end 百分比映射到类目轴时，**end 是 inclusive 的**
+//   （实测：设 end = 190/249*100，索引 190 那根照样画出来）。
+//   早期把 winEndIdx 当成"不含"，于是窗口实际渲染 vis+1 根，
+//   而 BT_moveCursorTo 里判断 `targetIdx >= win.end` 就滚动窗口 ——
+//   结果是光标永远停在"可见倒数第 2 根"：再点一次就被判定越界、窗口滚一格，
+//   光标又回到新窗口的倒数第 2 根，看起来"K 线在动但光标到不了最右一根"。
+var BT_winStartIdx = 0;        // 窗口左端数据索引（含）
+var BT_winEndIdx = 0;          // 窗口右端数据索引（★ 含，闭区间）
 var BT_initialWindowDone = false;  // 数据首次加载后是否已初始化过窗口
 
-/** 当前窗口可见的数据索引区间 [start, end)（end 不含） */
+/** 当前窗口可见的数据索引区间 [start, end]（闭区间，含两端） */
 function BT_getWindowRange() {
   return { start: BT_winStartIdx, end: BT_winEndIdx };
 }
@@ -71,13 +79,18 @@ function BT_applyWindow() {
   var total = BT_klineData.dates.length;
   if (total <= 0) return;
   var vis = Math.min(BT_visibleBars, total);
-  // 钳制：start 不能 < 0，end 不能超过 total，且宽度恒定 = vis
+  // 钳制：窗口为闭区间 [start, start + vis - 1]，共 vis 根
   var start = Math.max(0, Math.min(BT_winStartIdx, total - vis));
   BT_winStartIdx = start;
-  BT_winEndIdx = Math.min(total, start + vis);
+  BT_winEndIdx = Math.min(total - 1, start + vis - 1);
+  // 末端不足 vis 根时（贴近数据开头）向右补齐，保证宽度恒定
+  if (BT_winEndIdx - BT_winStartIdx + 1 < vis && BT_winEndIdx === total - 1) {
+    BT_winStartIdx = Math.max(0, total - vis);
+  }
 
   var denom = Math.max(1, total - 1);
-  var sPct = start / denom * 100;
+  var sPct = BT_winStartIdx / denom * 100;
+  // ★ end 百分比直接对应 BT_winEndIdx（ECharts 语义为 inclusive）
   var ePct = BT_winEndIdx / denom * 100;
 
   _inDataZoomApply = true;
@@ -102,7 +115,7 @@ function BT_initWindow(cursorIdx) {
   BT_currentIdx = cursorIdx;
   BT_currentDate = BT_klineData.dates[cursorIdx];
   BT_currentClose = BT_klineData.ohlc[cursorIdx][1];
-  // pinRight：光标在窗口最右一根
+  // pinRight：光标在窗口最右一根（闭区间下即 cursorIdx === winEndIdx）
   BT_winStartIdx = Math.max(0, Math.min(total - vis, cursorIdx - vis + 1));
   BT_applyWindow();
   BT_initialWindowDone = true;
@@ -111,13 +124,19 @@ function BT_initWindow(cursorIdx) {
 /**
  * 移动光标到 targetIdx —— 「上一根 / 下一根」的唯一入口。
  *
- * ★ 窗口策略（本次重构的核心）：
- *   1. 光标在窗口内部 → 只移动光标，窗口**不动**（这样连续点按能逐根细看）
- *   2. 光标到达/越过窗口右端 → 窗口右移一根（光标始终贴在右边缘）
- *   3. 光标到达/越过窗口左端 → 窗口左移一根（光标始终贴在左边缘）
+ * ★ 窗口策略（本次重构的核心）：窗口是闭区间 [win.start, win.end]，
+ *   两端索引都是**可见**的，所以"光标停在最右一根"是完全合法的状态。
+ *   1. 光标在窗口内（start <= target <= end）→ 只移动光标，窗口**不动**
+ *   2. 光标越过右端（target > end）→ 窗口右移，光标贴右缘
+ *   3. 光标越过左端（target < start）→ 窗口左移，光标贴左缘
  *
  * 旧实现每次都用 pinRight 重算窗口，等于"每点一次整屏平移一根"，
  * 光标永远贴在最右边，中间 K 线一根都停不下来。
+ *
+ * ★★ 注意边界判定必须用 `>`（而不是 `>=`）：end 是闭区间端点，
+ *   若写成 `target >= win.end`，光标刚好走到最右一根时就会被误判越界、
+ *   触发窗口滚动，结果光标永远停在"可见倒数第 2 根"，
+ *   用户看到的是"K 线一直在动，但光标到不了最右边"。
  */
 function BT_moveCursorTo(targetIdx) {
   if (!BT_klineData) return;
@@ -135,16 +154,17 @@ function BT_moveCursorTo(targetIdx) {
     BT_currentClose = BT_klineData.ohlc[targetIdx][1];
 
     var win = BT_getWindowRange();
-    // 右侧越界 → 整体右移，光标贴右缘
-    if (targetIdx >= win.end) {
-      BT_winStartIdx = targetIdx - Math.min(BT_visibleBars, total) + 1;
+    var vis = Math.min(BT_visibleBars, total);
+    if (targetIdx > win.end) {
+      // 右侧越界 → 整体右移，光标贴右缘（闭区间：end 变成 targetIdx）
+      BT_winStartIdx = targetIdx - vis + 1;
       BT_applyWindow();
     } else if (targetIdx < win.start) {
       // 左侧越界 → 整体左移，光标贴左缘
       BT_winStartIdx = targetIdx;
       BT_applyWindow();
     }
-    // 其余情况：光标在窗口内 → 窗口完全不动
+    // 其余情况（含 target === win.end，即走到最右一根）→ 窗口完全不动
   }
 
   // 数据栏 / 统计 / 指数图 / 十字光标统一刷新
@@ -280,10 +300,11 @@ function BT_initChart() {
 
     var total = BT_klineData.dates.length;
     if (total <= 1) return;
-    // 换算成索引窗口（对端取整，保证覆盖足量可见根）
-    var startIdx = Math.max(0, Math.floor(s / 100 * (total - 1)));
-    var endIdx   = Math.min(total, Math.ceil(e / 100 * (total - 1)));
-    var bars = Math.max(1, endIdx - startIdx);
+    // 换算成索引窗口。★ ECharts 的 end 是 inclusive，所以
+    // 可见根数 = endIdx - startIdx + 1（不是 endIdx - startIdx）。
+    var startIdx = Math.max(0, Math.round(s / 100 * (total - 1)));
+    var endIdx   = Math.min(total - 1, Math.round(e / 100 * (total - 1)));
+    var bars = Math.max(1, endIdx - startIdx + 1);
     // 吸附到最近的允许档位
     var snapped = BT_ALLOWED_VISIBLE_BARS[0];
     var best = Infinity;
@@ -483,9 +504,10 @@ function BT_hideCrosshairAt(domId) {
 function BT_paintCrosshair() {
   if (typeof BT_crosshair === 'undefined' || BT_currentIdx == null) return;
   // 主图：光标必须落在当前窗口内，否则画出去会误导
+  //（窗口是闭区间 [start, end]，两端都算在内）
   if (BT_klineData) {
     var win = BT_getWindowRange();
-    if (BT_currentIdx >= win.start && BT_currentIdx < win.end) {
+    if (BT_currentIdx >= win.start && BT_currentIdx <= win.end) {
       BT_crosshairMoveTo('btChart', BT_currentIdx);
     } else {
       BT_hideCrosshairAt('btChart');
@@ -1695,10 +1717,11 @@ function BT_applyVisibleBars() {
   var vis = Math.min(BT_visibleBars, total);
   if (BT_currentIdx == null) BT_currentIdx = total - 1;
   // 优先保证光标仍在窗口内；窗口尽量保持原位（不硬跳回最右）
+  // ★ 闭区间：可见范围是 [start, start + vis - 1]
   var start = BT_winStartIdx;
   if (BT_currentIdx < start) {
     start = BT_currentIdx;
-  } else if (BT_currentIdx >= start + vis) {
+  } else if (BT_currentIdx > start + vis - 1) {
     start = BT_currentIdx - vis + 1;
   }
   start = Math.max(0, Math.min(start, total - vis));
@@ -1938,22 +1961,22 @@ function BT_pinIndexZoomToLatest() {
 function BT_syncIndexZoom() {
   if (!BT_indexChart || !BT_chart) return;
   if (!BT_klineData || !BT_indexData) return;
-  // 主图 slider 在 dataZoom[1]
-  var mainDz = BT_chart.getOption().dataZoom[1];
-  if (!mainDz) return;
 
   // 关键：按"日期范围"对齐，而不是按 idx 比例对齐
   // 原因：主图和指数图的数据范围可能不同（API 限制 / 上市时间不同 / 缺失数据等）
   //       同样 idx 在两图里对应的日期不同 → 视觉上"日期窗口不同步"
   // 算法：在指数图里查主图 startDate/endDate 对应的 idx，按这个 idx 设 zoom
+  //
+  // ★ 直接用 BT_winStartIdx / BT_winEndIdx（权威状态），不从主图 dataZoom
+  //   百分比反算 —— 反算会引入取整误差，让指数图窗口与主图差一根。
   var mainDates = BT_klineData.dates;
   var idxDates  = BT_indexData.dates;
   var mainTotal = mainDates.length;
   var idxTotal  = idxDates.length;
   if (mainTotal === 0 || idxTotal === 0) return;
 
-  var mainStartIdx = Math.floor(mainDz.start / 100 * (mainTotal - 1));
-  var mainEndIdx   = Math.floor(mainDz.end   / 100 * (mainTotal - 1));
+  var mainStartIdx = Math.max(0, Math.min(mainTotal - 1, BT_winStartIdx));
+  var mainEndIdx   = Math.max(0, Math.min(mainTotal - 1, BT_winEndIdx));
   var mainStartDate = mainDates[mainStartIdx];
   var mainEndDate   = mainDates[mainEndIdx];
 

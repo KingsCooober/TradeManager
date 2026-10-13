@@ -69,8 +69,10 @@ test.describe('12 - 回测练习页', () => {
 
       const before = { ...(await bt.cursorState()), win: await bt.windowState() };
 
-      // 光标在窗口最右端 → 点「上一根」光标必动，窗口不动（见下一条用例覆盖滚动）
+      // 初始光标钉在窗口最右一根（闭区间下 cursor === win.end）
       expect(bt.windowContains(before.win, before.cursor), '光标初始应在窗口内').toBe(true);
+      expect(before.cursor, '初始光标应在窗口最右一根').toBe(before.win.end);
+
       await bt.clickPrevBar();
       const afterPrev = { ...(await bt.cursorState()), win: await bt.windowState() };
 
@@ -82,6 +84,44 @@ test.describe('12 - 回测练习页', () => {
       await bt.clickNextBar();
       const afterNext = { ...(await bt.cursorState()), win: await bt.windowState() };
       expect(afterNext.cursor, '再点「下一根」应回到原位').toBe(before.cursor);
+      expect(afterNext.win, '光标回到最右一根，窗口应完全没动').toEqual(before.win);
+    });
+
+    // ★ 回归：光标必须能走到"可见的最右一根"并停在那里
+    //   窗口不在数据末尾时（用户拖过 slider），ECharts 的 dataZoom end 是
+    //   inclusive，早期把窗口右端当"不含"→ 光标一到最右就被误判越界、
+    //   触发窗口滚动，导致"K 线一直在动但光标永远停在倒数第 2 根"。
+    test('光标应能停在可见的最右一根（回归：永远到不了最右）', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      // 把窗口挪到中段，使"最右侧不是最后一根 K 线"
+      const win = await bt.setWindowStart(100);
+      await page.waitForTimeout(400);
+
+      // 光标放到窗口最右一根 → 窗口不应滚动
+      const atRight = await bt.setCursorToEdge('right');
+      const afterSet = await bt.windowState();
+      expect(afterSet, '把光标放到最右一根不应改变窗口').toEqual(win);
+      expect(atRight.cursor, '光标应停在最右一根').toBe(win.end);
+
+      // 从窗口中间一路点「下一根」，必须能逐格走到最右一根
+      await bt.setCursorToWindowCenter();
+      const mid = (await bt.cursorState()).cursor;
+      const steps = win.end - mid;
+      for (let i = 0; i < steps; i++) {
+        await bt.clickNextBar();
+      }
+      const reached = { ...(await bt.cursorState()), win: await bt.windowState() };
+      expect(reached.cursor, '应逐格走到可见最右一根').toBe(win.end);
+      expect(reached.win, '走到最右一根的过程中窗口不应滚动').toEqual(win);
+
+      // 再多点一次才越界滚动，且光标仍贴在新窗口的最右一根
+      await bt.clickNextBar();
+      const over = { ...(await bt.cursorState()), win: await bt.windowState() };
+      expect(over.cursor, '再点一次光标应前进一格').toBe(win.end + 1);
+      expect(over.win.start, '此时窗口才右移一格').toBe(win.start + 1);
+      expect(over.cursor, '光标应贴在新窗口的最右一根').toBe(over.win.end);
     });
 
     // ★ 新行为（替代旧的"窗口每点一次就平移"）：光标在窗口内部时窗口必须完全不动，
@@ -92,7 +132,7 @@ test.describe('12 - 回测练习页', () => {
 
       // 把光标放到窗口正中
       const start = await bt.setCursorToWindowCenter();
-      expect(start.win.start < start.cursor && start.cursor < start.win.end - 1,
+      expect(start.win.start < start.cursor && start.cursor < start.win.end,
         '光标应落在窗口内部').toBe(true);
 
       await bt.clickPrevBar(2);
@@ -111,17 +151,17 @@ test.describe('12 - 回测练习页', () => {
       const { bt } = await enterBacktestWithAuth(page);
       await bt.loadData();
 
-      // 光标贴窗口左端 → 点「上一根」→ 窗口左移
+      // 光标贴窗口左端（闭区间下即 start）→ 点「上一根」→ 窗口左移
       const l = await bt.setCursorToEdge('left');
-      expect(bt.windowContains(l.win, l.cursor), '光标应贴在窗口左端').toBe(true);
+      expect(l.cursor, '光标应贴在窗口左端').toBe(l.win.start);
       await bt.clickPrevBar();
       const afterLeft = await bt.windowState();
       expect(afterLeft.start, '窗口左端应左移一格').toBe(l.win.start - 1);
       expect(afterLeft.end, '窗口右端应同步左移').toBe(l.win.end - 1);
 
-      // 光标贴窗口右端 → 点「下一根」→ 窗口右移
+      // 光标贴窗口右端（闭区间下即 end）→ 点「下一根」→ 窗口右移
       const r = await bt.setCursorToEdge('right');
-      expect(bt.windowContains(r.win, r.cursor), '光标应贴在窗口右端').toBe(true);
+      expect(r.cursor, '光标应贴在窗口右端').toBe(r.win.end);
       await bt.clickNextBar();
       const afterRight = await bt.windowState();
       expect(afterRight.start, '窗口左端应右移一格').toBe(r.win.start + 1);
@@ -182,15 +222,14 @@ test.describe('12 - 回测练习页', () => {
       await page.waitForTimeout(800);
 
       const before = { ...(await bt.cursorState()), win: await bt.windowState() };
-      // 光标在最右端（初始状态），点「上一根」→ 光标动、窗口不动
-      expect(before.cursor, '初始光标应在窗口右端').toBe(before.win.end - 1);
+      // 光标在最右端（初始状态，闭区间下 = win.end），点「上一根」→ 光标动、窗口不动
+      expect(before.cursor, '初始光标应在窗口最右一根').toBe(before.win.end);
       await bt.clickPrevBar();
       const after = { ...(await bt.cursorState()), win: await bt.windowState() };
       expect(after.cursor, '光标应后退一格').toBe(before.cursor - 1);
-      expect(after.win, '光标离开右端后窗口不应滚动').toEqual(before.win);
+      expect(after.win, '光标离开最右端后窗口不应滚动').toEqual(before.win);
 
       // 继续点到左端，再继续点 → 窗口才开始左移
-      // 光标当前在 after.cursor，窗口左端是 before.win.start
       //（用键盘批量推进比逐次点击快得多，语义完全等价）
       const stepsToLeft = after.cursor - before.win.start;   // 到左端还需几步
       for (let i = 0; i < stepsToLeft + 1; i++) {

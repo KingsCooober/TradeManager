@@ -106,8 +106,9 @@ class BacktestPage {
   }
 
   /**
-   * 当前可见窗口（数据索引）—— [start, end)
-   * 断言"窗口是否滚动"要用这个，不是百分比（百分比有换算误差）
+   * 当前可见窗口（数据索引，**闭区间** [start, end]，两端都可见）
+   * 断言"窗口是否滚动"要用这个，不是百分比（百分比有换算误差）。
+   * ★ ECharts dataZoom 的 end 是 inclusive，所以这里 end 也是"最右一根的索引"。
    */
   async windowState() {
     return this.page.evaluate(() => ({
@@ -116,17 +117,17 @@ class BacktestPage {
     }));
   }
 
-  /** 光标是否在当前窗口内 */
+  /** 光标是否在当前窗口内（闭区间） */
   async isCursorInWindow() {
     return this.page.evaluate(() => {
       const w = window.BT_getWindowRange();
-      return window.BT_currentIdx >= w.start && window.BT_currentIdx < w.end;
+      return window.BT_currentIdx >= w.start && window.BT_currentIdx <= w.end;
     });
   }
 
-  /** 给定窗口与光标索引，判断光标是否落在窗口内（纯函数，便于断言可读） */
+  /** 给定窗口与光标索引，判断光标是否落在窗口内（闭区间，纯函数便于断言） */
   windowContains(win, cursor) {
-    return cursor >= win.start && cursor < win.end;
+    return cursor >= win.start && cursor <= win.end;
   }
 
   /**
@@ -136,7 +137,7 @@ class BacktestPage {
   async setCursorToEdge(side) {
     return this.page.evaluate((s) => {
       const w = window.BT_getWindowRange();
-      const idx = s === 'left' ? w.start : w.end - 1;
+      const idx = s === 'left' ? w.start : w.end;   // 闭区间：end 即最右一根
       window.BT_setCursor(idx);
       const nw = window.BT_getWindowRange();
       return { cursor: window.BT_currentIdx, win: { start: nw.start, end: nw.end } };
@@ -155,6 +156,19 @@ class BacktestPage {
       const nw = window.BT_getWindowRange();
       return { cursor: window.BT_currentIdx, win: { start: nw.start, end: nw.end } };
     });
+  }
+
+  /**
+   * 把窗口挪到中段（模拟用户拖动过 slider，使"最右侧不是最后一根"）
+   * @param {number} startIdx 目标窗口左端索引
+   */
+  async setWindowStart(startIdx) {
+    return this.page.evaluate((s) => {
+      window.BT_winStartIdx = s;
+      window.BT_applyWindow();
+      const w = window.BT_getWindowRange();
+      return { start: w.start, end: w.end };
+    }, startIdx);
   }
 
   /** 指数图 dataZoom 窗口 */
