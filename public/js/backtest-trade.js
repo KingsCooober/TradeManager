@@ -327,6 +327,8 @@ function BT_doSell(date, price, volume) {
 }
 
 // 一键清仓
+// ★ 按用户要求去掉二次确认：回测场景下清仓是高频操作，
+//   每次都弹确认框打断节奏；且回测数据是练习数据，误清仓可直接重来。
 function BT_clearPosition() {
   if (BT_position.volume === 0) {
     BT_toast('当前无持仓', 'warn');
@@ -336,16 +338,7 @@ function BT_clearPosition() {
     BT_toast('请先在 K 线上移动光标', 'warn');
     return;
   }
-  // ★ 原生 confirm → showConfirm（统一弹窗组件，异步）
-  showConfirm({
-    title: '一键清仓',
-    message: '确定以 ' + BT_currentClose.toFixed(2) + ' 的价格清仓 ' + BT_position.volume + ' 股？',
-    type: 'warning',
-    confirmText: '清仓'
-  }).then(function (ok) {
-    if (!ok) return;
-    BT_doSell(BT_currentDate, BT_currentClose, BT_position.volume);
-  });
+  BT_doSell(BT_currentDate, BT_currentClose, BT_position.volume);
 }
 
 // 删除最后一笔（撤销）

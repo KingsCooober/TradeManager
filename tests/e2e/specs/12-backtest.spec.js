@@ -533,6 +533,16 @@ test.describe('12 - 回测练习页', () => {
       expect(tb.tipRight).toBeLessThan(tb.posLeft);
     });
 
+    // 按用户要求调换：「上一根」在左、「下一根」在右
+    test('导航按钮顺序应为「上一根」在前、「下一根」在后', async ({ page }) => {
+      await enterBacktestWithAuth(page);
+      const ids = await page.evaluate(() => {
+        const nav = document.querySelector('.bt-btn-group-nav');
+        return Array.from(nav.querySelectorAll('button')).map((b) => b.id);
+      });
+      expect(ids, '「上一根」应在「下一根」左侧').toEqual(['btnPrevBar', 'btnNextBar']);
+    });
+
     test('窄屏应回退为上下堆叠且图表不溢出', async ({ page }) => {
       const { bt } = await enterBacktestWithAuth(page, { viewport: { width: 1300, height: 1000 } });
       await bt.loadData();
@@ -590,6 +600,89 @@ test.describe('12 - 回测练习页', () => {
   // 8. 十字光标（回归：hover 时不显示）
   // ============================================================
   test.describe('十字光标', () => {
+    // ★ 新交互：鼠标 hover 到哪根光标就在哪根；不再 hover 任何 K 线时，
+    //   2 秒后自动跳到当前窗口最右一根（回测最常看最新一根，省一次手动点击）。
+    test('hover 离开 2 秒后光标应自动跳到窗口最右一根', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      // 把窗口挪到中段，使"最右一根"明显区别于光标当前所在
+      const win = await bt.setWindowStart(100);
+      await page.waitForTimeout(400);
+
+      const box = await page.locator('#btChart').boundingBox();
+      // hover 到窗口左侧，光标落在最右一根之外的某根
+      await page.mouse.move(box.x + box.width * 0.2, box.y + 130);
+      await page.waitForTimeout(400);
+      const hovered = await bt.cursorState();
+      expect(hovered.cursor, '光标应跟随鼠标落在窗口内').toBeGreaterThanOrEqual(win.start);
+      expect(hovered.cursor, '光标此时不应已在最右一根').toBeLessThan(win.end);
+
+      // 鼠标移出图表 → 1 秒时还不应跳（确认有 2 秒延迟）
+      await page.mouse.move(box.x - 400, box.y - 400);
+      await page.waitForTimeout(1000);
+      expect((await bt.cursorState()).cursor, '1 秒时还不应归位').toBe(hovered.cursor);
+
+      // 再等到 2 秒之后 → 光标跳到窗口最右一根
+      await page.waitForTimeout(1500);
+      const after = { ...(await bt.cursorState()), win: await bt.windowState() };
+      expect(after.cursor, '2 秒后应归位到窗口最右一根').toBe(after.win.end);
+      expect(after.win, '归位不应改变窗口').toEqual(win);
+      expect(after.date, '右栏日期应同步到最右一根').toBeTruthy();
+    });
+
+    // 归位计时必须可被"再次 hover"取消，否则用户看着某根时会被强行拉走
+    test('归位计时应被再次 hover 取消', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      await bt.setWindowStart(100);
+      await page.waitForTimeout(400);
+      const box = await page.locator('#btChart').boundingBox();
+
+      // hover → 离开（起计时）
+      await page.mouse.move(box.x + box.width * 0.3, box.y + 130);
+      await page.waitForTimeout(350);
+      await page.mouse.move(box.x - 400, box.y - 400);
+      await page.waitForTimeout(1200);           // 1.2s < 2s
+
+      // 再次 hover → 应取消计时
+      await page.mouse.move(box.x + box.width * 0.35, box.y + 130);
+      await page.waitForTimeout(400);
+      const rehover = await bt.cursorState();
+
+      // 离开 1.2s（若计时没被取消此刻就会跳）
+      await page.mouse.move(box.x - 400, box.y - 400);
+      await page.waitForTimeout(1200);
+      expect((await bt.cursorState()).cursor, '计时应已被取消，光标保持不动').toBe(rehover.cursor);
+
+      // 再等满 2 秒 → 最终仍会归位
+      await page.waitForTimeout(1400);
+      const fin = { ...(await bt.cursorState()), win: await bt.windowState() };
+      expect(fin.cursor, '最终仍应归位到最右一根').toBe(fin.win.end);
+    });
+
+    // 鼠标停在"没有 K 线"的区域（y 轴留白 / 底部滑块）也算离开
+    test('鼠标移到无 K 线区域也应触发归位', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      await bt.setWindowStart(100);
+      await page.waitForTimeout(400);
+      const box = await page.locator('#btChart').boundingBox();
+
+      await page.mouse.move(box.x + box.width * 0.5, box.y + 130);
+      await page.waitForTimeout(400);
+      const inPlot = await bt.cursorState();
+
+      // 移到 y 轴刻度留白（绘图区之外）
+      await page.mouse.move(box.x + 20, box.y + 130);
+      await page.waitForTimeout(2600);
+      const after = { ...(await bt.cursorState()), win: await bt.windowState() };
+      expect(after.cursor, '停在无 K 线区域 2 秒后应归位').toBe(after.win.end);
+      expect(after.cursor, '确实发生了跳转').not.toBe(inPlot.cursor);
+    });
+
     test('两图 hover 时应显示十字光标，且随鼠标移动', async ({ page }) => {
       const { bt } = await enterBacktestWithAuth(page);
       await bt.loadData();
@@ -775,10 +868,11 @@ test.describe('12 - 回测练习页', () => {
       expect(i2.curDate, '主图右栏应跟着切到同一根').toBe(i2.idxDate);
     });
 
-    // 回归：清仓确认后立刻连点「下一根」不应丢点击
+    // 回归：清仓后立刻连点「下一根」不应丢点击
     //（ui.js 的 showConfirm 淡出动画期间曾有 200ms 仍拦截整屏点击，
     //  导致快速连点被静默吞掉，表现为"下一根只走了一根/步数对不上"）
-    test('清仓确认后立即连点「下一根」每次都应生效', async ({ page }) => {
+    // ★ 注：清仓的二次确认框已按用户要求去掉，这里直接点击即生效。
+    test('清仓后立即连点「下一根」每次都应生效', async ({ page }) => {
       const { bt } = await enterBacktestWithAuth(page);
       await bt.loadData();
 
@@ -788,10 +882,9 @@ test.describe('12 - 回测练习页', () => {
       });
       await page.waitForTimeout(400);
 
-      // 点清仓 → 确认
+      // 点清仓（无二次确认，点击即成交）
       await page.click('.bt-tradebar #btnClearPos');
-      await page.waitForSelector('.ui-modal-overlay', { state: 'visible' });
-      await page.click('.ui-modal-overlay .btn-primary');
+      await page.waitForTimeout(120);
 
       // 不等待，立刻连点 4 次（此前会丢失点击）
       for (let i = 0; i < 4; i++) {
@@ -806,6 +899,26 @@ test.describe('12 - 回测练习页', () => {
       }));
       expect(pos.vol, '清仓后持仓应为 0').toBe(0);
       expect(pos.idx, '连点 4 次应精确前进 4 根（104）').toBe(104);
+    });
+
+    // 清仓已去掉二次确认：点一下就应该直接成交
+    test('「清仓」应无二次确认，点击即成交', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+
+      await page.evaluate(() => {
+        BT_setCursor(100);
+        BT_doBuy(BT_currentDate, BT_currentClose, 1000);
+      });
+      await page.waitForTimeout(400);
+      expect(await page.evaluate(() => BT_position.volume), '买入后应有持仓').toBeGreaterThan(0);
+
+      await page.click('.bt-tradebar #btnClearPos');
+      await page.waitForTimeout(300);
+
+      // 不应出现任何确认弹窗
+      await expect(page.locator('.ui-modal-overlay'), '清仓不应弹确认框').toHaveCount(0);
+      expect(await page.evaluate(() => BT_position.volume), '点击后应已清仓').toBe(0);
     });
 
     // 回归：光标只应出现在实际有 K 线的绘图区内

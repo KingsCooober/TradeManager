@@ -338,9 +338,10 @@ function BT_initChart() {
 
   // 十字光标（自绘 canvas 覆盖层；ECharts 内置 axisPointer 在 tooltip.show=false 下不生效）
   // 4th arg：hover 索引回传 → 驱动指数图光标 + 两侧数据栏（两图同步）
+  // 5th arg：离开 K 线回调 → 启动"2 秒后归位到窗口最右一根"计时
   BT_attachCrosshair('btChart', BT_chart, true, function (idx) {
     BT_hoverSyncFrom(idx, 'main');
-  });
+  }, BT_scheduleHoverIdleJump);
 }
 
 /**
@@ -402,9 +403,10 @@ function BT_isInsidePlot(chart, offX, offY) {
  * @param {boolean} isMain 主图（成交量在最底部）；指数图无成交量，绘图区只到 K线底部
  * @param {function} [onHoverIdx] hover 出的索引回调（驱动两图同步）
  */
-function BT_attachCrosshair(domId, chart, isMain, onHoverIdx) {
+function BT_attachCrosshair(domId, chart, isMain, onHoverIdx, onHoverLeave) {
   if (typeof BT_crosshair === 'undefined') return;
   var hasCb = (typeof onHoverIdx === 'function');
+  var hasLeave = (typeof onHoverLeave === 'function');
   BT_crosshair.attach(domId, chart, function () {
     var g = BT_getPlotGeom(chart, isMain) || {};
     return {
@@ -417,9 +419,51 @@ function BT_attachCrosshair(domId, chart, isMain, onHoverIdx) {
       data: g.data,
       // onHoverIdx：让本图 hover 出的索引回传给共享光标状态，
       //   从而驱动另一张图的光标 + 两侧数据栏（两图互相同步）
-      onHoverIdx: hasCb ? onHoverIdx : null
+      onHoverIdx: hasCb ? onHoverIdx : null,
+      // onHoverLeave：鼠标离开 K 线（移出图表 / 移到 y 轴、留白、滑块等
+      //   无 K 线区域）时回调，用于启动"2 秒后归位到最右一根"的计时
+      onHoverLeave: hasLeave ? onHoverLeave : null
     };
   });
+}
+
+// ===== 鼠标离开 K 线后的"自动归位" =====
+// 交互约定：
+//   - 鼠标 hover 到哪根 K 线，光标就在哪根（实时跟随）
+//   - 鼠标不再 hover 任何 K 线时，等 BT_HOVER_IDLE_MS 毫秒后光标自动跳到
+//     **窗口最右一根**（回测时最常看的是"最新一根"，省得手动点「下一根」）
+//   - 期间只要再次 hover，计时就取消，光标继续跟随鼠标
+var BT_HOVER_IDLE_MS = 2000;
+var _hoverIdleTimer = null;
+
+/** 记录鼠标正在 hover 某根 K 线（取消待执行的自动归位） */
+function BT_noteHoverActive() {
+  if (_hoverIdleTimer != null) {
+    clearTimeout(_hoverIdleTimer);
+    _hoverIdleTimer = null;
+  }
+}
+
+/** 鼠标离开 K 线 → 起一个延时归位计时（重复调用会重置计时） */
+function BT_scheduleHoverIdleJump() {
+  BT_noteHoverActive();
+  _hoverIdleTimer = setTimeout(function () {
+    _hoverIdleTimer = null;
+    BT_jumpToWindowRightEdge();
+  }, BT_HOVER_IDLE_MS);
+}
+
+/**
+ * 把光标跳到当前窗口的最右一根（闭区间下的 BT_winEndIdx）。
+ * 已经在最右一根时什么也不做（避免无意义的重复渲染/存档）。
+ */
+function BT_jumpToWindowRightEdge() {
+  if (!BT_klineData || !BT_initialWindowDone) return;
+  var win = BT_getWindowRange();
+  var target = win.end;
+  if (target == null) return;
+  if (BT_currentIdx === target) return;   // 已归位，避免重复写盘
+  BT_moveCursorTo(target);
 }
 
 /**
@@ -431,6 +475,8 @@ function BT_attachCrosshair(domId, chart, isMain, onHoverIdx) {
  */
 function BT_hoverSyncFrom(idx, from) {
   if (typeof idx !== 'number' || idx < 0) return;
+  // hover 生效 → 取消待执行的"自动跳到最右一根"
+  BT_noteHoverActive();
   if (from === 'main') {
     // 主图 hover：更新主图光标状态（含两侧数据栏），并把光标同步到指数图
     if (typeof BT_onCursorMove === 'function') BT_onCursorMove(idx);
@@ -1832,9 +1878,10 @@ function BT_initIndexChart() {
   BT_setupIndexTooltip();
   // 指数图同样绑定自绘十字光标
   // 4th arg：hover 索引回传 → 驱动主图光标 + 两侧数据栏（两图同步）
+  // 5th arg：离开 K 线回调 → 启动"2 秒后归位到窗口最右一根"计时
   BT_attachCrosshair('btChartIndex', BT_indexChart, false, function (idx) {
     BT_hoverSyncFrom(idx, 'index');
-  });
+  }, BT_scheduleHoverIdleJump);
   // 按当前容器高度拆分 grid
   BT_updateIndexGrids();
 }

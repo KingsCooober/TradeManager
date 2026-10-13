@@ -171,6 +171,13 @@
       draw(inst, idx, o);
     };
 
+    // 通知页面"当前没有 hover 任何 K 线"（移出图表 / 落在无 K 线区域）
+    // 页面据此启动"2 秒后归位到窗口最右一根"的计时。
+    var notifyLeave = function (o) {
+      o = o || inst.getOpts() || {};
+      if (typeof o.onHoverLeave === 'function') o.onHoverLeave();
+    };
+
     // ★ 事件源（实测结论）：
     //   - chart 'mousemove'：tooltip.show=false 时实测 0 次触发，拿不到 dataIndex
     //   - chart 'updateAxisPointer'：能触发，但 axesInfo 实测为空数组 []（拿不到 value）
@@ -187,28 +194,28 @@
         var o = inst.getOpts() || {};
         var idx = chart.convertFromPixel({ xAxisIndex: 0 }, offX);
         // convertFromPixel 可能返回小数，取整并做边界校验
-        if (idx == null || isNaN(idx)) { return; }
+        if (idx == null || isNaN(idx)) { notifyLeave(o); return; }
         idx = Math.round(idx);
         // ★ 边界钳制：鼠标落在绘图区**之外**（左侧 y 轴刻度、右侧留白、
         //   底部缩放滑块等）时，convertFromPixel 仍会换算出一个索引，
         //   导致"没有 K 线的地方也出现光标，显示范围与实际可见 K 线不一致"。
         //
-        //   ★ 这里改为"忽略本次移动"而不是"隐藏光标"：光标常驻语义下，
-        //     鼠标只是路过图外（例如去点右上角按钮），光标应停在原位，
-        //     而不是闪一下消失。真正需要清除的场景只有数据/窗口变更。
+        //   ★ 这里"忽略本次移动"而不是"隐藏光标"：光标常驻语义下，
+        //     鼠标只是路过图外（例如去点右上角按钮），光标应停在原位。
+        //     同时通知页面"当前没有 hover 任何 K 线"，由页面决定 2 秒后归位。
         if (o.plotLeft != null && o.plotRight != null) {
-          if (offX < o.plotLeft || offX > o.plotRight) { return; }
+          if (offX < o.plotLeft || offX > o.plotRight) { notifyLeave(o); return; }
         }
         if (o.minIdx != null && o.maxIdx != null &&
             !isNaN(o.minIdx) && !isNaN(o.maxIdx)) {
           var lo = Math.min(o.minIdx, o.maxIdx);
           var hi = Math.max(o.minIdx, o.maxIdx);
-          if (idx < lo || idx > hi) { return; }
+          if (idx < lo || idx > hi) { notifyLeave(o); return; }
         }
         // ★ 纵向同理：底部 dataZoom 滑块不在 K 线区域内，
         //   指针在那里时应让位给拖动手势，光标保持在原位
         if (offY != null && o.plotBottom != null && offY > o.plotBottom) {
-          return;
+          notifyLeave(o); return;
         }
         onHover(idx);
         // 回传给页面：驱动另一张图的光标与两侧数据栏（两图互相同步）
@@ -218,8 +225,10 @@
       inst.onZrMove = onZrMove;
       // zrender 的 globalout 同样需要独立解绑
       // ★ 不再在 globalout 里直接 hide：光标要常驻（鼠标移出后仍显示当前位置）。
-      //   这里只做一个"重新绘制"，把可能因尺寸变化/主题切换造成的残影清掉。
+      //   这里只做"重新绘制"清残影，并通知页面"已不再 hover"。
       zr.on('globalout', function () {
+        var o = inst.getOpts() || {};
+        notifyLeave(o);
         if (typeof global.BT_repaintCrosshair === 'function') global.BT_repaintCrosshair();
       });
     }
@@ -238,12 +247,15 @@
 
     chart.on('updateAxisPointer', onUpdate);
     chart.on('mousemove', onMove);
-    // ★ 同样不在 globalout / mouseout 里清掉光标（光标常驻语义）
+    // ★ 同样不在 globalout / mouseout 里清掉光标（光标常驻语义），
+    //   但要通知页面"已不再 hover" → 启动 2 秒后归位到最右一根。
     chart.on('globalout', function () {
+      notifyLeave();
       if (typeof global.BT_repaintCrosshair === 'function') global.BT_repaintCrosshair();
     });
     if (chart.getZr) {
       chart.getZr().on('globalout', function () {
+        notifyLeave();
         if (typeof global.BT_repaintCrosshair === 'function') global.BT_repaintCrosshair();
       });
     }
