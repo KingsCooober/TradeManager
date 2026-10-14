@@ -345,14 +345,66 @@ function releaseEMLock() {
   }
 }
 
-// 腾讯 K线接口：web.ifzq.gtimg.cn 可用
+// 腾讯 K线接口可用域名
+//
+// ★ 2026-10 实测：web.ifzq.gtimg.cn 在连续批量请求后会返回 **HTTP 501**，
+//   响应体是腾讯 WAF 的跳转页（`https://waf.tencent.com/501page.html?...&id=xxx`），
+//   带 per-IP 的封禁 id，冷却 30 秒也不恢复。
+//   同一时刻同路径的 **ifzq.gtimg.cn（去掉 web. 前缀）完全正常**，
+//   且返回内容与 proxy.finance.qq.com/ifzqgtimg/... 逐字节等价（实测各 16526 字节、
+//   243 根、首根 ["2020-01-02","3.870",...]）。
+//   因此这里改成多域名轮询：一个被 WAF 拦了就换下一个。
+//   注意：批量预热时最容易被拦的是 web.ifzq，所以把它排在最后。
+const TX_KLINE_HOSTS = [
+  'ifzq.gtimg.cn',
+  'proxy.finance.qq.com/ifzqgtimg',
+  'web.ifzq.gtimg.cn',
+];
+let _txHostIdx = 0;   // 当前首选域名下标（成功即固定，失败则轮换）
+
+/** 按当前首选域名拼 URL；proxy 域名路径多一段 /ifzqgtimg */
+function buildTencentKLineUrl(symbol, period, startDate, endDate, count) {
+  const pathPart = '/appstock/app/fqkline/get?param=' +
+    encodeURIComponent([symbol, period, startDate || '', endDate || '', count].join(',') + ',qfq');
+  return 'https://' + TX_KLINE_HOSTS[_txHostIdx] + pathPart;
+}
+
+/**
+ * 带域名轮换的腾讯 K 线请求。
+ * 依次尝试各域名，任一成功就把它设为下次首选（避免每次都先撞一次被封的域名）。
+ * 全部失败时抛最后一个错误。
+ */
+async function httpsGetTencentKLine(symbol, period, startDate, endDate, count) {
+  let lastErr = null;
+  const startIdx = _txHostIdx;
+  for (let i = 0; i < TX_KLINE_HOSTS.length; i++) {
+    const idx = (startIdx + i) % TX_KLINE_HOSTS.length;
+    const saved = _txHostIdx;
+    _txHostIdx = idx;
+    try {
+      const buf = await httpsGet(buildTencentKLineUrl(symbol, period, startDate, endDate, count));
+      // ★ WAF 拦截时状态码是 501，但 httpsGet 只返回 body。
+      //   这里用内容特征识别：WAF 页面以 <!DOCTYPE 开头，正常响应是 JSON。
+      const text = buf.toString('utf8');
+      if (text.charCodeAt(0) === 0x3C /* '<' */) {
+        throw new Error('被 WAF 拦截（主机 ' + TX_KLINE_HOSTS[idx] + '）');
+      }
+      _txHostIdx = idx;     // 成功：记住这个域名
+      return buf;
+    } catch (e) {
+      lastErr = e;
+      _txHostIdx = saved;   // 失败：恢复，继续试下一个
+    }
+  }
+  throw lastErr || new Error('腾讯 K 线所有域名均失败');
+}
+
+// 腾讯 K线接口
 // day 数组字段：[日期, 开, 收, 高, 低, 成交额(元), 成交量(手), 涨跌幅%, ...]
 // 通用腾讯 K线接口（支持 day/week/month 三种周期）
 async function fetchKLineFromTencentPeriod(symbol, count, period) {
   // period: 'day' | 'week' | 'month'
-  const url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' +
-    encodeURIComponent(symbol + ',' + period + ',,,' + count + ',qfq');
-  const buf = await httpsGet(url);
+  const buf = await httpsGetTencentKLine(symbol, period, '', '', count);
   if (buf.length === 0) throw new Error('腾讯K线接口返回空');
   const json = JSON.parse(buf.toString('utf8'));
   if (json.code !== 0) throw new Error('腾讯K线返回 code=' + json.code);
@@ -402,9 +454,7 @@ const TX_MAX_SEGMENTS = 6;     // 最多切几段（6 × 2.5 = 15 年，覆盖 1
 async function fetchKLineFromTencentRange(symbol, startDate, endDate, period) {
   period = period || 'day';
   // 区间查询时 count 传 640（实测传更大也没副作用，但保持与单段上限一致）
-  const url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' +
-    encodeURIComponent(symbol + ',' + period + ',' + startDate + ',' + endDate + ',640,qfq');
-  const buf = await httpsGet(url);
+  const buf = await httpsGetTencentKLine(symbol, period, startDate, endDate, 640);
   if (buf.length === 0) throw new Error('腾讯K线区间接口返回空');
   let json;
   try { json = JSON.parse(buf.toString('utf8')); }
