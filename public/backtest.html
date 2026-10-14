@@ -168,6 +168,54 @@
     现在 stretch 让 wrap 高度 = max(图表, 侧栏)，而侧栏是 align-self 里的
     弹性布局、不会超过图表设定好的高度。 */
   align-items: stretch;
+  /* 加载遮罩以 wrap 为定位父级 */
+  position: relative;
+}
+
+/* ===== K 线加载中遮罩 =====
+   慢的时候（尤其上游抖动）让用户看到"正在加载第几阶段"，
+   而不是只看到按钮变成"⏳ 加载中"却不知道卡在哪。 */
+.bt-loading-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: none;                    /* 默认隐藏，加载时 JS 置 flex */
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border-radius: 8px;
+  pointer-events: none;             /* 不挡交互（用户可以继续点别的） */
+}
+[data-theme="dark"] .bt-loading-mask {
+  background: rgba(20, 22, 28, 0.72);
+}
+.bt-loading-mask.show { display: flex; }
+
+.bt-loading-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid rgba(128, 128, 128, 0.25);
+  border-top-color: var(--color-blue, #4361ee);
+  border-radius: 50%;
+  animation: bt-spin 0.8s linear infinite;
+}
+@keyframes bt-spin { to { transform: rotate(360deg); } }
+/* 尊重"减少动画"偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .bt-loading-spinner { animation-duration: 2s; }
+}
+
+.bt-loading-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #222);
+}
+.bt-loading-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #777);
+  min-height: 16px;                 /* 占位，避免出现秒数时跳一下 */
 }
 
 .bt-actionbar {
@@ -605,6 +653,12 @@
     <div class="bt-index-body">
       <div id="btChartIndex" style="width: 100%;"></div>
     </div>
+    <!-- 加载遮罩（指数图）：加载指数数据时显示 -->
+    <div class="bt-loading-mask" id="btIndexLoadingMask" aria-live="polite">
+      <div class="bt-loading-spinner"></div>
+      <div class="bt-loading-text" id="btIndexLoadingText">正在加载指数…</div>
+      <div class="bt-loading-hint" id="btIndexLoadingHint"></div>
+    </div>
     <!-- 指数 K线 数据栏（在指数图右边，与主图操作栏对称）-->
     <div class="bt-actionbar bt-index-actionbar" aria-label="指数数据栏">
       <div class="bt-cursor" id="idxPanel">
@@ -626,6 +680,13 @@
   <!-- K 线主图 + 右侧光标数据栏 -->
   <div class="bt-chart-wrap">
     <div id="btChart"></div>
+
+    <!-- 加载遮罩（主图）：加载 K 线时显示阶段 + 已用时 -->
+    <div class="bt-loading-mask" id="btLoadingMask" aria-live="polite">
+      <div class="bt-loading-spinner"></div>
+      <div class="bt-loading-text" id="btLoadingText">正在加载 K 线…</div>
+      <div class="bt-loading-hint" id="btLoadingHint"></div>
+    </div>
 
     <!-- 右侧：只放光标 K线 数据（与指数图右侧数据栏对称等高） -->
     <div class="bt-actionbar bt-cursor-bar">
@@ -775,7 +836,7 @@
 <script src="js/backtest-trade.js?v=9"></script>
 <script src="js/backtest-crosshair.js?v=7"></script>
 <script src="js/backtest-chart.js?v=96"></script>
-<script src="js/backtest-main.js?v=36"></script>
+<script src="js/backtest-main.js?v=37"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

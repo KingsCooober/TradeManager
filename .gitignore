@@ -7,6 +7,7 @@ server/node_modules/
 *.db-wal
 *.db-shm
 server/data.db
+server/cache/
 research-hub/data/
 server/research.log
 # JWT 签名密钥（每台机器独立生成，绝不能进仓库）

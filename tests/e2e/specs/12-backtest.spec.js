@@ -985,8 +985,116 @@ test.describe('12 - 回测练习页', () => {
   });
 
   // ============================================================
-  // 9. 标的搜索（名称 / 纯数字 / 下拉选择）
+  // 10. K 线加载：进度反馈 + 长历史覆盖 + 接口瘦身
   // ============================================================
+  test.describe('K 线加载', () => {
+    // 回归：加载时必须有进度反馈（上游抖动时不能只让按钮变灰）
+    test('加载中应显示进度遮罩，完成后自动收起', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      // 人为拖慢 K 线请求，保证能观察到遮罩
+      await page.route('**/api/market/kline-stock/**', async (route) => {
+        await new Promise((r) => setTimeout(r, 1200));
+        return route.continue();
+      });
+
+      const maskState = () => page.evaluate(() => {
+        const m = document.getElementById('btLoadingMask');
+        return {
+          show: !!(m && m.classList.contains('show')),
+          text: (document.getElementById('btLoadingText') || {}).textContent || '',
+          btn: (document.getElementById('btnLoad') || {}).textContent || '',
+        };
+      });
+
+      await page.selectOption('#btYears', '1');
+      page.click('#btnLoad').catch(() => {});
+      await page.waitForTimeout(600);
+
+      const during = await maskState();
+      expect(during.show, '加载中应显示遮罩').toBe(true);
+      expect(during.text, '遮罩应说明正在加载什么').toContain('加载');
+      expect(during.btn, '按钮应进入加载态').toContain('加载中');
+
+      // 等遮罩收起
+      await page.waitForFunction(
+        () => !document.getElementById('btLoadingMask').classList.contains('show'),
+        null, { timeout: 20000 });
+      const after = await maskState();
+      expect(after.show, '完成后遮罩应收起').toBe(false);
+      // 遮罩不能残留挡住交互
+      const pe = await page.evaluate(() =>
+        getComputedStyle(document.getElementById('btLoadingMask')).pointerEvents);
+      expect(pe, '遮罩不应拦截点击').toBe('none');
+    });
+
+    // 回归：选 10 年必须真的拿到 10 年（此前静默回退腾讯只有 641 根）
+    //
+    // ⚠ 这条用例刻意**不注入 mock**：mock 数据固定 250 根，正好会掩盖
+    //   "真实后端能不能拉满 10 年"这个问题。代价是它依赖真实上游，
+    //   在并行 worker 抢同一数据源时可能变慢 —— 因此给了较宽的超时，
+    //   并在上游不可用时跳过而不是误报失败。
+    test('选 10 年应真的拿到约 2500 根（回归：静默回退只有 641 根）', async ({ page }) => {
+      test.setTimeout(90000);
+      const { token } = await enterBacktestWithAuth(page);
+
+      let res;
+      try {
+        res = await page.request.get('/api/market/kline-stock/sh600000?count=2500', {
+          headers: { Authorization: 'Bearer ' + token },
+          timeout: 60000,
+        });
+      } catch (e) {
+        test.skip(true, '上游数据源不可用（并行 worker 抢占/网络抖动），跳过真实长历史校验');
+        return;
+      }
+      expect(res.ok(), '真实 10 年接口应可访问').toBeTruthy();
+      const j = await res.json();
+      const n = (j.dates || []).length;
+
+      // 250 交易日/年 × 10 年 ≈ 2500；留余量按 2000 断言
+      expect(n, '10 年应有约 2500 根，不应被截断到 641').toBeGreaterThan(2000);
+      const y0 = Number(String(j.dates[0]).slice(0, 4));
+      const y1 = Number(String(j.dates[n - 1]).slice(0, 4));
+      expect(y1 - y0, '日期跨度应接近 10 年').toBeGreaterThanOrEqual(9);
+    });
+
+    // 回归：个股 K 线接口不应再下发前端用不到的重字段
+    test('个股 K 线接口不应下发 ma/macd/amounts（回归：曾占 74% 体积）', async ({ page }) => {
+      const { token } = await enterBacktestWithAuth(page);
+      const res = await page.request.get('/api/market/kline-stock/sh600000?count=250', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      expect(res.ok()).toBeTruthy();
+      const j = await res.json();
+
+      // 前端确实需要的字段
+      ['dates', 'ohlc', 'volumes'].forEach((k) => {
+        expect(j[k], `应保留 ${k}`).toBeTruthy();
+      });
+      // 前端自行计算 / 已移除面板 → 不该再传
+      ['ma5', 'ma10', 'ma20', 'macd', 'amounts'].forEach((k) => {
+        expect(j[k], `不应再下发 ${k}（前端未使用）`).toBeUndefined();
+      });
+      // 体积：每根应远低于瘦身前的 154 字节
+      const body = await res.text();
+      const bytesPerBar = body.length / j.dates.length;
+      expect(bytesPerBar, '每根字节数应显著下降').toBeLessThan(90);
+    });
+
+    // 指数接口仍要保留指标字段（复盘页 daily-review.js 需要）
+    test('指数 K 线接口应保留 ma/macd（复盘页依赖）', async ({ page }) => {
+      const { token } = await enterBacktestWithAuth(page);
+      const res = await page.request.get('/api/market/kline/sh?count=120', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      expect(res.ok()).toBeTruthy();
+      const j = await res.json();
+      expect(j.ma5, '指数接口应保留 ma5').toBeTruthy();
+      expect(j.ma10, '指数接口应保留 ma10').toBeTruthy();
+      expect(j.ma20, '指数接口应保留 ma20').toBeTruthy();
+      expect(j.macd && j.macd.dif, '指数接口应保留 macd').toBeTruthy();
+    });
+  });
   test.describe('标的搜索', () => {
     test('输入中文名称应弹出候选，可点选填入带前缀代码', async ({ page }) => {
       const { bt } = await enterBacktestWithAuth(page);

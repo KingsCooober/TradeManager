@@ -571,6 +571,62 @@ function BT_initSymbolPicker() {
   });
 }
 
+// ===== 加载进度遮罩 =====
+// 目的：上游偶发抖动时（实测 Baostock 6~16 秒），用户不能只看到按钮变灰却
+//   不知道卡在哪。这里显示"当前阶段 + 已用秒数"，超过阈值给一句安抚文案。
+var _btLoadTimer = null;
+var _btLoadT0 = 0;
+
+/**
+ * 显示加载遮罩
+ * @param {'main'|'index'} which
+ * @param {string} text 阶段文案（如"正在加载 K 线…"）
+ */
+function BT_showLoading(which, text) {
+  var maskId = which === 'index' ? 'btIndexLoadingMask' : 'btLoadingMask';
+  var textId = which === 'index' ? 'btIndexLoadingText' : 'btLoadingText';
+  var hintId = which === 'index' ? 'btIndexLoadingHint' : 'btLoadingHint';
+  var mask = document.getElementById(maskId);
+  var tEl  = document.getElementById(textId);
+  var hEl  = document.getElementById(hintId);
+  if (tEl && text) tEl.textContent = text;
+  if (hEl) hEl.textContent = '';
+  if (mask) mask.classList.add('show');
+
+  // 主图才起计时（指数图是附带请求，不需要秒数）
+  if (which !== 'main') return;
+  if (_btLoadTimer) { clearInterval(_btLoadTimer); _btLoadTimer = null; }
+  _btLoadT0 = Date.now();
+  _btLoadTimer = setInterval(function() {
+    var s = ((Date.now() - _btLoadT0) / 1000).toFixed(0);
+    var hint = document.getElementById('btLoadingHint');
+    if (!hint) return;
+    if (Number(s) >= 5) {
+      hint.textContent = '已等待 ' + s + ' 秒，正在从数据源拉取…';
+    } else {
+      hint.textContent = '已等待 ' + s + ' 秒';
+    }
+  }, 1000);
+}
+
+/** 更新遮罩文案（同一阶段内的进度变化，如"共 2500 根，正在渲染"） */
+function BT_updateLoadingText(which, text) {
+  var textId = which === 'index' ? 'btIndexLoadingText' : 'btLoadingText';
+  var el = document.getElementById(textId);
+  if (el && text) el.textContent = text;
+}
+
+/** 隐藏加载遮罩并停止计时 */
+function BT_hideLoading(which) {
+  var maskId = which === 'index' ? 'btIndexLoadingMask' : 'btLoadingMask';
+  var mask = document.getElementById(maskId);
+  if (mask) mask.classList.remove('show');
+  if (which !== 'index' && _btLoadTimer) {
+    clearInterval(_btLoadTimer);
+    _btLoadTimer = null;
+  }
+}
+
 // 加载 K 线数据
 async function BT_loadData(silent) {
   var symbolEl = document.getElementById('btSymbol');
@@ -594,6 +650,8 @@ async function BT_loadData(silent) {
 
   var btn = document.getElementById('btnLoad');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 加载中…'; }
+  // ★ 进度反馈：先摆出骨架，让用户立刻知道点击已生效
+  BT_showLoading('main', '正在加载 ' + symbol + ' 的 K 线…');
 
   // 序号守卫：只认最后一次发起的请求
   var mySeq = ++BT_loadSeq;
@@ -612,6 +670,10 @@ async function BT_loadData(silent) {
     // 缓存当前标的名称（来自后端 kline-stock 接口的 name 字段）
     BT_currentSymbolName = data.name || null;
 
+    // 数据到手 → 更新遮罩文案（渲染大数组也要时间，尤其 2500 根）
+    var gotN = (data.dates || []).length;
+    BT_updateLoadingText('main', '已获取 ' + gotN + ' 根 K 线，正在渲染…');
+
     // 切换标的 → 重新加载交易记录
     if (BT_currentSymbol !== symbol) {
       BT_currentSymbol = symbol;
@@ -629,6 +691,9 @@ async function BT_loadData(silent) {
     var targetIdx = data.dates.length - 1;
     BT_setCursor(targetIdx);
 
+    // 渲染完成 → 收起遮罩（再拉指数图，不阻塞主图显示）
+    BT_hideLoading('main');
+
     // 主图加载完后，重新拉指数图（让 count 与主图一致 → 时间范围对齐）
     if (typeof BT_loadIndex === 'function') BT_loadIndex(/*silent*/ true);
 
@@ -640,10 +705,15 @@ async function BT_loadData(silent) {
   } catch (e) {
     if (mySeq !== BT_loadSeq) return;   // 过期请求的失败不应打扰用户
     console.error('[backtest] 加载失败:', e);
+    BT_hideLoading('main');
     if (!silent) BT_toast('加载失败：' + e.message, 'error');
   } finally {
     // 只有最新一次请求才恢复按钮，避免旧请求提前解锁、让用户误以为可以再点
-    if (mySeq === BT_loadSeq && btn) { btn.disabled = false; btn.textContent = '📥 加载 K 线'; }
+    if (mySeq === BT_loadSeq) {
+      if (btn) { btn.disabled = false; btn.textContent = '📥 加载 K 线'; }
+      // 兜底：任何分支（含提前 return）都不该留下永久遮罩
+      BT_hideLoading('main');
+    }
   }
 }
 
@@ -659,6 +729,14 @@ async function BT_loadIndex(silent) {
   }
   // 序号守卫：切换指数时旧请求返回不应覆盖新指数图
   var mySeq = ++BT_indexLoadSeq;
+  // 指数图是附带请求：只在主图遮罩已收起、且确实需要等的时候才提示，
+  //   避免和主图遮罩同时闪。
+  var maskEl = document.getElementById('btIndexLoadingMask');
+  var mainMaskEl = document.getElementById('btLoadingMask');
+  var mainBusy = mainMaskEl && mainMaskEl.classList.contains('show');
+  if (!mainBusy && maskEl && !silent) {
+    BT_showLoading('index', '正在加载指数 ' + symbol + '…');
+  }
 
   try {
     // 与主图拉相同根数（时间范围对齐 → 两图 dataZoom 同步才有意义）
@@ -679,10 +757,12 @@ async function BT_loadIndex(silent) {
     // API 返回的 JSON 顶层带 name（指数名），传给 BT_renderIndexChart
     var indexName = data && data.name || symbol;
     BT_renderIndexChart(data, indexName);
+    BT_hideLoading('index');
     if (!silent) BT_toast('✅ 指数 ' + (indexName || symbol) + ' 加载完成', 'success');
   } catch (e) {
     if (mySeq !== BT_indexLoadSeq) return;
     console.error('[index] 加载失败:', e);
+    BT_hideLoading('index');
     if (!silent) BT_toast('指数加载失败：' + e.message, 'error');
   }
 }

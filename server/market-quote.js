@@ -34,6 +34,59 @@ function setCache(key, data) {
   cache.set(key, { data, ts: Date.now() });
 }
 
+// ==================== K 线持久化缓存（重启不失效） ====================
+// 背景：原来只有 5 分钟内存缓存，服务一重启就全丢；而 K 线数据（尤其 10 年）
+//   虽然单次只需 200ms 左右，但每次切标的/改年数都要重新打上游，
+//   叠加"上游限流 + 网络抖动"就会明显变慢。
+// 设计：
+//   - 只缓存 K 线（数据量大、变化慢、按天更新），不缓存实时行情
+//   - 落盘到 server/cache/kline-<hash>.json，进程内仍有内存层做一级缓存
+//   - TTL 用"自然日"判断：当天已拉过就直接复用，跨天自动失效
+//     （日 K 线一天只可能多出一根，跨天重新拉即可，不需要更细的粒度）
+//   - 任何 IO 异常都静默降级为"不缓存"，绝不能影响主流程
+const fs   = require('fs');
+const crypto = require('crypto');
+const DISK_CACHE_DIR = path.join(__dirname, 'cache');
+const DISK_CACHE_ENABLED = process.env.KLINE_DISK_CACHE !== '0';   // 可用环境变量关闭
+
+function _diskCacheFile(key) {
+  const h = crypto.createHash('md5').update(key).digest('hex').slice(0, 16);
+  return path.join(DISK_CACHE_DIR, 'kline-' + h + '.json');
+}
+
+/** 读磁盘缓存；只在"同一自然日"内有效 */
+function getDiskCache(key) {
+  if (!DISK_CACHE_ENABLED) return null;
+  try {
+    const file = _diskCacheFile(key);
+    if (!fs.existsSync(file)) return null;
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!raw || !raw.ts || !raw.data) return null;
+    // 自然日比较：跨天即失效
+    const sameDay = new Date(raw.ts).toDateString() === new Date().toDateString();
+    if (!sameDay) return null;
+    return raw.data;
+  } catch (e) {
+    return null;   // 读失败/文件损坏 → 当作没有缓存
+  }
+}
+
+/** 写磁盘缓存（异步，不阻塞主流程；失败静默） */
+function setDiskCache(key, data) {
+  if (!DISK_CACHE_ENABLED) return;
+  try {
+    if (!fs.existsSync(DISK_CACHE_DIR)) fs.mkdirSync(DISK_CACHE_DIR, { recursive: true });
+    const file = _diskCacheFile(key);
+    const payload = JSON.stringify({ ts: Date.now(), key: key, data: data });
+    // 原子写：先写临时文件再 rename，避免写一半被读到损坏内容
+    const tmp = file + '.' + process.pid + '.tmp';
+    fs.writeFile(tmp, payload, function(err) {
+      if (err) return;
+      fs.rename(tmp, file, function() { /* 忽略 */ });
+    });
+  } catch (e) { /* 静默降级 */ }
+}
+
 // 通用 HTTPS GET（响应可能是 GBK 编码的纯文本也可能是 UTF-8 JSON）
 // ★ 强制 IPv4：东方财富 push2his 在 Node https 模块走 IPv6 时偶尔 socket hang up
 const dns = require('dns');
@@ -328,34 +381,173 @@ async function fetchKLineFromTencent(symbol, count) {
   return fetchKLineFromTencentPeriod(symbol, count, 'day');
 }
 
+// ==================== 腾讯「日期区间」分段并发拉取（长历史） ====================
+// 背景（实测结论）：
+//   - 腾讯接口 param=symbol,day,,,N,qfq 的 N 有硬上限：N<=1000 时返回 641 根，
+//     N>=2500 时直接返回 0 根（不是截断，是空数组）。所以想拿 10 年必须换姿势。
+//   - 但同样的接口支持日期区间：param=symbol,day,START,END,count,qfq
+//     实测 2010-01-01~2011-12-31 → 473 根，92ms；区间查询没有 641 限制。
+//   - 4 段并发（每段 ~2.5 年）总耗时仅 140ms，可得 2249 根（约 9.6 年）。
+//   对比 Baostock（Python 子进程 + 登录 + 游标）单次 6.7~16 秒，快 50~100 倍。
+//
+// 策略：把 [startDate, endDate] 按 SEG_YEARS 年切成若干段并发请求，合并去重排序。
+//   段数受 MAX_SEGMENTS 限制，避免请求区间过大时打出过多并发。
+const TX_SEG_YEARS = 2.5;      // 每段覆盖年数（2.5 年 ≈ 610 个交易日，稳妥低于单次上限）
+const TX_MAX_SEGMENTS = 6;     // 最多切几段（6 × 2.5 = 15 年，覆盖 10 年绰绰有余）
+
+/** 腾讯日线「区间」查询：直接指定 [start, end]，不受 641 根上限约束 */
+async function fetchKLineFromTencentRange(symbol, startDate, endDate, period) {
+  period = period || 'day';
+  // 区间查询时 count 传 640（实测传更大也没副作用，但保持与单段上限一致）
+  const url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' +
+    encodeURIComponent(symbol + ',' + period + ',' + startDate + ',' + endDate + ',640,qfq');
+  const buf = await httpsGet(url);
+  if (buf.length === 0) throw new Error('腾讯K线区间接口返回空');
+  let json;
+  try { json = JSON.parse(buf.toString('utf8')); }
+  catch (e) { throw new Error('腾讯K线区间返回非 JSON'); }
+  if (json.code !== 0) throw new Error('腾讯K线区间返回 code=' + json.code);
+  const symData = json.data && json.data[symbol];
+  if (!symData) return [];   // 该区间无数据（如股票尚未上市）→ 返回空而不是抛错
+  const key = 'qfq' + period;
+  const arr = symData[key] || symData[period];
+  if (!Array.isArray(arr)) return [];
+  return arr.map(function(line) {
+    var close = parseFloat(line[2]);
+    var amount = parseFloat(line[5]) || 0;
+    var rawVol = parseFloat(line[6]) || 0;
+    return {
+      date:   line[0],
+      open:   parseFloat(line[1]),
+      close:  close,
+      high:   parseFloat(line[3]),
+      low:    parseFloat(line[4]),
+      amount: amount,
+      volume: rawVol > 0 ? rawVol : (close > 0 ? +((amount / close / 100)).toFixed(2) : 0)
+    };
+  }).filter(function(k) { return k.date && !isNaN(k.close); });
+}
+
+/** 把 [startYear..now] 按 TX_SEG_YEARS 切段（返回 [{start,end}] 升序） */
+function buildTencentSegments(years) {
+  const today = new Date();
+  const endY = today.getFullYear();
+  const startY = endY - Math.max(1, Math.ceil(years));
+  const segs = [];
+  for (let y = startY; y < endY + 1; y += TX_SEG_YEARS) {
+    const s = Math.floor(y);
+    const e = Math.min(endY + 1, Math.ceil(y + TX_SEG_YEARS));
+    const start = s + '-01-01';
+    // 最后一段用今天作为结束，避免未来日期
+    const end = (e > endY ? today.toISOString().slice(0, 10) : (e - 1) + '-12-31');
+    segs.push({ start: start, end: end });
+  }
+  // 段数超限时从最早的段开始合并（保证最近的数据优先精确）
+  while (segs.length > TX_MAX_SEGMENTS) {
+    const a = segs.shift();
+    segs[0].start = a.start;
+  }
+  return segs;
+}
+
+/**
+ * 腾讯长历史拉取：分段并发 + 合并去重排序
+ * @param {string} symbol sh600000 / sz000001
+ * @param {number} years  需要覆盖的年数
+ * @param {number} want   期望的根数（用于最终裁剪）
+ */
+async function fetchKLineFromTencentLong(symbol, years, want) {
+  const segs = buildTencentSegments(years);
+  const t0 = Date.now();
+  // 并发请求所有段；单段失败不影响其它段（返回空数组）
+  const parts = await Promise.all(segs.map(function(s) {
+    return fetchKLineFromTencentRange(symbol, s.start, s.end, 'day')
+      .catch(function(e) {
+        console.warn('[tencent-range] 段 ' + s.start + '~' + s.end + ' 失败: ' + e.message);
+        return [];
+      });
+  }));
+  // 合并去重（同一天只保留一条）+ 按日期升序
+  const byDate = new Map();
+  parts.forEach(function(arr) {
+    arr.forEach(function(k) { if (!byDate.has(k.date)) byDate.set(k.date, k); });
+  });
+  const merged = Array.from(byDate.values()).sort(function(a, b) {
+    return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
+  });
+  console.log('[tencent-range] ' + symbol + ' ' + segs.length + ' 段并发 ' +
+    (Date.now() - t0) + 'ms，合并后 ' + merged.length + ' 根' +
+    (merged.length ? '（' + merged[0].date + ' ~ ' + merged[merged.length - 1].date + '）' : ''));
+  if (merged.length === 0) throw new Error('腾讯区间接口未返回任何数据');
+  // 裁到最后 want 根（与调用方语义一致）
+  return want && merged.length > want ? merged.slice(-want) : merged;
+}
+
 // ==================== Baostock（证券宝）数据源 ====================
 // 优势：完全免费、免注册、覆盖 1990-至今 全部 A 股日 K线
 // 字段：date, open, high, low, close, volume（股）, amount（元）
 // 实现：baostock 是 Python 包，通过 child_process 调用 helper 脚本
 let _baostockChecked = false;
 let _baostockAvailable = false;
+let _baostockPython = null;    // 探测到的可用解释器（python3 / python / py）
+
+// ★ 修复：原实现硬编码 `python3`，在 Windows 上 `python3` 往往是
+//   应用商店的 0 字节转发器（执行返回 9009），而真正的解释器叫 `python`。
+//   结果 baostockCheck() 探测失败后仍被 `pip install` 的"成功"标记为可用，
+//   真正拉数据时 spawnSync('python3') 返回 9009 → 抛错 → 静默回退，
+//   用户看到的是"选了 10 年只有 2.5 年数据"却毫无提示。
+//   现在改为依次探测候选解释器，找到能 `import baostock` 的那个并记住。
+const PY_CANDIDATES = ['python3', 'python', 'py'];
+
+function detectPythonWithBaostock() {
+  const { execFileSync } = require('child_process');
+  for (const py of PY_CANDIDATES) {
+    try {
+      execFileSync(py, ['-c', 'import baostock'], { stdio: 'pipe', timeout: 20000 });
+      console.log('[baostock] 使用解释器: ' + py);
+      return py;
+    } catch (e) {
+      // 该解释器不存在或没装 baostock → 试下一个
+    }
+  }
+  return null;
+}
 
 async function baostockCheck() {
   if (_baostockChecked) return _baostockAvailable;
   _baostockChecked = true;
-  try {
-    const { execSync } = require('child_process');
-    // 检查 baostock Python 包是否已安装
-    execSync('python3 -c "import baostock" 2>/dev/null', { stdio: 'pipe' });
+
+  // 1) 先找已装好 baostock 的解释器
+  let py = detectPythonWithBaostock();
+  if (py) {
     _baostockAvailable = true;
-    console.log('[baostock] 可用');
-  } catch (e) {
-    console.warn('[baostock] Python 包未安装，尝试自动安装...');
+    _baostockPython = py;
+    return true;
+  }
+
+  // 2) 都没装 → 用第一个能跑起来的解释器尝试安装
+  console.warn('[baostock] 未检测到已安装 baostock 的解释器，尝试安装...');
+  const { execFileSync } = require('child_process');
+  for (const candidate of PY_CANDIDATES) {
     try {
-      require('child_process').execSync('pip install baostock --break-system-packages --quiet', { stdio: 'pipe' });
+      execFileSync(candidate, ['-m', 'pip', 'install', 'baostock', '--quiet'],
+        { stdio: 'pipe', timeout: 120000 });
+    } catch (e) {
+      continue;   // 解释器不存在或安装失败 → 试下一个
+    }
+    // 装完再确认一次真的能 import（避免 pip 成功但装到了别的环境）
+    py = detectPythonWithBaostock();
+    if (py) {
+      console.log('[baostock] 自动安装成功（' + py + '）');
       _baostockAvailable = true;
-      console.log('[baostock] 自动安装成功');
-    } catch (e2) {
-      console.error('[baostock] 安装失败，将回退腾讯:', e2.message);
-      _baostockAvailable = false;
+      _baostockPython = py;
+      return true;
     }
   }
-  return _baostockAvailable;
+
+  console.warn('[baostock] 不可用（未找到可 import baostock 的 python 解释器）');
+  _baostockAvailable = false;
+  return false;
 }
 
 // Baostock 拉取 A 股日 K线
@@ -376,9 +568,11 @@ async function fetchKLineFromBaostock(symbol, startDate, endDate, frequency, adj
   }
 
   // 通过 child_process 调用 Python 脚本
+  // ★ 用探测到的解释器（可能是 python3 / python / py），不再硬编码 python3
   const { spawnSync } = require('child_process');
   const scriptPath = path.join(__dirname, 'baostock-helper.py');
-  const result = spawnSync('python3', [
+  const py = _baostockPython || 'python';
+  const result = spawnSync(py, [
     scriptPath,
     bsCode,
     startDate || '2015-01-01',
@@ -391,8 +585,12 @@ async function fetchKLineFromBaostock(symbol, startDate, endDate, frequency, adj
     timeout: 60000
   });
 
+  if (result.error) {
+    throw new Error('baostock helper 启动失败(' + py + '): ' + result.error.message);
+  }
   if (result.status !== 0) {
-    throw new Error('baostock helper 失败: ' + (result.stderr || result.stdout || 'unknown'));
+    throw new Error('baostock helper 失败(' + py + ', status=' + result.status + '): ' +
+      (result.stderr || result.stdout || 'unknown'));
   }
 
   let rows;
@@ -464,45 +662,58 @@ function dayBeforeTencent(dateStr) {
 }
 
 async function fetchKLine(symbol, count = 30, period = 'day') {
-  // 数据源优先级：Baostock（10年日线） → 腾讯（保底 2.5 年）
-  //   1) Baostock 完全免费、免注册、覆盖 1990-至今 全部 A 股日 K线
-  //   2) 腾讯 K线硬上限 640 行 ≈ 2.5 年，作为兜底
-  // 兼容 INDEX_MAP 中的指数（带 name 元信息），也支持任意 sh/sz/bj 个股
+  // 数据源优先级（2024 重构）：
+  //   1) 腾讯「日期区间」分段并发 —— 实测 10 年 140ms，长历史唯一快路径
+  //      （旧写法 param=symbol,day,,,N,qfq 的 N 有硬上限：N>=2500 直接返回 0 根，
+  //       这正是"选了 10 年却只有 641 根"的根因之一）
+  //   2) 腾讯单次（短历史兜底）
+  //   3) Baostock —— 仅当腾讯完全失败时用。它单次 6.7~16 秒（Python 子进程
+  //      + 登录 + 游标逐行读），只适合作为最后兜底，不再作为首选。
   const meta = Object.values(INDEX_MAP).find(function(m) { return m.symbol === symbol; });
   const displayName = meta ? meta.name : null;
 
-  // 1) Baostock 数据源（首选，支持任意年数日线，无 640 限制）
+  // 1) 腾讯区间分段并发（首选）
   try {
-    // count → years 估算 → endDate - count 推算 startDate
-    // 1 年 ≈ 250 根交易日；为安全多取 30% 余量
+    const years = Math.max(1, count / 250 * 1.15);   // 多取 15% 余量，保证裁到 count 根
+    const data = await fetchKLineFromTencentLong(symbol, years, count);
+    if (data.length > 0) {
+      if (displayName) data[0].__name = displayName;
+      return data;
+    }
+    throw new Error('区间接口返回空');
+  } catch (e1) {
+    console.warn('[fetchKLine] 腾讯区间失败，尝试单次: ' + e1.message);
+  }
+
+  // 2) 腾讯单次（短历史；上限 641 根）
+  try {
+    const tc = Math.min(count, 640);
+    const data = await fetchKLineFromTencent(symbol, tc);
+    if (data.length > 0) {
+      if (displayName) data[0].__name = displayName;
+      console.log('[fetchKLine] 腾讯单次 ' + symbol + ' 拉到 ' + data.length + ' 根 (请求 ' + count + ')');
+      return data;
+    }
+  } catch (e2) {
+    console.warn('[fetchKLine] 腾讯单次失败: ' + e2.message);
+  }
+
+  // 3) Baostock 最后兜底（慢，但覆盖最全）
+  try {
     const years = count / 250 * 1.3;
     const today = new Date();
     const startYear = today.getFullYear() - Math.ceil(years);
     const startDate = startYear + '-01-01';
     const endDate = today.toISOString().slice(0, 10);
-
-    const data = await fetchKLineFromBaostock(symbol, startDate, endDate, 'd', '2');  // '2' = 前复权，与腾讯 qfq 通道保持一致
+    const data = await fetchKLineFromBaostock(symbol, startDate, endDate, 'd', '2');
     if (data.length > 0) {
-      // 截取最后 count 根
       const sliced = data.slice(-count);
       if (displayName) sliced[0].__name = displayName;
-      console.log('[fetchKLine] Baostock ' + symbol + ' 拉到 ' + data.length + ' 根，返回 ' + sliced.length + ' 根');
+      console.log('[fetchKLine] Baostock 兜底 ' + symbol + ' 拉到 ' + data.length + ' 根');
       return sliced;
     }
-    throw new Error('Baostock 返回空');
-  } catch (e1) {
-    console.warn('[fetchKLine] Baostock 失败，回退腾讯: ' + e1.message);
-  }
-
-  // 2) 腾讯兜底（count > 640 自动截断 640；2.5 年上限）
-  try {
-    const tc = Math.min(count, 640);
-    const data = await fetchKLineFromTencent(symbol, tc);
-    if (displayName && data.length > 0) data[0].__name = displayName;
-    console.log('[fetchKLine] 腾讯兜底 ' + symbol + ' 拉到 ' + data.length + ' 根 (请求 ' + count + ')');
-    return data;
-  } catch (e2) {
-    console.error('[fetchKLine] 腾讯也失败: ' + e2.message);
+  } catch (e3) {
+    console.warn('[fetchKLine] Baostock 兜底也失败: ' + e3.message);
   }
 
   throw new Error('所有 K线数据源都失败: ' + symbol);
@@ -656,53 +867,57 @@ function calcMACD(closes) {
 // 返回：{ key, name, symbol, dates[], ohlc[], volumes[], ma5/10/20[], macd: {dif,dea,macd}[] }
 // 构造 K线快照的核心逻辑（被 getKLineSnapshot / getKLineSnapshotForSymbol 共用）
 // 入参：symbol, name, count
-// 返回：{ key/symbol, name, symbol, count, dates[], ohlc[], volumes[], ma5/10/20[], macd:{dif,dea,macd}[] }
-async function buildKLineSnapshot(symbol, name, count) {
-  // 1. 拉取 K线原始数据（多取 35 根用于计算 MA26/MACD 的预热期）
-  //    腾讯单次最多 640 行，超过则按 2.5 年/段自动分页
+//      opts.withIndicators = true 时额外返回 ma5/ma10/ma20/macd/amounts
+//        - 指数 K 线（/api/market/kline/:key，供复盘页 daily-review.js）需要这些字段
+//        - 个股 K 线（/api/market/kline-stock/:symbol，供回测页）**不需要**：
+//          前端 backtest-chart.js 用 BT_computeMAFromCloses() 自行算均线，
+//          MACD 面板也已移除。实测 641 根时这五个字段占 74%（71.6KB/96.5KB），
+//          去掉后传输量从 96.5KB 降到约 25KB。
+// 返回：{ name, symbol, count, dates[], ohlc[], volumes[], [ma5/10/20, macd, amounts] }
+async function buildKLineSnapshot(symbol, name, count, opts) {
+  const withIndicators = !!(opts && opts.withIndicators);
+  // 1. 拉取 K线原始数据（多取 35 根用于计算指标预热期）
+  //    腾讯单次最多 641 行，超过则由 fetchKLine 走"日期区间分段并发"
   const rawKlines = await fetchKLineWithPagination(symbol, count + 35);
   if (rawKlines.length === 0) throw new Error('K线数据为空');
 
   // 透传 name（fetchKLine 把 INDEX_MAP 的 name 挂到首条 __name）
   const finalName = name || (rawKlines[0] && rawKlines[0].__name) || symbol;
 
-  // 2. 截取最后 count 根作为主数据，前面 pre 根用于指标预热
+  // 2. 截取最后 count 根作为主数据
   const klines = rawKlines.slice(-count);
   const dates = klines.map(k => k.date);
   const ohlc  = klines.map(k => [k.open, k.close, k.low, k.high]);
   // 成交额：k.amount（腾讯返回的是元）→ 转为万元
   const amounts = klines.map(k => Math.round((k.amount || 0) / 10000));
 
-  // 3. 计算指标（基于完整 pre+count 序列保证 MA26/MACD 正确）
-  const fullCloses = rawKlines.map(k => k.close);
-  const fullMA5    = calcMA(fullCloses, 5);
-  const fullMA10   = calcMA(fullCloses, 10);
-  const fullMA20   = calcMA(fullCloses, 20);
-  const fullMACD   = calcMACD(fullCloses);
-
-  // 4. 截取最后 count 根对齐
-  const preLen = rawKlines.length - count;
-  const ma5   = fullMA5.slice(preLen);
-  const ma10  = fullMA10.slice(preLen);
-  const ma20  = fullMA20.slice(preLen);
-  const dif   = fullMACD.dif.slice(preLen);
-  const dea   = fullMACD.dea.slice(preLen);
-  const macd  = fullMACD.macd.slice(preLen);
-
-  return {
+  const out = {
     name:    finalName,
     symbol:  symbol,
-    count:   count,
+    count:   klines.length,
     dates:   dates,
     ohlc:    ohlc,
-    volumes: amounts,   // 兼容字段名（前端仍用 data.volumes）
-    amounts: amounts,   // 语义化字段名（万元）
-    ma5:     ma5,
-    ma10:    ma10,
-    ma20:    ma20,
-    macd:    { dif: dif, dea: dea, macd: macd },
+    volumes: amounts,   // 兼容字段名（前端用 data.volumes）
     fetchedAt: new Date().toISOString()
   };
+
+  if (withIndicators) {
+    // 指标基于完整 pre+count 序列计算，保证 MA26/MACD 预热正确
+    const fullCloses = rawKlines.map(k => k.close);
+    const preLen = rawKlines.length - count;
+    out.ma5   = calcMA(fullCloses, 5).slice(preLen);
+    out.ma10  = calcMA(fullCloses, 10).slice(preLen);
+    out.ma20  = calcMA(fullCloses, 20).slice(preLen);
+    const fullMACD = calcMACD(fullCloses);
+    out.macd  = {
+      dif:  fullMACD.dif.slice(preLen),
+      dea:  fullMACD.dea.slice(preLen),
+      macd: fullMACD.macd.slice(preLen)
+    };
+    out.amounts = amounts;   // 语义化字段名（万元）
+  }
+
+  return out;
 }
 
 // K线分页拉取：现在统一由 fetchKLine 内部处理（Baostock 一次拉到 10 年）
@@ -718,26 +933,44 @@ async function fetchKLineWithPagination(symbol, count) {
 //   return d.toISOString().slice(0, 10);
 // }
 
+// 指数 K 线：复盘页（daily-review.js）会消费 ma5/ma10/ma20/macd 画均线与 MACD 副图，
+// 因此这里保持 withIndicators: true。
 async function getKLineSnapshot(key, count = 120) {
   const meta = INDEX_MAP[key];
   if (!meta) throw new Error('Unknown index key: ' + key);
 
   const cacheKey = 'kline:' + key + ':' + count;
+  // 一级：内存（5 分钟）
   const cached = getCache(cacheKey);
   if (cached) return Object.assign({ key: key, cached: true }, cached);
+  // 二级：磁盘（当天有效，服务重启后仍可用）
+  const disk = getDiskCache(cacheKey);
+  if (disk) {
+    setCache(cacheKey, disk);
+    return Object.assign({ key: key, cached: true, fromDisk: true }, disk);
+  }
 
-  const data = await buildKLineSnapshot(meta.symbol, meta.name, count);
+  const data = await buildKLineSnapshot(meta.symbol, meta.name, count, { withIndicators: true });
   data.key = key;
   setCache(cacheKey, data);
+  setDiskCache(cacheKey, data);
   return data;
 }
 
 // 单只个股 K线（symbol=sh600000 / sz000001 / bj8xxxxxx）
-// 与 getKLineSnapshot 输出结构一致，额外带 key=null（标识非指数）
+// 与 getKLineSnapshot 输出结构基本一致，但**不带**指标字段（回测页前端自行计算），
+// 额外带 key=null（标识非指数）。
 async function getKLineSnapshotForSymbol(symbol, count = 1200) {
   const cacheKey = 'kline-stock:' + symbol + ':' + count;
+  // 一级：内存
   const cached = getCache(cacheKey);
   if (cached) return Object.assign({ key: null, cached: true }, cached);
+  // 二级：磁盘（当天有效）—— 切回白天看过的标的可秒开
+  const disk = getDiskCache(cacheKey);
+  if (disk) {
+    setCache(cacheKey, disk);
+    return Object.assign({ key: null, cached: true, fromDisk: true }, disk);
+  }
 
   // 拉一次实时行情顺便取名称（与 K 线并联，减少总延迟）
   const namePromise = fetchQuotes([symbol]).then(function(q) {
@@ -746,11 +979,14 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200) {
 
   const [name, klineData] = await Promise.all([
     namePromise,
+    // ★ withIndicators 缺省 false：去掉 ma5/ma10/ma20/macd/amounts，
+    //   传输量从 96.5KB 降到约 25KB（实测 641 根）
     buildKLineSnapshot(symbol, null, count)
   ]);
   klineData.name = name || klineData.name || null;
   klineData.key = null;
   setCache(cacheKey, klineData);
+  setDiskCache(cacheKey, klineData);
   return klineData;
 }
 
