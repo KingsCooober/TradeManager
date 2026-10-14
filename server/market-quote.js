@@ -969,11 +969,16 @@ async function getKLineSnapshot(key, count = 120) {
 //   命中本地库时是纯 SQL 查询（毫秒级），只有数据缺失或过期才打上游。
 //   拉回上游后会写库，同一标的二次加载直接命中。
 //   可用 KLINE_STORE=0 关闭本地库（回退到纯缓存行为，便于排查）。
-async function getKLineSnapshotForSymbol(symbol, count = 1200) {
+//   opts.noCache = true 时跳过内存缓存读写（批量预热用：避免把上千只标的
+//   的完整 K 线驻留在进程内存里，本地库已经是持久层，内存缓存无收益）。
+async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
   const cacheKey = 'kline-stock:' + symbol + ':' + count;
-  // 一级：内存
-  const cached = getCache(cacheKey);
-  if (cached) return Object.assign({ key: null, cached: true }, cached);
+  // 一级：内存（预热模式下由调用方显式跳过，见末尾 noCache 说明）
+  const skipMemCache = !!(opts && opts.noCache === true);
+  if (!skipMemCache) {
+    const cached = getCache(cacheKey);
+    if (cached) return Object.assign({ key: null, cached: true }, cached);
+  }
 
   const storeEnabled = process.env.KLINE_STORE !== '0';
   let meta = null;
@@ -1018,7 +1023,9 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200) {
   ]);
   klineData.name = name || klineData.name || null;
   klineData.key = null;
-  setCache(cacheKey, klineData);
+  // 批量预热时上百只标的顺序写入内存缓存会把 Map 撑大且毫无意义
+  // （预热进程结束即释放），因此允许调用方跳过。
+  if (!opts || opts.noCache !== true) setCache(cacheKey, klineData);
   setDiskCache(cacheKey, klineData);
 
   // 写本地库：区分"首次/除权重拉"与"增量追加"

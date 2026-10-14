@@ -17,6 +17,7 @@ const aihotProxy = require('./aihot-proxy');
 const aiSettings = require('./ai-settings');
 // 行情数据代理（腾讯股票 API 免 Key）
 const market = require('./market-quote');
+const klineStore = require('./kline-store');
 // 资金面数据代理（北向资金 + 融资融券 + 沪深两市总成交额）
 const marketFund = require('./market-fund');
 // 情绪面数据代理（涨跌停统计 + 评分）
@@ -1215,6 +1216,33 @@ app.get('/api/market/normalize-symbol', auth.authMiddleware, (req, res) => {
   const raw = (req.query.symbol || '').toString().trim();
   const symbol = market.normalizeSymbol(raw);
   res.json({ input: raw, symbol, ok: !!symbol });
+});
+
+// K 线本地库状态（供排查"某个标的到底入库没有 / 拉了多少"）
+// 设计背景：数据是按需惰性入库的，用户看不到进度，容易误以为"没在拉"。
+// 这个接口把名单总数、已入库数量、以及指定标的的详情暴露出来。
+app.get('/api/market/kline-store/status', auth.authMiddleware, async (req, res) => {
+  try {
+    const stats = await klineStore.getStats();
+    // 名单里有市值但还没有 K 线的数量
+    const meta = await klineStore.getMeta((req.query.symbol || '').toString().trim().toLowerCase());
+    res.json({
+      listTotal: stats.metas,          // 名单总数（refresh-stock-list 写入）
+      storedSymbols: stats.symbols,    // 已有 K 线的标的数
+      storedBars: stats.bars,          // K 线总行数
+      symbol: meta ? {
+        symbol: meta.symbol,
+        name: meta.name,
+        mcap_yi: meta.mcap_yi,
+        bar_count: meta.bar_count,
+        first_date: meta.first_date,
+        last_date: meta.last_date,
+        last_sync: meta.last_sync,
+      } : null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ===== 通用数据 API（所有新功能的统一存储接口）=====

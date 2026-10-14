@@ -133,6 +133,39 @@ async function countBars(symbol) {
   return (r && r.n) || 0;
 }
 
+// ---------- 事务串行化 ----------
+//
+// ★ 为什么需要这个：
+//   sqlite3 的 Database 是**单连接**的，BEGIN/COMMIT 作用在这一个连接上。
+//   批量预热脚本用 worker pool 并发拉取（4 个 worker），多个写入事务会交叠，
+//   后到的 BEGIN 撞上前一个还没 COMMIT 的事务，直接报
+//   `SQLITE_ERROR: cannot start a transaction within a transaction`，
+//   结果是**数据拉回来了却没写进库**（错误被上层 catch 成 warn 吞掉，很难发现）。
+//   实测 --limit 5 时 5 只里有 2 只写入失败。
+//
+//   解决办法：把所有写了 BEGIN/COMMIT 的写入操作串成队列，同一时刻只有一个事务在跑。
+//   事务内部仍是多条语句、一次提交，因此并不牺牲批量写入的性能。
+//   （注意：sqlite3 是串行化的单连接，排队不会造成死锁。）
+let _txChain = Promise.resolve();
+function withTransaction(fn) {
+  const run = _txChain.then(fn, fn);   // 前一个事务无论成败都继续排队
+  // 让链条本身永不 reject，避免一次失败卡死后续所有写入
+  _txChain = run.then(function () {}, function () {});
+  return run;
+}
+
+async function _runInTransaction(body) {
+  await dbRun('BEGIN IMMEDIATE');
+  try {
+    const out = await body();
+    await dbRun('COMMIT');
+    return out;
+  } catch (e) {
+    try { await dbRun('ROLLBACK'); } catch (e2) {}
+    throw e;
+  }
+}
+
 // ---------- 写入 ----------
 
 /**
@@ -146,15 +179,12 @@ async function replaceKLine(symbol, data, meta) {
   const vols  = (data && data.volumes) || [];
   if (!dates.length) return { inserted: 0 };
 
-  await dbRun('BEGIN');
-  try {
-    await dbRun('DELETE FROM stock_kline WHERE symbol = ?', [symbol]);
-    await _bulkInsert(symbol, dates, ohlc, vols);
-    await dbRun('COMMIT');
-  } catch (e) {
-    try { await dbRun('ROLLBACK'); } catch (e2) {}
-    throw e;
-  }
+  await withTransaction(async function () {
+    await _runInTransaction(async function () {
+      await dbRun('DELETE FROM stock_kline WHERE symbol = ?', [symbol]);
+      await _bulkInsert(symbol, dates, ohlc, vols);
+    });
+  });
 
   await _upsertMeta(symbol, {
     name: (meta && meta.name) || null,
@@ -188,14 +218,11 @@ async function appendKLine(symbol, data, meta) {
   const nOhlc = ohlc.slice(idx);
   const nVols = vols.slice(idx);
 
-  await dbRun('BEGIN');
-  try {
-    await _bulkInsert(symbol, nDates, nOhlc, nVols);
-    await dbRun('COMMIT');
-  } catch (e) {
-    try { await dbRun('ROLLBACK'); } catch (e2) {}
-    throw e;
-  }
+  await withTransaction(async function () {
+    await _runInTransaction(async function () {
+      await _bulkInsert(symbol, nDates, nOhlc, nVols);
+    });
+  });
 
   const st = await dbGet(
     'SELECT COUNT(*) AS n, MIN(date) AS f, MAX(date) AS l FROM stock_kline WHERE symbol = ?', [symbol]);
@@ -260,20 +287,17 @@ async function _upsertMeta(symbol, f) {
 /** 更新市值（由市值名单刷新脚本调用） */
 async function upsertMetaBatch(list) {
   await initStore();
-  await dbRun('BEGIN');
-  try {
-    for (const it of list) {
-      await dbRun(
-        `INSERT INTO stock_meta (symbol,name,mcap_yi) VALUES (?,?,?)
-         ON CONFLICT(symbol) DO UPDATE SET name = excluded.name, mcap_yi = excluded.mcap_yi`,
-        [it.symbol, it.name || null, it.mcap_yi || 0]
-      );
-    }
-    await dbRun('COMMIT');
-  } catch (e) {
-    try { await dbRun('ROLLBACK'); } catch (e2) {}
-    throw e;
-  }
+  await withTransaction(async function () {
+    await _runInTransaction(async function () {
+      for (const it of list) {
+        await dbRun(
+          `INSERT INTO stock_meta (symbol,name,mcap_yi) VALUES (?,?,?)
+           ON CONFLICT(symbol) DO UPDATE SET name = excluded.name, mcap_yi = excluded.mcap_yi`,
+          [it.symbol, it.name || null, it.mcap_yi || 0]
+        );
+      }
+    });
+  });
   return list.length;
 }
 
@@ -336,6 +360,36 @@ async function detectAdjustChange(symbol, upstream, overlap) {
   return false;
 }
 
+/** 名单中的候选标的（按市值降序），供批量预热脚本调用 */
+async function getWarmupCandidates(minMcapYi, limit) {
+  await initStore();
+  const threshold = minMcapYi == null ? 50 : Number(minMcapYi);
+  const lim = limit == null ? 0 : Number(limit);
+  const sql = `SELECT symbol, name, mcap_yi, bar_count, first_date, last_date, last_sync
+               FROM stock_meta
+               WHERE mcap_yi > ?
+               ORDER BY mcap_yi DESC` + (lim > 0 ? ' LIMIT ?' : '');
+  return await dbAll(sql, lim > 0 ? [threshold, lim] : [threshold]);
+}
+
+/**
+ * 判断本地库该标的是否覆盖了目标历史窗口。
+ * 对老股票要求至少 targetBars 根；上市较晚的股票以首根上市日期判断，
+ * 如果已有数据覆盖从上市以来且 last_date 新鲜，就不重复拉。
+ */
+function isCoverageEnough(meta, targetBars, maxStaleDays) {
+  if (!meta || !meta.bar_count || !meta.last_date || !meta.first_date) return false;
+  if (!isFresh(meta, maxStaleDays)) return false;
+  if (meta.bar_count >= targetBars) return true;
+  // 若少于目标根数，判断是否是新股（首根数据已接近上市日期而非中途缺历史）。
+  // 保守规则：小于 targetBars 且首日不晚于最近 10 年窗口 + 1 年余量，
+  // 仍视作历史不完整，需要尝试重新拉（源会返回上市后的全部数据）。
+  const cutoff = new Date();
+  cutoff.setFullYear(cutoff.getFullYear() - 11);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  return meta.first_date > cutoffStr;
+}
+
 // ---------- 统计（给运维/脚本用） ----------
 async function getStats() {
   await initStore();
@@ -356,7 +410,9 @@ module.exports = {
   replaceKLine,
   appendKLine,
   upsertMetaBatch,
+  getWarmupCandidates,
   isFresh,
+  isCoverageEnough,
   detectAdjustChange,
   getStats,
   _internal: { dbRun, dbAll, dbGet },   // 供脚本复用
