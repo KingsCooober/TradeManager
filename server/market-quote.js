@@ -6,6 +6,9 @@
 const https = require('https');
 const path  = require('path');
 
+// 个股 K 线本地库（按需惰性同步）—— 见 kline-store.js 顶部注释了解设计取舍
+const klineStore = require('./kline-store');
+
 // 指数代码（腾讯格式：sh=沪市 sz=深市）
 // 4 个大盘指数：symbol 用于腾讯行情接口，secid 用于东方财富 K线接口
 // secid 格式: 1.000001 = 沪市(sh)，0.399001 = 深市(sz)
@@ -960,16 +963,46 @@ async function getKLineSnapshot(key, count = 120) {
 // 单只个股 K线（symbol=sh600000 / sz000001 / bj8xxxxxx）
 // 与 getKLineSnapshot 输出结构基本一致，但**不带**指标字段（回测页前端自行计算），
 // 额外带 key=null（标识非指数）。
+//
+// ★ 本地库 + 按需惰性同步（kline-store.js）：
+//   1) 内存缓存 → 2) 本地 SQLite → 3) 回源上游
+//   命中本地库时是纯 SQL 查询（毫秒级），只有数据缺失或过期才打上游。
+//   拉回上游后会写库，同一标的二次加载直接命中。
+//   可用 KLINE_STORE=0 关闭本地库（回退到纯缓存行为，便于排查）。
 async function getKLineSnapshotForSymbol(symbol, count = 1200) {
   const cacheKey = 'kline-stock:' + symbol + ':' + count;
   // 一级：内存
   const cached = getCache(cacheKey);
   if (cached) return Object.assign({ key: null, cached: true }, cached);
-  // 二级：磁盘（当天有效）—— 切回白天看过的标的可秒开
-  const disk = getDiskCache(cacheKey);
-  if (disk) {
-    setCache(cacheKey, disk);
-    return Object.assign({ key: null, cached: true, fromDisk: true }, disk);
+
+  const storeEnabled = process.env.KLINE_STORE !== '0';
+  let meta = null;
+  if (storeEnabled) {
+    try {
+      meta = await klineStore.getMeta(symbol);
+      // 二级：本地库（根数够 + 数据新鲜 → 直接返回，不回源）
+      if (meta && meta.bar_count >= count && klineStore.isFresh(meta)) {
+        const local = await klineStore.loadKLine(symbol, count);
+        if (local && local.dates.length > 0) {
+          const out = {
+            name: meta.name || null,
+            symbol: symbol,
+            count: local.dates.length,
+            dates: local.dates,
+            ohlc: local.ohlc,
+            volumes: local.volumes,
+            key: null,
+            cached: true,
+            fromStore: true,
+            fetchedAt: new Date().toISOString(),
+          };
+          setCache(cacheKey, out);
+          return out;
+        }
+      }
+    } catch (e) {
+      console.warn('[kline-store] 读取本地库失败，回源上游: ' + e.message);
+    }
   }
 
   // 拉一次实时行情顺便取名称（与 K 线并联，减少总延迟）
@@ -987,6 +1020,30 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200) {
   klineData.key = null;
   setCache(cacheKey, klineData);
   setDiskCache(cacheKey, klineData);
+
+  // 写本地库：区分"首次/除权重拉"与"增量追加"
+  if (storeEnabled) {
+    try {
+      if (!meta || !meta.bar_count) {
+        // 首次入库：整只覆盖写
+        await klineStore.replaceKLine(symbol, klineData, { name: klineData.name });
+      } else {
+        // 已有数据：先用尾部比对检测前复权基准是否变化
+        const changed = await klineStore.detectAdjustChange(symbol, klineData, 20);
+        if (changed) {
+          // ★ 复权基准变了（除权除息）→ 前复权历史被整体重算，
+          //   绝不能只追加最新的几根，必须整只覆盖，否则接缝处会假跳空
+          console.log('[kline-store] ' + symbol + ' 检测到复权基准变化，整只重拉覆盖');
+          await klineStore.replaceKLine(symbol, klineData, { name: klineData.name });
+        } else {
+          await klineStore.appendKLine(symbol, klineData, { name: klineData.name });
+        }
+      }
+    } catch (e) {
+      console.warn('[kline-store] 写入本地库失败（不影响本次返回）: ' + e.message);
+    }
+  }
+
   return klineData;
 }
 
