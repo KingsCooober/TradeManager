@@ -507,7 +507,7 @@ async function fetchKLineFromTencentRange(symbol, startDate, endDate, period, ad
 }
 
 /**
- * 把 [startYear..now] 切分成若干段（返回 [{start,end}] 升序）
+ * 把 [startDate..now] 切分成若干段（返回 [{start,end}] 升序）
  *
  * ★ 段长必须保证「每段交易日数 < 腾讯单次返回上限 640」。
  *   曾经的写法用 TX_SEG_YEARS=2.5 递进，但结束年份取 Math.ceil(y + 2.5)
@@ -517,20 +517,36 @@ async function fetchKLineFromTencentRange(symbol, startDate, endDate, period, ad
  *   2019-01-02 ~ 2019-05-20 共 90 个交易日整段丢失）。
  *   现在改用「自然年切分，单段最多 TX_SEG_YEARS 年且必须 ≤ 2 年」，
  *   2 个自然年 ≈ 486 个交易日，留足余量。
+ *
+ * @param {string|number} startDate 起始日期 'YYYY-MM-DD'（兼容传 years 数字：
+ *                                  按"今天往回数 N 年"换算成起始日期）
  */
-function buildTencentSegments(years) {
+function buildTencentSegments(startDate) {
   const today = new Date();
   const endY = today.getFullYear();
-  const startY = endY - Math.max(1, Math.ceil(years));
+  let start;
+  if (typeof startDate === 'number' || (typeof startDate === 'string' && !/-/.test(startDate))) {
+    // 兼容旧签名：传年数
+    const years = Math.max(1, Number(startDate) || 10);
+    const sy = endY - Math.ceil(years);
+    start = sy + '-01-01';
+  } else {
+    start = String(startDate || '2016-01-01');
+  }
+  let startY = parseInt(start.slice(0, 4), 10);
+  // 起始日不是 1 月 1 日时，第一段也从该自然年的 1 月 1 日开始拉（多拉无害，
+  // 最终按 need 裁剪），这样后续段都能对齐自然年边界
   const segs = [];
   for (let s = startY; s <= endY; s += TX_SEG_YEARS) {
     // ★ 结束年份 = 起始年 + 段长 - 1，保证整段恰好 TX_SEG_YEARS 个自然年
     const e = Math.min(endY, s + TX_SEG_YEARS - 1);
-    const start = s + '-01-01';
+    const segStart = s + '-01-01';
     // 最后一段用今天作为结束，避免未来日期
     const end = (e >= endY ? today.toISOString().slice(0, 10) : e + '-12-31');
-    segs.push({ start: start, end: end });
+    segs.push({ start: segStart, end: end });
   }
+  // 首段如果晚于请求的起始日期，收敛到请求值（例如 start=2016-05-03 → 首段 2016-01-01 起）
+  if (segs.length && segs[0].start < start) segs[0].start = start;
   // 段数超限时从最早的段开始合并（保证最近的数据优先精确）。
   // ★ 但合并绝不能把一段撑到超过 640 个交易日（会被上游静默截断），
   //   所以合并后的跨度也必须 ≤ TX_MAX_SEG_DAYS；否则宁可丢掉最早那段。
@@ -548,13 +564,15 @@ function buildTencentSegments(years) {
 /**
  * 腾讯长历史拉取：分段并发 + 合并去重排序
  * @param {string} symbol sh600000 / sz000001
- * @param {number} years  需要覆盖的年数
+ * @param {number} years  需要覆盖的年数（或传 startDate 字符串，此时本参数忽略）
  * @param {number} want   期望的根数（用于最终裁剪）
  * @param {string} adjust 'qfq'（前复权，默认）| 'hfq'（后复权）
+ * @param {string} [startDate] 起始日期 'YYYY-MM-DD'：传了则按日期窗口拉
+ *                             （忽略 years），如 '2016-01-01' 表示 2016 年至今
  */
-async function fetchKLineFromTencentLong(symbol, years, want, adjust) {
+async function fetchKLineFromTencentLong(symbol, years, want, adjust, startDate) {
   const adj = adjust == null ? 'qfq' : adjust;
-  const segs = buildTencentSegments(years);
+  const segs = buildTencentSegments(startDate != null ? startDate : years);
   const t0 = Date.now();
   // 并发请求所有段；单段失败不影响其它段（返回空数组）
   const parts = await Promise.all(segs.map(function(s) {
@@ -577,6 +595,8 @@ async function fetchKLineFromTencentLong(symbol, years, want, adjust) {
     (merged.length ? '（' + merged[0].date + ' ~ ' + merged[merged.length - 1].date + '）' : '') +
     (adj === 'hfq' ? ' [hfq]' : ''));
   if (merged.length === 0) throw new Error('腾讯区间接口未返回任何数据');
+  // 按日期窗口拉取时不做尾部裁剪（调用方要的就是 startDate 至今的完整序列）
+  if (startDate != null) return merged;
   // 裁到最后 want 根（与调用方语义一致）
   return want && merged.length > want ? merged.slice(-want) : merged;
 }
@@ -708,19 +728,21 @@ function klineBadness(klines, symbol) {
  *     （口径选择权交给前端后，用户明确要前复权就给前复权——
  *      即使它有负价，那也是用户知情后的选择，后端不应擅自替换）
  *   - 'raw'：不复权（param 不带 adjust 段）
+ * @param {string} [startDate] 起始日期 'YYYY-MM-DD'：传了则按日期窗口拉
+ *                             （忽略 count/years），如 '2016-01-01'
  * @returns {Promise<{klines: Array, adjust: string, degraded: boolean}>}
  */
-async function fetchKLineSafe(symbol, count, years, prefer) {
+async function fetchKLineSafe(symbol, count, years, prefer, startDate) {
   const p = prefer == null ? 'auto' : String(prefer).toLowerCase();
 
   // 用户指定了明确口径：直接拉，不做降级
   if (p === 'qfq' || p === 'hfq' || p === 'raw') {
-    const klines = await fetchKLineFromTencentLong(symbol, years, count, p);
+    const klines = await fetchKLineFromTencentLong(symbol, years, count, p, startDate);
     return { klines: klines, adjust: p, degraded: false };
   }
 
   // auto：原有逻辑 —— qfq 优先，异常时与 hfq 择优
-  const qfq = await fetchKLineFromTencentLong(symbol, years, count, 'qfq');
+  const qfq = await fetchKLineFromTencentLong(symbol, years, count, 'qfq', startDate);
   if (qfq.length === 0) throw new Error('腾讯区间接口未返回任何数据');
   const q = klineBadness(qfq, symbol);
   // 前复权干净 → 直接用（价格贴近当年真实盘面价，是首选）
@@ -731,7 +753,7 @@ async function fetchKLineSafe(symbol, count, years, prefer) {
     : '出现 ' + q.jumps + ' 处异常涨跌幅（最大 ' + q.worst.toFixed(2) + '% @ ' + q.sample + '）';
   console.warn('[kline] ' + symbol + ' 前复权' + reason + '，尝试后复权(hfq)对比');
   try {
-    const hfq = await fetchKLineFromTencentLong(symbol, years, count, 'hfq');
+    const hfq = await fetchKLineFromTencentLong(symbol, years, count, 'hfq', startDate);
     if (hfq.length > 0) {
       const h = klineBadness(hfq, symbol);
       // 后复权更干净才换（两者都脏时择优，而不是要求后复权必须完美）
@@ -941,9 +963,13 @@ async function fetchKLine(symbol, count = 30, period = 'day', opts) {
   const displayName = meta ? meta.name : null;
 
   // 1) 腾讯区间分段并发（首选）；负价自动降级后复权（除非调用方指定了口径）
+  //    opts.startDate：按起始日期拉（如 '2016-01-01'），此时 count 只是裁剪上限
   try {
-    const years = Math.max(1, count / 250 * 1.15);   // 多取 15% 余量，保证裁到 count 根
-    const safe = await fetchKLineSafe(symbol, count, years, opts && opts.adjust);
+    const startDate = opts && opts.startDate;
+    const years = startDate
+      ? null
+      : Math.max(1, count / 250 * 1.15);   // 多取 15% 余量，保证裁到 count 根
+    const safe = await fetchKLineSafe(symbol, count, years, opts && opts.adjust, startDate);
     const data = safe.klines;
     if (data.length > 0) {
       if (displayName) data[0].__name = displayName;
@@ -1151,14 +1177,16 @@ async function buildKLineSnapshot(symbol, name, count, opts) {
   // 1. 拉取 K线原始数据（多取 35 根用于计算指标预热期）
   //    腾讯单次最多 641 行，超过则由 fetchKLine 走"日期区间分段并发"
   //    opts.adjust：'qfq'|'hfq'|'raw' 指定复权口径；缺省 auto（异常时自动择优）
+  //    opts.startDate：按起始日期拉（如 '2016-01-01' → 2016 年至今全部）
   const rawKlines = await fetchKLineWithPagination(symbol, count + 35, opts);
   if (rawKlines.length === 0) throw new Error('K线数据为空');
 
   // 透传 name（fetchKLine 把 INDEX_MAP 的 name 挂到首条 __name）
   const finalName = name || (rawKlines[0] && rawKlines[0].__name) || symbol;
 
-  // 2. 截取最后 count 根作为主数据
-  const klines = rawKlines.slice(-count);
+  // 2. 截取最后 count 根作为主数据（startDate 模式下上游已按日期窗口返回，
+  //    count+35 若够不着就全保留——调用方以日期为准而非根数）
+  const klines = (rawKlines.length > count + 35) ? rawKlines.slice(-count) : rawKlines;
   const dates = klines.map(k => k.date);
   const ohlc  = klines.map(k => [k.open, k.close, k.low, k.high]);
   // 成交额：k.amount（腾讯返回的是元）→ 转为万元
@@ -1250,7 +1278,19 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
   const ADJUST_WHITELIST = ['auto', 'qfq', 'hfq', 'raw'];
   const reqAdjust = (opts && opts.adjust && ADJUST_WHITELIST.indexOf(String(opts.adjust).toLowerCase()) >= 0)
     ? String(opts.adjust).toLowerCase() : 'auto';
-  const cacheKey = 'kline-stock:' + symbol + ':' + count + ':' + reqAdjust;
+  // 日期窗口模式：opts.startDate = 'YYYY-MM-DD'（如 '2016-01-01' → 2016 年至今）
+  const reqStart = (opts && opts.startDate && /^\d{4}-\d{2}-\d{2}$/.test(opts.startDate)) ? opts.startDate : null;
+  // 「今天」字符串（本地时区），用于日期窗口模式下判断 last_date 是否到今天
+  // 不会被误判：isFresh 已保证 ≤4 天，这里只需 last_date 不是明显落后
+  const _today = new Date();
+  const todayStr = _today.getFullYear() + '-' +
+    String(_today.getMonth() + 1).padStart(2, '0') + '-' +
+    String(_today.getDate()).padStart(2, '0');
+  // 日期窗口模式下 count 只是安全上限（防止极端异常导致超大响应），
+  // 覆盖判断以日期为准。2016 至今约 2700 个交易日，给 3500 上限。
+  const effCount = reqStart ? 3500 : count;
+  const cacheKey = 'kline-stock:' + symbol + ':' + count + ':' + reqAdjust +
+    (reqStart ? ':' + reqStart : '');
   // 一级：内存（预热模式下由调用方显式跳过，见末尾 noCache 说明）
   const skipMemCache = !!(opts && opts.noCache === true);
   if (!skipMemCache) {
@@ -1277,8 +1317,21 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
       const adjustMatch = (reqAdjust === 'auto')
         ? (metaAdjust === 'qfq' || metaAdjust === 'hfq')
         : (metaAdjust === reqAdjust);
-      if (meta && meta.bar_count >= count && klineStore.isFresh(meta) && adjustMatch) {
-        const local = await klineStore.loadKLine(symbol, count);
+      // ★ 日期窗口模式（opts.startDate）：本地库命中条件改为
+      //   「first_date ≤ startDate 且 last_date 已是今天附近」——目的是完整覆盖
+      //   startDate 至今，根数多少无所谓（新股天然根数少）。
+      //   isFresh（≤4 天）已保证新鲜度，last_date 只需不早于 4 天前即可
+      const dateWindowOk = (!reqStart || (meta.first_date && meta.first_date <= reqStart));
+      let staleCutoff = null;
+      if (reqStart) {
+        const d = new Date(Date.now() - 4 * 86400000);
+        staleCutoff = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+          String(d.getDate()).padStart(2, '0');
+      }
+      if (meta && klineStore.isFresh(meta) && adjustMatch &&
+          (reqStart ? (dateWindowOk && meta.last_date >= staleCutoff) : meta.bar_count >= count)) {
+        // 日期窗口模式：按 startDate 返回全部行；根数模式：返回最近 count 根
+        const local = await klineStore.loadKLine(symbol, count, reqStart);
         if (local && local.dates.length > 0) {
           const out = {
             name: meta.name || null,
@@ -1312,7 +1365,7 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
     namePromise,
     // ★ withIndicators 缺省 false：去掉 ma5/ma10/ma20/macd/amounts，
     //   传输量从 96.5KB 降到约 25KB（实测 641 根）
-    buildKLineSnapshot(symbol, null, count, { adjust: reqAdjust })
+    buildKLineSnapshot(symbol, null, effCount, { adjust: reqAdjust, startDate: reqStart })
   ]);
   klineData.name = name || klineData.name || null;
   klineData.key = null;
@@ -1324,11 +1377,9 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
   if (!opts || opts.noCache !== true) setCache(cacheKey, klineData);
   setDiskCache(cacheKey, klineData);
 
-  // 写本地库：区分"首次/除权重拉"与"增量追加"
-  // ★ 口径守卫：本地库存的是 auto 择优口径的数据（meta.adjust）。
-  //   用户显式切换到 raw/qfq 等其他口径时，**绝不能把那份不同口径的数据写进库**，
-  //   否则下次 auto 请求从库里读出来的就是错口径（价格体系完全不同）。
-  //   只有 auto 请求（口径与库一致）或首次入库时才允许落库。
+  // 日期窗口模式：库里已有完整 startDate 覆盖但返回时只裁了 count 根 → 会丢历史；
+  // 因此本地库命中分支需按「库里有多少给多少（≥count 或覆盖日期窗口）」返回。
+  // 写库逻辑与根数模式相同（append 只增不减，replace 全量覆盖）。
   if (storeEnabled) {
     const metaAdjust0 = (meta && meta.adjust) || 'qfq';
     const canPersist = (reqAdjust === 'auto') || (reqAdjust === usedAdjust && metaAdjust0 === usedAdjust);
@@ -1343,8 +1394,10 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
         console.log('[kline-store] ' + symbol + ' 复权口径由 ' + meta.adjust +
           ' 变为 ' + usedAdjust + '，整只覆盖重写');
       }
-      if (!meta || !meta.bar_count || adjustSwitched) {
-        // 首次入库 / 复权口径变更：整只覆盖写
+      if (!meta || !meta.bar_count || adjustSwitched ||
+          (reqStart && meta.first_date && meta.first_date > reqStart)) {
+        // 首次入库 / 复权口径变更 / 日期窗口要求的起点比库里更早：整只覆盖写
+        // （append 只增不减，库里缺 2016-2018 的历史时必须 replace 才能补上）
         await klineStore.replaceKLine(symbol, klineData, metaOpt);
       } else {
         // 已有数据：先用尾部比对检测前复权基准是否变化

@@ -1150,12 +1150,16 @@ app.get('/api/market/kline-stock/:symbol', auth.authMiddleware, async (req, res)
   if (!/^(sh|sz)\d{6}$/.test(symbol)) {
     return res.status(400).json({ error: 'symbol 格式错误，应为 shXXXXXX 或 szXXXXXX' });
   }
-  const count = Math.min(2500, Math.max(30, parseInt(req.query.count) || 1200));   // 10 年日 K线 = ~2500 个交易日
+  const count = Math.min(3500, Math.max(30, parseInt(req.query.count) || 1200));   // 10 年日 K线 = ~2500 个交易日
   // 复权口径（白名单校验，非法值回退 auto）
   const RAW_ADJUST = String(req.query.adjust || 'auto').toLowerCase();
   const adjust = ['auto', 'qfq', 'hfq', 'raw'].indexOf(RAW_ADJUST) >= 0 ? RAW_ADJUST : 'auto';
+  // 起始日期模式：?from=2016-01-01 → 返回 from 至今的全部数据（覆盖 count 语义）
+  const RAW_FROM = String(req.query.from || '').trim();
+  const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(RAW_FROM) ? RAW_FROM : null;
   try {
-    const data = await market.getKLineSnapshotForSymbol(symbol, count, { adjust: adjust });
+    const data = await market.getKLineSnapshotForSymbol(symbol, count,
+      fromDate ? { adjust: adjust, startDate: fromDate } : { adjust: adjust });
     res.json(data);
   } catch (e) {
     console.error('[market] getKLineSnapshotForSymbol 失败:', e.message);

@@ -113,15 +113,23 @@ function initStore() {
  * 读取某标的最近 count 根 K 线（升序返回，与上游接口结构一致）
  * @returns {Promise<{dates,ohlc,volumes,meta}|null>} 无数据返回 null
  */
-async function loadKLine(symbol, count) {
+async function loadKLine(symbol, count, fromDate) {
   await initStore();
-  const rows = await dbAll(
-    'SELECT date, open, close, low, high, volume FROM stock_kline WHERE symbol = ? ORDER BY date DESC LIMIT ?',
-    [symbol, count]
-  );
-  if (!rows.length) return null;
-  // DESC 取回后反转成升序
-  rows.reverse();
+  let rows;
+  if (fromDate) {
+    // 日期窗口模式：返回 fromDate（含）之后的全部行，不按根数截断
+    rows = await dbAll(
+      'SELECT date, open, close, low, high, volume FROM stock_kline WHERE symbol = ? AND date >= ? ORDER BY date ASC',
+      [symbol, fromDate]
+    );
+  } else {
+    rows = await dbAll(
+      'SELECT date, open, close, low, high, volume FROM stock_kline WHERE symbol = ? ORDER BY date DESC LIMIT ?',
+      [symbol, count]
+    );
+    // DESC 取回后反转成升序
+    rows.reverse();
+  }
   return {
     dates:   rows.map(r => r.date),
     ohlc:    rows.map(r => [r.open, r.close, r.low, r.high]),

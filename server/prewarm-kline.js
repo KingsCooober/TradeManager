@@ -37,6 +37,7 @@ function parseArgs(argv) {
   const o = {
     mcap: 50, years: 10, concurrency: 4, gapMs: 120, limit: 0,
     force: false, dry: false, retryFailed: false, symbols: null,
+    from: null,          // 'YYYY-MM-DD'：从指定日期拉至今（覆盖 years）
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -49,6 +50,7 @@ function parseArgs(argv) {
     else if (a === '--force') o.force = true;
     else if (a === '--dry') o.dry = true;
     else if (a === '--retry-failed') o.retryFailed = true;
+    else if (a === '--from') o.from = String(next());
     else if (a === '--symbols') o.symbols = String(next()).split(',').map(s => s.trim()).filter(Boolean);
   }
   return o;
@@ -58,7 +60,15 @@ const ARGS = parseArgs(process.argv);
 const FAILED_FILE = path.join(__dirname, 'cache', 'prewarm-failed.json');
 
 // 目标根数：一年约 243 个交易日，留 5% 余量
-const TARGET_BARS = Math.ceil(ARGS.years * 243 * 1.05);
+// --from 模式：按起始日期算目标根数（至今的自然日跨度 × 243/365 + 5% 余量）
+function calcTargetBars() {
+  if (ARGS.from && /^\d{4}-\d{2}-\d{2}$/.test(ARGS.from)) {
+    const days = Math.max(1, Math.round((Date.now() - new Date(ARGS.from + 'T00:00:00Z').getTime()) / 86400000));
+    return Math.ceil(days * 243 / 365 * 1.05);
+  }
+  return Math.ceil(ARGS.years * 243 * 1.05);
+}
+const TARGET_BARS = calcTargetBars();
 // "够新"的天数：覆盖周末 + 节假日
 const MAX_STALE_DAYS = 4;
 const REQUEST_TIMEOUT_MS = 45000;
@@ -83,8 +93,9 @@ async function main() {
   await klineStore.initStore();
 
   if (ARGS.dry) console.log('[预热] dry-run，只列计划不拉数据');
-  console.log(`[预热] 参数: 市值>${ARGS.mcap}亿  ${ARGS.years}年(目标${TARGET_BARS}根)  ` +
-    `并发${ARGS.concurrency}  间隔${ARGS.gapMs}ms${ARGS.force ? '  --force' : ''}`);
+  console.log(`[预热] 参数: 市值>${ARGS.mcap}亿  ` +
+    (ARGS.from ? `从 ${ARGS.from} 至今(目标${TARGET_BARS}根)` : `${ARGS.years}年(目标${TARGET_BARS}根)`) +
+    `  并发${ARGS.concurrency}  间隔${ARGS.gapMs}ms${ARGS.force ? '  --force' : ''}`);
 
   // 1) 决定要跑哪些标的
   let list;
@@ -105,12 +116,21 @@ async function main() {
   if (!list.length) { console.log('[预热] 名单为空，先跑 refresh-stock-list.js'); return; }
 
   // 2) 过滤掉已经够新够全的
+  // --from 模式：覆盖判断 = first_date ≤ from 且 last_date 在 4 天内
+  // （根数判断不适用：新股/长期停牌股根数天然少于目标，但只要覆盖了起点就算够）
   const todo = [];
   const skip = { fresh: 0 };
+  const staleCutoff = new Date(Date.now() - 4 * 86400000);
+  const staleCutoffStr = staleCutoff.getFullYear() + '-' +
+    String(staleCutoff.getMonth() + 1).padStart(2, '0') + '-' +
+    String(staleCutoff.getDate()).padStart(2, '0');
   for (const it of list) {
     if (ARGS.force) { todo.push(it); continue; }
     const meta = await klineStore.getMeta(it.symbol);
-    if (klineStore.isCoverageEnough(meta, TARGET_BARS, MAX_STALE_DAYS)) { skip.fresh++; continue; }
+    if (ARGS.from && /^\d{4}-\d{2}-\d{2}$/.test(ARGS.from)) {
+      if (meta && meta.first_date && meta.first_date <= ARGS.from &&
+          meta.last_date && meta.last_date >= staleCutoffStr) { skip.fresh++; continue; }
+    } else if (klineStore.isCoverageEnough(meta, TARGET_BARS, MAX_STALE_DAYS)) { skip.fresh++; continue; }
     it._meta = meta;
     todo.push(it);
   }
@@ -142,7 +162,10 @@ async function main() {
         //   全量重拉 3094 只仅耗时数秒、一条记录都没更新）。
         const data = await withTimeout(
           market.getKLineSnapshotForSymbol(it.symbol, TARGET_BARS,
-            { noCache: true, force: !!ARGS.force }),
+            Object.assign(
+              { noCache: true, force: !!ARGS.force },
+              (ARGS.from && /^\d{4}-\d{2}-\d{2}$/.test(ARGS.from)) ? { startDate: ARGS.from } : {}
+            )),
           REQUEST_TIMEOUT_MS, it.symbol
         );
         const bars = (data && data.dates && data.dates.length) || 0;

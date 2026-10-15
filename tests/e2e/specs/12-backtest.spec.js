@@ -1223,6 +1223,35 @@ test.describe('12 - 回测练习页', () => {
       const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('bt_state_form') || '{}'));
       expect(saved.adjust, '口径选择应写入存档').toBe('raw');
     });
+
+    test('选「2016 年至今」应带 from=2016-01-01 请求并渲染返回的全部数据', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      const urls = [];
+      await page.route('**/api/market/kline-stock/**', (route) => {
+        const url = route.request().url();
+        const isIndex = /sh000001|sh000510|sz399|sh000688/.test(url);
+        if (!isIndex) urls.push(url);
+        // 模拟 2016 至今的数据量（约 2600 根）
+        const body = BacktestPage.buildKline(isIndex ? 250 : 2600, isIndex ? 3000 : 24, isIndex ? '上证指数' : '测试标的');
+        body.adjust = 'qfq';
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+      });
+
+      await page.selectOption('#btYears', 'from2016');
+      await bt.loadData();
+
+      const hit = urls.find((u) => u.includes('from=2016-01-01'));
+      expect(hit, '主图请求应携带 from=2016-01-01').toBeTruthy();
+      expect(hit, 'from 模式 count 应为安全上限 3500').toMatch(/count=3500/);
+
+      // 图表应渲染全部 2600 根（窗口模式以日期为准，不按根数裁剪）
+      const got = await page.evaluate(() => (window.BT_klineData && window.BT_klineData.dates || []).length);
+      expect(got, '应渲染返回的全部根数').toBe(2600);
+
+      // 存档应记录所选年数选项
+      const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('bt_state_form') || '{}'));
+      expect(saved.years, '年数选择应写入存档').toBe('from2016');
+    });
   });
 
   test.describe('标的搜索', () => {

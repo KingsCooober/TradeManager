@@ -664,6 +664,9 @@ async function BT_loadData(silent) {
   }
 
   var count = BT_yearsToCount(yearsEl.value);
+  // 「2016 年至今」模式：后端按起始日期返回 startDate 至今的全部数据
+  var reqStart = (yearsEl.value === 'from2016') ? '2016-01-01' : null;
+  if (reqStart) count = 3500;   // 安全上限（2016 至今约 2700 个交易日）
 
   var btn = document.getElementById('btnLoad');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 加载中…'; }
@@ -677,7 +680,8 @@ async function BT_loadData(silent) {
     // 复权口径跟随下拉选择（auto/qfq/hfq/raw），后端按口径回数据
     var adjEl = document.getElementById('btAdjust');
     var reqAdjust = (adjEl && ['auto', 'qfq', 'hfq', 'raw'].indexOf(adjEl.value) >= 0) ? adjEl.value : 'auto';
-    var url = '/api/market/kline-stock/' + symbol + '?count=' + count + '&adjust=' + reqAdjust;
+    var url = '/api/market/kline-stock/' + symbol + '?count=' + count + '&adjust=' + reqAdjust +
+      (reqStart ? '&from=' + reqStart : '');
     var res = await authFetch(url);
     if (mySeq !== BT_loadSeq) return;   // 已有更新的请求发出，丢弃本次结果
     if (!res.ok) {
@@ -762,17 +766,21 @@ async function BT_loadIndex(silent) {
     // 与主图拉相同根数（时间范围对齐 → 两图 dataZoom 同步才有意义）
     // 若主图还没加载，用主图 select 的 years 对应的 count 兜底
     var count;
+    var reqStart = null;
     if (window.BT_klineData && window.BT_klineData.dates) {
       count = window.BT_klineData.dates.length;
     } else {
       var yearsEl = document.getElementById('btYears');
-      count = BT_yearsToCount(yearsEl ? yearsEl.value : '1');
+      var yv = yearsEl ? yearsEl.value : '1';
+      if (yv === 'from2016') { reqStart = '2016-01-01'; count = 3500; }
+      else count = BT_yearsToCount(yv);
     }
     var url = '/api/market/kline-stock/' + symbol + '?count=' + count +
       '&adjust=' + ((function() {
         var a = document.getElementById('btAdjust');
         return (a && ['auto', 'qfq', 'hfq', 'raw'].indexOf(a.value) >= 0) ? a.value : 'auto';
-      })());
+      })()) +
+      (reqStart ? '&from=' + reqStart : '');
     var res = await authFetch(url);
     if (mySeq !== BT_indexLoadSeq) return;
     if (!res.ok) throw new Error('HTTP ' + res.status);
