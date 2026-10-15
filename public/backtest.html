@@ -674,6 +674,9 @@
     </div>
   </div>
 
+  <!-- 复权口径提示（仅当后端检测到前复权异常改用后复权时显示），位于控制栏与图表区之间 -->
+  <div class="bt-adjust-notice" id="btAdjustNotice" style="display:none;" role="status"></div>
+
   <!-- 主体两栏：左侧图表（固定 960px 绘图区），右侧指标卡 -->
   <div class="bt-main-layout">
     <div class="bt-main-left">
@@ -707,11 +710,6 @@
       </div>
     </div>
   </div>
-
-  <!-- 复权口径提示（仅当后端检测到前复权异常改用后复权时显示）
-       ⚠ 必须放在 .bt-chart-wrap 之外：wrap 是 flex + align-items:stretch，
-         放进去会变成「图表 / 提示 / 侧栏」三列，提示条被纵向拉满整个图表高度。 -->
-  <div class="bt-adjust-notice" id="btAdjustNotice" style="display:none;" role="status"></div>
 
   <!-- K 线主图 + 右侧光标数据栏 -->
   <div class="bt-chart-wrap">

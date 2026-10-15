@@ -1210,7 +1210,9 @@ test.describe('12 - 回测练习页', () => {
     //   display:flex + align-items:stretch，于是它成了「图表 / 提示 / 侧栏」
     //   三列布局中的一列，被纵向拉伸到整个图表高度（实测 388x379px），
     //   文字竖排、右侧数据栏被挤走。
-    test('后复权提示条应是单行横条，不得被图表 flex 拉伸', async ({ page }) => {
+    // 提示条位于控制栏与图表区之间（.bt-main-layout 之前），单行横条。
+    // 历史 bug：曾放在 .bt-chart-wrap 内，被 flex 拉伸成 388x379 竖排。
+    test('后复权提示条应是单行横条，位于控制栏与图表区之间', async ({ page }) => {
       const { bt } = await enterBacktestWithAuth(page);
       await page.route('**/api/market/kline-stock/**', (route) => {
         const url = route.request().url();
@@ -1222,18 +1224,25 @@ test.describe('12 - 回测练习页', () => {
       await bt.loadData();
 
       const box = await page.locator('#btAdjustNotice').boundingBox();
-      // 主图的 wrap（指数图复用同一 class，故用 #btChart 的父级定位）
-      const wrap = await page.locator('#btChart').evaluate(
-        (el) => { const r = el.parentElement.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }
+      // 主图 wrap（指数图复用同一 class，故用 #btChart 的父级定位）与控制栏
+      const geom = await page.locator('#btChart').evaluate(
+        (el) => {
+          const r = el.parentElement.getBoundingClientRect();
+          const cb = document.querySelector('.bt-controlbar').getBoundingClientRect();
+          const ml = document.querySelector('.bt-main-layout').getBoundingClientRect();
+          return { wrap: { x: r.x, y: r.y, width: r.width, height: r.height }, controlBottom: cb.bottom, mainTop: ml.y };
+        }
       );
       expect(box, '提示条应有尺寸').toBeTruthy();
+      await expect(page.locator('#btAdjustNotice')).toBeVisible();
 
       // 单行：高度应由文字行高决定（约 20~60px），远小于图表高度
       expect(box.height, '提示条高度应约为一行（实测被拉伸到 379px）').toBeLessThan(80);
-      // 宽度：应横向铺满左列（而不是被压成窄条后换行成竖排）
-      expect(box.width, '提示条宽度应接近图表宽度').toBeGreaterThan(wrap.width * 0.7);
-      // 位置：应在图表上方，不与图表重叠
-      expect(box.y + box.height, '提示条应位于图表上边界之上').toBeLessThanOrEqual(wrap.y + 1);
+      // 宽度：应横向铺满（而不是被压成窄条后换行成竖排）
+      expect(box.width, '提示条宽度应接近图表宽度').toBeGreaterThan(geom.wrap.width * 0.7);
+      // 位置：应在控制栏之下、图表区（.bt-main-layout）之上
+      expect(box.y, '提示条应在控制栏之下').toBeGreaterThanOrEqual(geom.controlBottom - 2);
+      expect(box.y + box.height, '提示条应位于图表区上边界之上').toBeLessThanOrEqual(geom.mainTop + 1);
     });
 
     // 复权口径选择权在前端：#btAdjust 下拉（auto/qfq/hfq/raw），
