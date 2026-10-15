@@ -506,24 +506,44 @@ function BT_hoverSyncFrom(idx, from) {
 
 /**
  * 把主图索引映射为指数图索引（按日期对齐；找不到返回 null）
+ * ★ 停牌日兜底：主图该日指数无数据（个股停牌、指数照常交易）时，
+ *   映射到指数上「不晚于该日」的最近交易日，光标不至于消失。
  */
 function BT_mapMainIdxToIndex(idx) {
   if (!BT_indexData || !BT_klineData) return null;
   var d = BT_klineData.dates[idx];
   if (!d) return null;
   var i = BT_indexData.dates.indexOf(d);
-  return i >= 0 ? i : null;
+  if (i >= 0) return i;
+  // 停牌日：找指数上 < d 的最大日期（二分，dates 升序）
+  var lo = 0, hi = BT_indexData.dates.length - 1, best = -1;
+  while (lo <= hi) {
+    var mid = (lo + hi) >> 1;
+    if (BT_indexData.dates[mid] <= d) { best = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return best >= 0 ? best : null;
 }
 
 /**
  * 把指数图索引映射为主图索引（按日期对齐；找不到就返回 null）
+ * ★ 停牌日兜底：指数该日主图无数据（个股停牌）时，映射到主图上
+ *   「不早于该日」的最近交易日（停牌后复牌第一天），光标不至于消失。
  */
 function BT_mapIndexIdxToMain(idx) {
   if (!BT_indexData || !BT_klineData) return null;
   var d = BT_indexData.dates[idx];
   if (!d) return null;
   var i = BT_klineData.dates.indexOf(d);
-  return i >= 0 ? i : null;
+  if (i >= 0) return i;
+  // 停牌日：找主图上 > d 的最小日期（二分，dates 升序）
+  var lo = 0, hi = BT_klineData.dates.length - 1, best = -1;
+  while (lo <= hi) {
+    var mid = (lo + hi) >> 1;
+    if (BT_klineData.dates[mid] >= d) { best = mid; hi = mid - 1; }
+    else lo = mid + 1;
+  }
+  return best >= 0 ? best : null;
 }
 
 /**
@@ -1922,6 +1942,25 @@ function BT_renderIndexChart(data, indexName) {
   var ohlc = data.ohlc || [];
   var vols = data.volumes || [];
   if (dates.length === 0) return;
+
+  // ★ 与主图日期窗口对齐：个股日 K 上游在盘中/收盘后生成时点不同，
+  //   指数常比个股多最新一根（甚至盘中实时半根），导致两图日期错位、
+  //   按日期映射的双向光标对不上。指数数据裁到与主图相同的 [首根, 末根]。
+  if (window.BT_klineData && window.BT_klineData.dates && window.BT_klineData.dates.length > 0) {
+    var mDates = window.BT_klineData.dates;
+    var mainLast = mDates[mDates.length - 1];
+    var mainFirst = mDates[0];
+    var s = 0, e = dates.length;
+    while (s < e && dates[s] < mainFirst) s++;
+    while (e > s && dates[e - 1] > mainLast) e--;
+    if (s > 0 || e < dates.length) {
+      dates = dates.slice(s, e);
+      ohlc = ohlc.slice(s, e);
+      vols = vols.slice(s, e);
+      data = Object.assign({}, data, { dates: dates, ohlc: ohlc, volumes: vols, count: dates.length });
+    }
+  }
+  BT_indexData = data;
 
   // MA N 条（与主图一致，从 BT_maPeriods 读）
   var maLines = [];

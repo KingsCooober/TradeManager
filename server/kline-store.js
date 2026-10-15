@@ -338,6 +338,32 @@ function isFresh(meta, maxStaleDays) {
 }
 
 /**
+ * 今天是否有行情（周一~周五，不含节假日判断——节假日多拉一次增量可忽略）。
+ * 用途：交易日当天，库内 last_date 停在上一交易日时，isFresh 仍会放行命中，
+ * 导致标的比实时回源的指数少最新一根（两图日期错位一天）。
+ * 交易日当天要求 last_date ≥ 今天（昨天收盘后同步过也算新鲜，因为数据一样）。
+ */
+function isTradingDayToday() {
+  const d = new Date().getDay();
+  return d >= 1 && d <= 5;
+}
+
+/**
+ * 库内数据是否「跟上今天」：非交易日（周末）只看 isFresh；
+ * 交易日当天要求 last_date 是今天或昨天之后的交易日（含昨晚收盘后同步）。
+ * 简化：交易日当天，last_date < 今天的 都视为可能缺最新一根 → 不算最新。
+ * （返回 false 只意味着走回源增量补根，append 每天补 1 根代价极小）
+ */
+function isUpToDate(meta) {
+  if (!isFresh(meta)) return false;
+  if (!isTradingDayToday()) return true;
+  const today = new Date();
+  const t = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' +
+    String(today.getDate()).padStart(2, '0');
+  return meta.last_date >= t;
+}
+
+/**
  * 用"尾部比对"检测前复权基准是否变化（即是否发生过除权除息）
  *
  * 原理：前复权下，除权会让**历史价格整体重算**。
@@ -432,6 +458,7 @@ module.exports = {
   upsertMetaBatch,
   getWarmupCandidates,
   isFresh,
+  isUpToDate,
   isCoverageEnough,
   detectAdjustChange,
   getStats,

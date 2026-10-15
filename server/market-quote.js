@@ -1329,15 +1329,21 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
       //   ★ 新股豁免不能用"first_date ≤ reqStart"：reqStart=2016-01-04 时
       //     2016 年 IPO（首根 2016-03 等）会被误判未覆盖而整日回源。
       //     正确规则：first_date > 窗口起点时视为新股，首根即上市日，天然完整。
-      const isLateListing = meta.first_date && meta.first_date > KLINE_STORE_START;   // 2016 后上市
-      const windowCovered = meta.first_date && (meta.first_date <= KLINE_STORE_START || isLateListing);
+      //   ★ 但纯靠 first_date 无法区分"2016 后上市"与"早年短窗口落库"（如指数
+      //     按5年请求存入、first_date=2021）——后者其实是未覆盖，应回源补齐。
+      //     简化处理：bar_count 明显小于 2016 至今应有根数（~2620）且 first_date
+      //     晚于窗口起点 + 2 年时视为未覆盖回源（命中后走 replace 补齐）。
+      const isLateListing = meta.first_date && meta.first_date > KLINE_STORE_START;
+      const shortLegacy = isLateListing && meta.first_date > '2018-01-01' &&
+        meta.bar_count < 2620 - 30;
+      const windowCovered = meta.first_date && ((meta.first_date <= KLINE_STORE_START || isLateListing) && !shortLegacy);
       let staleCutoff = null;
       if (reqStart) {
         const d = new Date(Date.now() - 4 * 86400000);
         staleCutoff = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
           String(d.getDate()).padStart(2, '0');
       }
-      if (meta && klineStore.isFresh(meta) && adjustMatch && windowCovered &&
+      if (meta && klineStore.isUpToDate(meta) && adjustMatch && windowCovered &&
           (reqStart ? meta.last_date >= staleCutoff : meta.bar_count >= count)) {
         // 日期窗口模式：按 startDate 返回全部行；根数模式：返回最近 count 根
         const local = await klineStore.loadKLine(symbol, count, reqStart);
@@ -1441,9 +1447,20 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
       // ★ 首次入库 / 复权口径变更 / 库内起点不满足全局窗口：整只覆盖写
       //   （append 只增不减，库里缺 2016 起的历史时必须 replace 才能补上）
       //   新股豁免：2016 后上市（first_date > KLINE_STORE_START）的标的
-      //   首根=上市日即已完整，走 append 分支即可
-      const lateListing = meta && meta.first_date && meta.first_date > KLINE_STORE_START;
-      if (!meta || !meta.bar_count || adjustSwitched || !lateListing) {
+      //   首根=上市日即已完整，走 append 分支即可。
+      //   ★ 豁免必须用「上游首根」而非「库内 first_date」判断：库里只有短
+      //     历史的数据（如指数早年按近5年请求落库、first_date=2021）会被
+      //     误判为新股而永远 append、永远补不上 2016 起的历史。回源是按
+      //     KLINE_STORE_START 全量拉的，上游首根 > 窗口起点才真是新股。
+      const upFirst = klineData.dates && klineData.dates[0];
+      const lateListing = upFirst && upFirst > KLINE_STORE_START;
+      if (!meta || !meta.bar_count || adjustSwitched || !lateListing ||
+          (meta.first_date && meta.first_date > upFirst + '')) {
+        // meta.first_date > 上游首根：库里比上游还少（旧短窗口数据）→ 整只覆盖
+        if (meta && meta.first_date && meta.first_date > upFirst + '') {
+          console.log('[kline-store] ' + symbol + ' 库内起点 ' + meta.first_date +
+            ' 晚于上游首根 ' + upFirst + '，整只覆盖补齐 ' + KLINE_STORE_START + ' 起历史');
+        }
         await klineStore.replaceKLine(symbol, klineData, metaOpt);
       } else {
         // 已有数据：先用尾部比对检测前复权基准是否变化
