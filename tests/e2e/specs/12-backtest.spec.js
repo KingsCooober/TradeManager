@@ -457,11 +457,28 @@ test.describe('12 - 回测练习页', () => {
       expect(mainH, '图表高度不应超过上限').toBeLessThanOrEqual(432);
 
       // grid[0]（K线）+ grid[1]（成交量）应铺满容器扣掉上下留白后的可用高度
+      // （底部留白 58px = 日期标签 ~20 + slider 24 + 间隙，日期被 slider 遮挡的回归预留）
       const klineH = s.mainGrid[0].height;
       const volH = s.mainGrid[1].height;
       expect(klineH, 'K线区应占大部分高度').toBeGreaterThan(volH * 2);
       expect(klineH + volH, 'K线 + 成交量 应接近容器高度').toBeLessThanOrEqual(mainH);
-      expect(klineH + volH, '不应在容器里留大片空白').toBeGreaterThan(mainH - 80);
+      expect(klineH + volH, '不应在容器里留大片空白（顶部18+底部58=76px 留白）').toBeGreaterThan(mainH - 90);
+    });
+
+    test('主图日期标签不应被 dataZoom slider 遮挡', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await bt.loadData();
+      // 成交量 grid 底边 + 日期标签（margin6 + 字高11 ≈ 17px）应 ≤ slider 顶边
+      const r = await page.evaluate(() => {
+        const opt = BT_chart.getOption();
+        const g1 = opt.grid[1];
+        const dz = opt.dataZoom[1];
+        const H = BT_chart.getHeight();
+        const volBottom = g1.top + g1.height;
+        const sliderTop = H - dz.bottom - dz.height;
+        return { volBottom, sliderTop, gap: sliderTop - volBottom };
+      });
+      expect(r.gap, '日期标签空间（slider 顶 - 成交量底）应 ≥ 20px（回归：日期被滑块盖住）').toBeGreaterThanOrEqual(20);
     });
 
     test('K 线数据应完好（candlestick 四元数组，未被其它 series 覆盖）', async ({ page }) => {

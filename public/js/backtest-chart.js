@@ -1156,9 +1156,12 @@ function BT_updateVisibleGrids() {
   //   现在容器高度由 BT_fitChartHeights() 按视口剩余空间设定，
   //   这里只负责把该高度拆分给 K线 / 成交量两块。
   var H = BT_chart.getHeight() || 432;
-  // 预留：顶部 18（y 轴标签）+ 底部约 38（x 轴日期标签 + 底部留白）
+  // 预留：顶部 18（y 轴标签）+ 底部 58（x 轴日期标签 ~20px + dataZoom slider 24px + 间隙）
+  //   ★ 底部原来是 38，日期标签（volBottom + margin6 + 字高11 ≈ 17px）与
+  //     slider（bottom6 + height18 = 24px）合计需要 ~47px，38px 不够，
+  //     标签下半被 slider 遮住（用户截图：日期文字被滑块盖住一行）。
   var TOP_PX = 18;
-  var BOTTOM_PX = 38;
+  var BOTTOM_PX = 58;
   var usable = Math.max(180, H - TOP_PX - BOTTOM_PX);
   var showVolPx = showVol;
   var GAP = showVolPx ? 5 : 0;
@@ -1181,6 +1184,7 @@ function BT_updateVisibleGrids() {
     macdGrid,
     equityGrid
   ];
+  // slider 位置由 BT_getBaseOption() 的 bottom:6 固定贴容器底，无需在此重设
   BT_chart.setOption({ grid: grids });
 }
 
