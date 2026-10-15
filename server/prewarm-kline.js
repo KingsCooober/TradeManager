@@ -37,7 +37,7 @@ function parseArgs(argv) {
   const o = {
     mcap: 50, years: 10, concurrency: 4, gapMs: 120, limit: 0,
     force: false, dry: false, retryFailed: false, symbols: null,
-    from: null,          // 'YYYY-MM-DD'：从指定日期拉至今（覆盖 years）
+    from: '2016-01-04',  // 全局数据窗口：所有标的从 2016 首个交易日拉至今
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -59,8 +59,8 @@ function parseArgs(argv) {
 const ARGS = parseArgs(process.argv);
 const FAILED_FILE = path.join(__dirname, 'cache', 'prewarm-failed.json');
 
-// 目标根数：一年约 243 个交易日，留 5% 余量
-// --from 模式：按起始日期算目标根数（至今的自然日跨度 × 243/365 + 5% 余量）
+// 目标根数：--from 模式按起始日期算（至今的自然日跨度 × 243/365 + 5% 余量）；
+// years 模式按年数算。默认 --from=2016-01-04（全局数据窗口）。
 function calcTargetBars() {
   if (ARGS.from && /^\d{4}-\d{2}-\d{2}$/.test(ARGS.from)) {
     const days = Math.max(1, Math.round((Date.now() - new Date(ARGS.from + 'T00:00:00Z').getTime()) / 86400000));
@@ -94,7 +94,7 @@ async function main() {
 
   if (ARGS.dry) console.log('[预热] dry-run，只列计划不拉数据');
   console.log(`[预热] 参数: 市值>${ARGS.mcap}亿  ` +
-    (ARGS.from ? `从 ${ARGS.from} 至今(目标${TARGET_BARS}根)` : `${ARGS.years}年(目标${TARGET_BARS}根)`) +
+    `从 ${ARGS.from} 至今(目标${TARGET_BARS}根)` +
     `  并发${ARGS.concurrency}  间隔${ARGS.gapMs}ms${ARGS.force ? '  --force' : ''}`);
 
   // 1) 决定要跑哪些标的
@@ -127,10 +127,14 @@ async function main() {
   for (const it of list) {
     if (ARGS.force) { todo.push(it); continue; }
     const meta = await klineStore.getMeta(it.symbol);
-    if (ARGS.from && /^\d{4}-\d{2}-\d{2}$/.test(ARGS.from)) {
-      if (meta && meta.first_date && meta.first_date <= ARGS.from &&
-          meta.last_date && meta.last_date >= staleCutoffStr) { skip.fresh++; continue; }
-    } else if (klineStore.isCoverageEnough(meta, TARGET_BARS, MAX_STALE_DAYS)) { skip.fresh++; continue; }
+    // 覆盖判断（--from 模式）：
+    //   - 老股：first_date ≤ from（即 2016-01-04 起）
+    //   - 新股：first_date > from（2016 后上市，首根=上市日即已完整）
+    //   两者都要求 last_date 在 4 天内（数据新鲜）
+    const covered = meta && meta.first_date && (
+      meta.first_date <= ARGS.from || meta.first_date > ARGS.from
+    );
+    if (covered && meta.last_date && meta.last_date >= staleCutoffStr) { skip.fresh++; continue; }
     it._meta = meta;
     todo.push(it);
   }
@@ -162,10 +166,7 @@ async function main() {
         //   全量重拉 3094 只仅耗时数秒、一条记录都没更新）。
         const data = await withTimeout(
           market.getKLineSnapshotForSymbol(it.symbol, TARGET_BARS,
-            Object.assign(
-              { noCache: true, force: !!ARGS.force },
-              (ARGS.from && /^\d{4}-\d{2}-\d{2}$/.test(ARGS.from)) ? { startDate: ARGS.from } : {}
-            )),
+            { noCache: true, force: !!ARGS.force, startDate: ARGS.from }),
           REQUEST_TIMEOUT_MS, it.symbol
         );
         const bars = (data && data.dates && data.dates.length) || 0;

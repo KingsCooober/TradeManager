@@ -1184,9 +1184,12 @@ async function buildKLineSnapshot(symbol, name, count, opts) {
   // 透传 name（fetchKLine 把 INDEX_MAP 的 name 挂到首条 __name）
   const finalName = name || (rawKlines[0] && rawKlines[0].__name) || symbol;
 
-  // 2. 截取最后 count 根作为主数据（startDate 模式下上游已按日期窗口返回，
-  //    count+35 若够不着就全保留——调用方以日期为准而非根数）
-  const klines = (rawKlines.length > count + 35) ? rawKlines.slice(-count) : rawKlines;
+  // 2. 截取数据：
+  //    - startDate 模式（全局窗口 KLINE_STORE_START）：全量保留——落库必须
+  //      是 2016 起完整历史，根数裁剪由上层 getKLineSnapshotForSymbol 按
+  //      前端请求的 count 再做（库里裁 ≠ 拉少）
+  //    - 根数模式：截取最后 count 根
+  const klines = opts && opts.startDate ? rawKlines : rawKlines.slice(-count);
   const dates = klines.map(k => k.date);
   const ohlc  = klines.map(k => [k.open, k.close, k.low, k.high]);
   // 成交额：k.amount（腾讯返回的是元）→ 转为万元
@@ -1278,17 +1281,19 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
   const ADJUST_WHITELIST = ['auto', 'qfq', 'hfq', 'raw'];
   const reqAdjust = (opts && opts.adjust && ADJUST_WHITELIST.indexOf(String(opts.adjust).toLowerCase()) >= 0)
     ? String(opts.adjust).toLowerCase() : 'auto';
+  // ★ 全局数据窗口（用户决策 2026-10：所有标的一律从 2016-01-04 拉至今）
+  //   2016-01-04 是 2016 年首个交易日。任何请求（无论 count 多少）落库时都
+  //   按此窗口拉全量 —— 根数窗口模式（count）只影响"返回给前端的裁剪"，
+  //   不影响"库里存多少"。这样本地库永远保持 2016 起的完整历史，
+  //   前端要 1 年还是 10 年都从库里直接裁剪返回，不必回源。
+  const KLINE_STORE_START = '2016-01-04';
   // 日期窗口模式：opts.startDate = 'YYYY-MM-DD'（如 '2016-01-01' → 2016 年至今）
   const reqStart = (opts && opts.startDate && /^\d{4}-\d{2}-\d{2}$/.test(opts.startDate)) ? opts.startDate : null;
-  // 「今天」字符串（本地时区），用于日期窗口模式下判断 last_date 是否到今天
-  // 不会被误判：isFresh 已保证 ≤4 天，这里只需 last_date 不是明显落后
-  const _today = new Date();
-  const todayStr = _today.getFullYear() + '-' +
-    String(_today.getMonth() + 1).padStart(2, '0') + '-' +
-    String(_today.getDate()).padStart(2, '0');
   // 日期窗口模式下 count 只是安全上限（防止极端异常导致超大响应），
   // 覆盖判断以日期为准。2016 至今约 2700 个交易日，给 3500 上限。
   const effCount = reqStart ? 3500 : count;
+  // ★ 缓存键必须反映"实际拉取窗口"：回源一律按 KLINE_STORE_START 拉全量，
+  //   但返回裁剪由 count/reqStart 决定，所以键里保留 count 与 reqStart
   const cacheKey = 'kline-stock:' + symbol + ':' + count + ':' + reqAdjust +
     (reqStart ? ':' + reqStart : '');
   // 一级：内存（预热模式下由调用方显式跳过，见末尾 noCache 说明）
@@ -1317,19 +1322,23 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
       const adjustMatch = (reqAdjust === 'auto')
         ? (metaAdjust === 'qfq' || metaAdjust === 'hfq')
         : (metaAdjust === reqAdjust);
-      // ★ 日期窗口模式（opts.startDate）：本地库命中条件改为
-      //   「first_date ≤ startDate 且 last_date 已是今天附近」——目的是完整覆盖
-      //   startDate 至今，根数多少无所谓（新股天然根数少）。
-      //   isFresh（≤4 天）已保证新鲜度，last_date 只需不早于 4 天前即可
-      const dateWindowOk = (!reqStart || (meta.first_date && meta.first_date <= reqStart));
+      // ★ 本地库命中条件（全局窗口 KLINE_STORE_START=2016-01-04 起整段保存）：
+      //   - 库已覆盖窗口：first_date ≤ 2016-01-04，或 2016 后上市（首根=上市日）
+      //   - 日期窗口模式另要求 last_date 在 4 天内；根数模式要求 bar_count ≥ count
+      //   isFresh（≤4 天）已保证新鲜度
+      //   ★ 新股豁免不能用"first_date ≤ reqStart"：reqStart=2016-01-04 时
+      //     2016 年 IPO（首根 2016-03 等）会被误判未覆盖而整日回源。
+      //     正确规则：first_date > 窗口起点时视为新股，首根即上市日，天然完整。
+      const isLateListing = meta.first_date && meta.first_date > KLINE_STORE_START;   // 2016 后上市
+      const windowCovered = meta.first_date && (meta.first_date <= KLINE_STORE_START || isLateListing);
       let staleCutoff = null;
       if (reqStart) {
         const d = new Date(Date.now() - 4 * 86400000);
         staleCutoff = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
           String(d.getDate()).padStart(2, '0');
       }
-      if (meta && klineStore.isFresh(meta) && adjustMatch &&
-          (reqStart ? (dateWindowOk && meta.last_date >= staleCutoff) : meta.bar_count >= count)) {
+      if (meta && klineStore.isFresh(meta) && adjustMatch && windowCovered &&
+          (reqStart ? meta.last_date >= staleCutoff : meta.bar_count >= count)) {
         // 日期窗口模式：按 startDate 返回全部行；根数模式：返回最近 count 根
         const local = await klineStore.loadKLine(symbol, count, reqStart);
         if (local && local.dates.length > 0) {
@@ -1365,7 +1374,9 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
     namePromise,
     // ★ withIndicators 缺省 false：去掉 ma5/ma10/ma20/macd/amounts，
     //   传输量从 96.5KB 降到约 25KB（实测 641 根）
-    buildKLineSnapshot(symbol, null, effCount, { adjust: reqAdjust, startDate: reqStart })
+    // ★ 回源时一律按全局窗口 KLINE_STORE_START 拉全量（2016-01-04 至今），
+    //   根数/count 只影响返回裁剪，不影响落库 —— 保证库内始终是完整历史
+    buildKLineSnapshot(symbol, null, effCount, { adjust: reqAdjust, startDate: KLINE_STORE_START })
   ]);
   klineData.name = name || klineData.name || null;
   klineData.key = null;
@@ -1374,12 +1385,45 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
   klineData.adjust = usedAdjust;
   // 批量预热时上百只标的顺序写入内存缓存会把 Map 撑大且毫无意义
   // （预热进程结束即释放），因此允许调用方跳过。
+  // （此处 setCache 的对象在下方裁剪为 out 后会被覆盖写入正确的裁剪版本）
   if (!opts || opts.noCache !== true) setCache(cacheKey, klineData);
   setDiskCache(cacheKey, klineData);
 
+  // ★ 返回裁剪：落库的是 2016 起全量，返回给前端时按请求参数裁剪
+  //   - 根数模式（无 reqStart）：返回最近 count 根
+  //   - 日期窗口模式（reqStart）：返回 reqStart 至今全部
+  //   注意：裁剪只作用于「返回值/缓存值」，落库必须用全量 klineData。
+  //   缓存键已含 count/reqStart，因此缓存裁剪后的对象是安全的。
+  let out = klineData;
+  if (reqStart) {
+    if (klineData.dates[0] < reqStart) {
+      const i = klineData.dates.findIndex(d => d >= reqStart);
+      if (i > 0) {
+        out = {
+          name: klineData.name, symbol: klineData.symbol, count: klineData.count - i,
+          dates: klineData.dates.slice(i), ohlc: klineData.ohlc.slice(i),
+          volumes: klineData.volumes.slice(i),
+          adjust: klineData.adjust, key: null, cached: false,
+        };
+      }
+    }
+  } else if (klineData.count > count) {
+    const c = klineData.count;
+    out = {
+      name: klineData.name, symbol: klineData.symbol, count: count,
+      dates: klineData.dates.slice(c - count), ohlc: klineData.ohlc.slice(c - count),
+      volumes: klineData.volumes.slice(c - count),
+      adjust: klineData.adjust, key: null, cached: false,
+    };
+  }
+  // 用裁剪后的对象覆盖内存/磁盘缓存（键已含 count/reqStart）
+  if (out !== klineData && (!opts || opts.noCache !== true)) setCache(cacheKey, out);
+  if (out !== klineData) setDiskCache(cacheKey, out);
+
   // 日期窗口模式：库里已有完整 startDate 覆盖但返回时只裁了 count 根 → 会丢历史；
   // 因此本地库命中分支需按「库里有多少给多少（≥count 或覆盖日期窗口）」返回。
-  // 写库逻辑与根数模式相同（append 只增不减，replace 全量覆盖）。
+  // ★ 回源已改为固定按 KLINE_STORE_START（2016-01-04）拉全量落库，前端任何
+  //   根数/窗口请求都从库里裁剪返回，不再单独回源短窗口。
   if (storeEnabled) {
     const metaAdjust0 = (meta && meta.adjust) || 'qfq';
     const canPersist = (reqAdjust === 'auto') || (reqAdjust === usedAdjust && metaAdjust0 === usedAdjust);
@@ -1394,10 +1438,12 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
         console.log('[kline-store] ' + symbol + ' 复权口径由 ' + meta.adjust +
           ' 变为 ' + usedAdjust + '，整只覆盖重写');
       }
-      if (!meta || !meta.bar_count || adjustSwitched ||
-          (reqStart && meta.first_date && meta.first_date > reqStart)) {
-        // 首次入库 / 复权口径变更 / 日期窗口要求的起点比库里更早：整只覆盖写
-        // （append 只增不减，库里缺 2016-2018 的历史时必须 replace 才能补上）
+      // ★ 首次入库 / 复权口径变更 / 库内起点不满足全局窗口：整只覆盖写
+      //   （append 只增不减，库里缺 2016 起的历史时必须 replace 才能补上）
+      //   新股豁免：2016 后上市（first_date > KLINE_STORE_START）的标的
+      //   首根=上市日即已完整，走 append 分支即可
+      const lateListing = meta && meta.first_date && meta.first_date > KLINE_STORE_START;
+      if (!meta || !meta.bar_count || adjustSwitched || !lateListing) {
         await klineStore.replaceKLine(symbol, klineData, metaOpt);
       } else {
         // 已有数据：先用尾部比对检测前复权基准是否变化
@@ -1417,7 +1463,7 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
     }   // end canPersist else
   }
 
-  return klineData;
+  return out;
 }
 
 // 入口：单只指数的完整行情
