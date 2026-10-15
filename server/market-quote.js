@@ -363,9 +363,12 @@ const TX_KLINE_HOSTS = [
 let _txHostIdx = 0;   // 当前首选域名下标（成功即固定，失败则轮换）
 
 /** 按当前首选域名拼 URL；proxy 域名路径多一段 /ifzqgtimg */
-function buildTencentKLineUrl(symbol, period, startDate, endDate, count) {
-  const pathPart = '/appstock/app/fqkline/get?param=' +
-    encodeURIComponent([symbol, period, startDate || '', endDate || '', count].join(',') + ',qfq');
+function buildTencentKLineUrl(symbol, period, startDate, endDate, count, adjust) {
+  // adjust: 'qfq' | 'hfq' | ''（不复权）
+  const adj = adjust == null ? 'qfq' : adjust;
+  const param = [symbol, period, startDate || '', endDate || '', count].join(',') +
+    (adj ? ',' + adj : '');
+  const pathPart = '/appstock/app/fqkline/get?param=' + encodeURIComponent(param);
   return 'https://' + TX_KLINE_HOSTS[_txHostIdx] + pathPart;
 }
 
@@ -374,7 +377,7 @@ function buildTencentKLineUrl(symbol, period, startDate, endDate, count) {
  * 依次尝试各域名，任一成功就把它设为下次首选（避免每次都先撞一次被封的域名）。
  * 全部失败时抛最后一个错误。
  */
-async function httpsGetTencentKLine(symbol, period, startDate, endDate, count) {
+async function httpsGetTencentKLine(symbol, period, startDate, endDate, count, adjust) {
   let lastErr = null;
   const startIdx = _txHostIdx;
   for (let i = 0; i < TX_KLINE_HOSTS.length; i++) {
@@ -382,7 +385,7 @@ async function httpsGetTencentKLine(symbol, period, startDate, endDate, count) {
     const saved = _txHostIdx;
     _txHostIdx = idx;
     try {
-      const buf = await httpsGet(buildTencentKLineUrl(symbol, period, startDate, endDate, count));
+      const buf = await httpsGet(buildTencentKLineUrl(symbol, period, startDate, endDate, count, adjust));
       // ★ WAF 拦截时状态码是 501，但 httpsGet 只返回 body。
       //   这里用内容特征识别：WAF 页面以 <!DOCTYPE 开头，正常响应是 JSON。
       const text = buf.toString('utf8');
@@ -447,14 +450,35 @@ async function fetchKLineFromTencent(symbol, count) {
 //
 // 策略：把 [startDate, endDate] 按 SEG_YEARS 年切成若干段并发请求，合并去重排序。
 //   段数受 MAX_SEGMENTS 限制，避免请求区间过大时打出过多并发。
-const TX_SEG_YEARS = 2.5;      // 每段覆盖年数（2.5 年 ≈ 610 个交易日，稳妥低于单次上限）
-const TX_MAX_SEGMENTS = 6;     // 最多切几段（6 × 2.5 = 15 年，覆盖 10 年绰绰有余）
+//
+// ★ 段长上限的由来：腾讯「区间」接口单次最多返回 640 根，超出就**静默截断**
+//   （丢弃最早的部分，不报错、不提示）。A 股约 243 个交易日/年，所以
+//   2 个自然年 ≈ 486 根（安全），3 个自然年 ≈ 729 根（会被砍掉约 90 根）。
+//   这里必须用整数年步进，否则像 2.5 这样的步长会让相邻段错位成"3 年一段"。
+const TX_SEG_YEARS = 2;        // 每段覆盖年数（2 年 ≈ 486 个交易日，低于 640 上限）
+const TX_MAX_SEGMENTS = 6;     // 最多切几段（6 × 2 = 12 年，覆盖 10 年有余）
 
-/** 腾讯日线「区间」查询：直接指定 [start, end]，不受 641 根上限约束 */
-async function fetchKLineFromTencentRange(symbol, startDate, endDate, period) {
+/** 估算 [start, end] 之间的 A 股交易日数（约 243 天/年），用于判断是否会被 640 根上限截断 */
+function estTradingDays(start, end) {
+  const days = (new Date(end) - new Date(start)) / 86400000;
+  return Math.round(days / 365 * 243);
+}
+// 单段可用交易日上限：腾讯区间接口单次最多 640 根，留一点余量
+const TX_MAX_SEG_DAYS = 620;
+
+/** 腾讯日线「区间」查询：直接指定 [start, end]，不受 641 根上限约束
+ *
+ *  adjust: 'qfq'（前复权，默认）| 'hfq'（后复权）| ''（不复权）
+ *  ★ 关于 hfq：前复权在高分红股上会把早期价格算成负数
+ *    （实测兖矿能源 2015-12-01 前复权 O=-2.965，后复权 O=25.185）。
+ *    负价会让前端 BT_calcBuyVolume 直接返回 0（买不进），回测形同虚设。
+ *    后复权永不出现负价，所以检测到负价时自动改用 hfq（见 ensureNoNegativePrices）。
+ */
+async function fetchKLineFromTencentRange(symbol, startDate, endDate, period, adjust) {
   period = period || 'day';
+  const adj = adjust == null ? 'qfq' : adjust;
   // 区间查询时 count 传 640（实测传更大也没副作用，但保持与单段上限一致）
-  const buf = await httpsGetTencentKLine(symbol, period, startDate, endDate, 640);
+  const buf = await httpsGetTencentKLine(symbol, period, startDate, endDate, 640, adj);
   if (buf.length === 0) throw new Error('腾讯K线区间接口返回空');
   let json;
   try { json = JSON.parse(buf.toString('utf8')); }
@@ -462,8 +486,9 @@ async function fetchKLineFromTencentRange(symbol, startDate, endDate, period) {
   if (json.code !== 0) throw new Error('腾讯K线区间返回 code=' + json.code);
   const symData = json.data && json.data[symbol];
   if (!symData) return [];   // 该区间无数据（如股票尚未上市）→ 返回空而不是抛错
-  const key = 'qfq' + period;
-  const arr = symData[key] || symData[period];
+  // 依次尝试 qfq/hfq/day：接口按请求的复权口径返回对应 key
+  const arr = (adj ? symData[adj + period] : null) || symData[period] ||
+              symData['qfq' + period] || symData['hfq' + period];
   if (!Array.isArray(arr)) return [];
   return arr.map(function(line) {
     var close = parseFloat(line[2]);
@@ -481,24 +506,41 @@ async function fetchKLineFromTencentRange(symbol, startDate, endDate, period) {
   }).filter(function(k) { return k.date && !isNaN(k.close); });
 }
 
-/** 把 [startYear..now] 按 TX_SEG_YEARS 切段（返回 [{start,end}] 升序） */
+/**
+ * 把 [startYear..now] 切分成若干段（返回 [{start,end}] 升序）
+ *
+ * ★ 段长必须保证「每段交易日数 < 腾讯单次返回上限 640」。
+ *   曾经的写法用 TX_SEG_YEARS=2.5 递进，但结束年份取 Math.ceil(y + 2.5)
+ *   会向上取整到整年 → 每段实际跨 3 个自然年 ≈ 729 个交易日，
+ *   超过 640 后上游**静默截断，丢弃最早的那 ~90 根**（不报错），
+ *   表现为库里每段都缺约 4~5 个月的 K 线（实测兖矿能源
+ *   2019-01-02 ~ 2019-05-20 共 90 个交易日整段丢失）。
+ *   现在改用「自然年切分，单段最多 TX_SEG_YEARS 年且必须 ≤ 2 年」，
+ *   2 个自然年 ≈ 486 个交易日，留足余量。
+ */
 function buildTencentSegments(years) {
   const today = new Date();
   const endY = today.getFullYear();
   const startY = endY - Math.max(1, Math.ceil(years));
   const segs = [];
-  for (let y = startY; y < endY + 1; y += TX_SEG_YEARS) {
-    const s = Math.floor(y);
-    const e = Math.min(endY + 1, Math.ceil(y + TX_SEG_YEARS));
+  for (let s = startY; s <= endY; s += TX_SEG_YEARS) {
+    // ★ 结束年份 = 起始年 + 段长 - 1，保证整段恰好 TX_SEG_YEARS 个自然年
+    const e = Math.min(endY, s + TX_SEG_YEARS - 1);
     const start = s + '-01-01';
     // 最后一段用今天作为结束，避免未来日期
-    const end = (e > endY ? today.toISOString().slice(0, 10) : (e - 1) + '-12-31');
+    const end = (e >= endY ? today.toISOString().slice(0, 10) : e + '-12-31');
     segs.push({ start: start, end: end });
   }
-  // 段数超限时从最早的段开始合并（保证最近的数据优先精确）
+  // 段数超限时从最早的段开始合并（保证最近的数据优先精确）。
+  // ★ 但合并绝不能把一段撑到超过 640 个交易日（会被上游静默截断），
+  //   所以合并后的跨度也必须 ≤ TX_MAX_SEG_DAYS；否则宁可丢掉最早那段。
   while (segs.length > TX_MAX_SEGMENTS) {
     const a = segs.shift();
-    segs[0].start = a.start;
+    const merged = { start: a.start, end: segs[0].end };
+    if (estTradingDays(merged.start, merged.end) <= TX_MAX_SEG_DAYS) {
+      segs[0].start = a.start;
+    }
+    // 超限则直接丢弃 a（最近的数据优先），segs[0] 保持原样
   }
   return segs;
 }
@@ -508,13 +550,15 @@ function buildTencentSegments(years) {
  * @param {string} symbol sh600000 / sz000001
  * @param {number} years  需要覆盖的年数
  * @param {number} want   期望的根数（用于最终裁剪）
+ * @param {string} adjust 'qfq'（前复权，默认）| 'hfq'（后复权）
  */
-async function fetchKLineFromTencentLong(symbol, years, want) {
+async function fetchKLineFromTencentLong(symbol, years, want, adjust) {
+  const adj = adjust == null ? 'qfq' : adjust;
   const segs = buildTencentSegments(years);
   const t0 = Date.now();
   // 并发请求所有段；单段失败不影响其它段（返回空数组）
   const parts = await Promise.all(segs.map(function(s) {
-    return fetchKLineFromTencentRange(symbol, s.start, s.end, 'day')
+    return fetchKLineFromTencentRange(symbol, s.start, s.end, 'day', adj)
       .catch(function(e) {
         console.warn('[tencent-range] 段 ' + s.start + '~' + s.end + ' 失败: ' + e.message);
         return [];
@@ -530,10 +574,164 @@ async function fetchKLineFromTencentLong(symbol, years, want) {
   });
   console.log('[tencent-range] ' + symbol + ' ' + segs.length + ' 段并发 ' +
     (Date.now() - t0) + 'ms，合并后 ' + merged.length + ' 根' +
-    (merged.length ? '（' + merged[0].date + ' ~ ' + merged[merged.length - 1].date + '）' : ''));
+    (merged.length ? '（' + merged[0].date + ' ~ ' + merged[merged.length - 1].date + '）' : '') +
+    (adj === 'hfq' ? ' [hfq]' : ''));
   if (merged.length === 0) throw new Error('腾讯区间接口未返回任何数据');
   // 裁到最后 want 根（与调用方语义一致）
   return want && merged.length > want ? merged.slice(-want) : merged;
+}
+
+/** K 线序列里是否存在 <= 0 的价格（前复权高分红股的典型症状） */
+function hasNegativePrice(klines) {
+  if (!Array.isArray(klines)) return false;
+  for (let i = 0; i < klines.length; i++) {
+    const k = klines[i];
+    if (!k) continue;
+    if (!(k.close > 0) || !(k.open > 0)) return true;   // NaN 也视作异常
+  }
+  return false;
+}
+
+// 涨跌停上限按板块区分：主板 10%、创业板/科创板 20%、北交所 30%。
+// 留 1 个百分点的余量吸收四舍五入与新股首日的差异。
+const LIMIT_PCT_MAIN = 11;      // 60/00 开头（沪深主板）
+const LIMIT_PCT_GEM = 21;       // 30 开头（创业板）、688 开头（科创板）
+const LIMIT_PCT_BSE = 31;       // 8/4 开头（北交所）
+// 相邻两根间隔超过这个天数就认为是跨长假，不参与跳空判定（长假后跳空是真实的）。
+const ADJACENT_GAP_DAYS = 10;
+
+/**
+ * 按标的代码推断单日涨跌幅上限（含 1% 余量）。
+ *
+ * ★ 为什么必须区分板块：创业板/科创板的涨跌停是 20%，北交所是 30%。
+ *   早期版本对所有标的用统一的 11% 阈值，会把创业板正常的 20% 涨停
+ *   误判成"假跳空"。实测 sz300903（创业板）2021-07-27 不复权真实涨幅
+ *   20.01%（标准 20% 涨停），qfq 与 hfq 口径都显示 ~20% —— 属真实行情，
+ *   却被 11% 阈值判为异常，进而触发无谓的降级/报错。
+ */
+function getPriceLimitPct(symbol) {
+  const s = String(symbol || '').toLowerCase();
+  const code = s.replace(/^(sh|sz|bj)/, '');
+  if (/^68/.test(code)) return LIMIT_PCT_GEM;          // 科创板 688xxx
+  if (/^30/.test(code)) return LIMIT_PCT_GEM;          // 创业板 300xxx
+  if (/^[84]/.test(code)) return LIMIT_PCT_BSE;        // 北交所 8xxxxx / 4xxxxx
+  return LIMIT_PCT_MAIN;                                // 沪深主板
+}
+
+/**
+ * 检测相邻交易日是否存在「数学上不可能」的涨跌幅。
+ *
+ * ★ 为什么需要：腾讯的前复权在除权日附近折算不准，会把「分红除权」错误地
+ *   复权成一根暴涨/暴跌。实测：
+ *     - 浦发银行 2017-05-25（分红除权日）不复权价 15.47 → 11.75（跌 24%），
+ *       前复权却变成 +14.21%（主板不可能）；
+ *     - 工商银行 2016-03-04 前复权 +16.06%、农业银行 2016-01-26 +16.80%；
+ *       同日期后复权分别为 +3.21% / +3.95%，是正常波动。
+ *   全库扫描：1866/2579 只（72.4%）存在单日超过涨跌停上限的异常波动，
+ *   集中在 2016-2021（累计分红多的年份），2022 年后骤降。
+ *   用户会在这些日期看到凭空的暴赚/暴亏，回测结果失真。
+ *
+ * ★ 已知的良性残留（不是缺陷，无需处理）：
+ *   创业板/科创板新股上市前 5 个交易日不设涨跌幅限制，会出现 100%+ 的真实涨幅。
+ *   实测 sz300939 秋田微 2021-01-28 上市，2021-02-01 前复权 +105.63%、
+ *   后复权 +100.99% —— 两个口径都如此，属实盘行情。这类标的两个口径的
+ *   badness 同分，按「同分保留前复权」的规则不会被错误降级，数据无害。
+ *   （曾尝试按下标跳过上市初期若干根，但本库的 10 年窗口并不从上市日开始，
+ *    跳过会漏掉 2016-2021 的真实除权假跳空，故不做下标豁免。）
+ *
+ * @param {Array} klines K 线序列
+ * @param {string} symbol 标的代码（用于按板块取涨跌停上限）
+ * @returns {{count:number, worst:number, sample:string, limit:number}} 异常根数与最大偏离
+ */
+function detectAbnormalJump(klines, symbol) {
+  const limit = getPriceLimitPct(symbol);
+  const res = { count: 0, worst: 0, sample: '', limit: limit };
+  if (!Array.isArray(klines) || klines.length < 2) return res;
+  for (let i = 1; i < klines.length; i++) {
+    const prev = klines[i - 1], cur = klines[i];
+    if (!prev || !cur) continue;
+    if (!(prev.close > 0) || !(cur.close > 0)) continue;
+    const days = (new Date(cur.date) - new Date(prev.date)) / 86400000;
+    if (!(days > 0) || days > ADJACENT_GAP_DAYS) continue;   // 跨长假，跳过
+    const chg = Math.abs(cur.close - prev.close) / prev.close * 100;
+    if (chg > limit) {
+      res.count++;
+      if (chg > res.worst) { res.worst = chg; res.sample = prev.date + '→' + cur.date; }
+    }
+  }
+  return res;
+}
+
+/**
+ * 评估一份 K 线数据的「问题严重度」，用于在前复权/后复权之间择优。
+ *
+ * ★ 为什么需要打分而不是「必须完美」：
+ *   早期实现要求后复权必须 0 负价且 0 跳空才肯采用，否则退回前复权。
+ *   但存在这样的标的：前复权 34 根负价 + 221 处跳空（含 121% 的假暴涨），
+ *   后复权只有 1 处 11.14% 的正常涨停（恰好越过 11% 阈值 0.14 个百分点）。
+ *   此时后复权明显更好，却因「不够完美」被退回前复权 → 用户拿到的正是坏数据。
+ *   实测 sh600256 广汇能源即为此例。
+ *
+ * 权重：负价是致命缺陷（前端 BT_calcBuyVolume 遇 price<=0 直接返回 0，根本买不进），
+ * 定权重 1000；跳空只是涨跌幅失真，定权重 1。分值越低越好。
+ */
+function klineBadness(klines, symbol) {
+  const neg = klines.filter(function(k) { return !(k.close > 0) || !(k.open > 0); }).length;
+  const jump = detectAbnormalJump(klines, symbol);
+  return {
+    neg: neg,
+    jumps: jump.count,
+    worst: jump.worst,
+    sample: jump.sample,
+    score: neg * 1000 + jump.count
+  };
+}
+
+/**
+ * 拉取 K 线；当前复权口径出现「负价」或「不可能的涨跌幅」时，自动降级为后复权重拉。
+ *
+ * ★ 为什么需要（两个独立的 qfq 缺陷）：
+ *   1. 负价：前复权按"减去累计分红"折算，高分红股在分红总额超过早期股价时，
+ *      早年价格会被算成负数。实测兖矿能源 2015-12-24 收盘 -2.719、
+ *      贵州茅台 2015-12-01 收盘 -83.955（上游腾讯原始数据，非我方算错）。
+ *      前端 BT_calcBuyVolume 遇到 price <= 0 直接返回 0 → 根本买不进。
+ *   2. 假跳空：除权日附近折算不准，把分红除权做成暴涨暴跌（浦发 +14.21%）。
+ *      详见 detectAbnormalJump 注释。
+ *   后复权对这两种情况都是正确的（同一根兖矿 hfq 为 25.405、茅台 1330.837；
+ *   浦发 2017-05-25 hfq 为 +8.30%），代价是价格数值不等于当年真实盘面价。
+ *
+ * @returns {Promise<{klines: Array, adjust: string, degraded: boolean}>}
+ */
+async function fetchKLineSafe(symbol, count, years) {
+  const qfq = await fetchKLineFromTencentLong(symbol, years, count, 'qfq');
+  if (qfq.length === 0) throw new Error('腾讯区间接口未返回任何数据');
+  const q = klineBadness(qfq, symbol);
+  // 前复权干净 → 直接用（价格贴近当年真实盘面价，是首选）
+  if (q.score === 0) return { klines: qfq, adjust: 'qfq', degraded: false };
+
+  const reason = q.neg > 0
+    ? '出现 ' + q.neg + '/' + qfq.length + ' 根负价'
+    : '出现 ' + q.jumps + ' 处异常涨跌幅（最大 ' + q.worst.toFixed(2) + '% @ ' + q.sample + '）';
+  console.warn('[kline] ' + symbol + ' 前复权' + reason + '，尝试后复权(hfq)对比');
+  try {
+    const hfq = await fetchKLineFromTencentLong(symbol, years, count, 'hfq');
+    if (hfq.length > 0) {
+      const h = klineBadness(hfq, symbol);
+      // 后复权更干净才换（两者都脏时择优，而不是要求后复权必须完美）
+      if (h.score < q.score) {
+        console.warn('[kline] ' + symbol + ' → 采用后复权(hfq)（严重度 ' + h.score +
+          ' 优于前复权 ' + q.score + '；hfq 负价 ' + h.neg + ' 根、跳空 ' + h.jumps + ' 处）');
+        return { klines: hfq, adjust: 'hfq', degraded: true };
+      }
+      console.warn('[kline] ' + symbol + ' → 保留前复权（严重度 ' + q.score +
+        ' 不劣于后复权 ' + h.score + '；hfq 负价 ' + h.neg + ' 根、跳空 ' + h.jumps + ' 处）');
+      return { klines: qfq, adjust: 'qfq', degraded: false };
+    }
+  } catch (e) {
+    console.warn('[kline] ' + symbol + ' 后复权重拉失败: ' + e.message);
+  }
+  // hfq 也拿不到 → 宁可返回前复权数据（至少根数对），也不返回空
+  return { klines: qfq, adjust: 'qfq', degraded: false };
 }
 
 // ==================== Baostock（证券宝）数据源 ====================
@@ -725,12 +923,14 @@ async function fetchKLine(symbol, count = 30, period = 'day') {
   const meta = Object.values(INDEX_MAP).find(function(m) { return m.symbol === symbol; });
   const displayName = meta ? meta.name : null;
 
-  // 1) 腾讯区间分段并发（首选）
+  // 1) 腾讯区间分段并发（首选）；负价自动降级后复权
   try {
     const years = Math.max(1, count / 250 * 1.15);   // 多取 15% 余量，保证裁到 count 根
-    const data = await fetchKLineFromTencentLong(symbol, years, count);
+    const safe = await fetchKLineSafe(symbol, count, years);
+    const data = safe.klines;
     if (data.length > 0) {
       if (displayName) data[0].__name = displayName;
+      if (safe.degraded) data[0].__adjust = 'hfq';
       return data;
     }
     throw new Error('区间接口返回空');
@@ -951,6 +1151,8 @@ async function buildKLineSnapshot(symbol, name, count, opts) {
     dates:   dates,
     ohlc:    ohlc,
     volumes: amounts,   // 兼容字段名（前端用 data.volumes）
+    // 复权口径：'qfq' 常规前复权 / 'hfq' 负价降级后复权（高分红股）
+    adjust:  (rawKlines[0] && rawKlines[0].__adjust) || 'qfq',
     fetchedAt: new Date().toISOString()
   };
 
@@ -1031,8 +1233,13 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
   }
 
   const storeEnabled = process.env.KLINE_STORE !== '0';
+  // ★ opts.force = true 时跳过本地库直接回源，
+  //   用于修复"库里已存了坏数据"的场景（如历史上写入的前复权负价）。
+  //   注意：noCache 只跳内存缓存，不跳本地库 —— 本地库是持久层，
+  //   光靠 noCache 无法强制回源。
+  const forceUpstream = !!(opts && opts.force === true);
   let meta = null;
-  if (storeEnabled) {
+  if (storeEnabled && !forceUpstream) {
     try {
       meta = await klineStore.getMeta(symbol);
       // 二级：本地库（根数够 + 数据新鲜 → 直接返回，不回源）
@@ -1049,6 +1256,8 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
             key: null,
             cached: true,
             fromStore: true,
+            // 告诉前端该标的用的是前复权还是后复权（高分红股会降级为 hfq）
+            adjust: meta.adjust || 'qfq',
             fetchedAt: new Date().toISOString(),
           };
           setCache(cacheKey, out);
@@ -1073,6 +1282,9 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
   ]);
   klineData.name = name || klineData.name || null;
   klineData.key = null;
+  // 该标的实际使用的复权口径：'qfq' 常规 / 'hfq' 负价降级
+  const usedAdjust = klineData.adjust || 'qfq';
+  klineData.adjust = usedAdjust;
   // 批量预热时上百只标的顺序写入内存缓存会把 Map 撑大且毫无意义
   // （预热进程结束即释放），因此允许调用方跳过。
   if (!opts || opts.noCache !== true) setCache(cacheKey, klineData);
@@ -1080,10 +1292,16 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
 
   // 写本地库：区分"首次/除权重拉"与"增量追加"
   if (storeEnabled) {
+    const metaOpt = { name: klineData.name, adjust: usedAdjust };
     try {
-      if (!meta || !meta.bar_count) {
-        // 首次入库：整只覆盖写
-        await klineStore.replaceKLine(symbol, klineData, { name: klineData.name });
+      // ★ 复权口径变了（qfq→hfq）说明旧数据整段不可比，必须整只覆盖
+      const adjustSwitched = meta && meta.adjust && meta.adjust !== usedAdjust;      if (adjustSwitched) {
+        console.log('[kline-store] ' + symbol + ' 复权口径由 ' + meta.adjust +
+          ' 变为 ' + usedAdjust + '，整只覆盖重写');
+      }
+      if (!meta || !meta.bar_count || adjustSwitched) {
+        // 首次入库 / 复权口径变更：整只覆盖写
+        await klineStore.replaceKLine(symbol, klineData, metaOpt);
       } else {
         // 已有数据：先用尾部比对检测前复权基准是否变化
         const changed = await klineStore.detectAdjustChange(symbol, klineData, 20);
@@ -1091,9 +1309,9 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
           // ★ 复权基准变了（除权除息）→ 前复权历史被整体重算，
           //   绝不能只追加最新的几根，必须整只覆盖，否则接缝处会假跳空
           console.log('[kline-store] ' + symbol + ' 检测到复权基准变化，整只重拉覆盖');
-          await klineStore.replaceKLine(symbol, klineData, { name: klineData.name });
+          await klineStore.replaceKLine(symbol, klineData, metaOpt);
         } else {
-          await klineStore.appendKLine(symbol, klineData, { name: klineData.name });
+          await klineStore.appendKLine(symbol, klineData, metaOpt);
         }
       }
     } catch (e) {
@@ -1212,5 +1430,15 @@ module.exports = {
   normalizeSymbol,
   getKLineSnapshot,
   getKLineSnapshotForSymbol,
-  INDEX_MAP
+  INDEX_MAP,
+  // 供诊断脚本核对分段拉取结果（不对外接口使用）
+  _testRange: fetchKLineFromTencentRange,
+  _testSegments: buildTencentSegments,
+  _testLong: fetchKLineFromTencentLong,
+  _hasNegativePrice: hasNegativePrice,
+  _detectAbnormalJump: detectAbnormalJump,
+  _getPriceLimitPct: getPriceLimitPct,
+  _klineBadness: klineBadness,
+  _estTradingDays: estTradingDays,
+  _TX_MAX_SEG_DAYS: TX_MAX_SEG_DAYS,
 };

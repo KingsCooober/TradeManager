@@ -137,8 +137,12 @@ async function main() {
       const t = Date.now();
       try {
         // noCache: 避免把上千只标的的完整 K 线驻留进程内存
+        // ★ force: --force 时必须一并传下去。noCache 只跳过内存缓存，
+        //   本地 SQLite 库依然会命中并直接返回旧数据（实测：只传 noCache 时
+        //   全量重拉 3094 只仅耗时数秒、一条记录都没更新）。
         const data = await withTimeout(
-          market.getKLineSnapshotForSymbol(it.symbol, TARGET_BARS, { noCache: true }),
+          market.getKLineSnapshotForSymbol(it.symbol, TARGET_BARS,
+            { noCache: true, force: !!ARGS.force }),
           REQUEST_TIMEOUT_MS, it.symbol
         );
         const bars = (data && data.dates && data.dates.length) || 0;

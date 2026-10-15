@@ -87,8 +87,17 @@ function initStore() {
       first_date     TEXT,
       last_date      TEXT,
       last_sync      TEXT,
-      last_full_sync TEXT
+      last_full_sync TEXT,
+      adjust         TEXT DEFAULT 'qfq'
     )`);
+
+    // ★ 迁移：老库的 stock_meta 没有 adjust 列。
+    //   记录该标的实际使用的复权口径（'qfq' 前复权 / 'hfq' 后复权），
+    //   否则下次读取时无法判断库里存的是哪一种，可能把 qfq 数据当成 hfq 用。
+    const cols = await dbAll("PRAGMA table_info(stock_meta)");
+    if (!cols.some(c => c.name === 'adjust')) {
+      await dbRun("ALTER TABLE stock_meta ADD COLUMN adjust TEXT DEFAULT 'qfq'");
+    }
     return true;
   })().catch(function (e) {
     console.error('[kline-store] 建表失败:', e.message);
@@ -193,6 +202,7 @@ async function replaceKLine(symbol, data, meta) {
     last_date: dates[dates.length - 1],
     last_sync: new Date().toISOString(),
     last_full_sync: new Date().toISOString(),
+    adjust: (meta && meta.adjust) || 'qfq',
   });
   return { inserted: dates.length };
 }
@@ -232,6 +242,7 @@ async function appendKLine(symbol, data, meta) {
     first_date: (st && st.f) || null,
     last_date: (st && st.l) || null,
     last_sync: new Date().toISOString(),
+    adjust: (meta && meta.adjust) || undefined,
   });
   return { inserted: nDates.length };
 }
@@ -268,7 +279,7 @@ async function _upsertMeta(symbol, f) {
   if (exist) {
     const sets = [];
     const params = [];
-    ['name', 'bar_count', 'first_date', 'last_date', 'last_sync', 'last_full_sync'].forEach(function (k) {
+    ['name', 'bar_count', 'first_date', 'last_date', 'last_sync', 'last_full_sync', 'adjust'].forEach(function (k) {
       if (f[k] !== undefined) { sets.push(k + ' = ?'); params.push(f[k]); }
     });
     if (!sets.length) return;
@@ -276,10 +287,11 @@ async function _upsertMeta(symbol, f) {
     await dbRun('UPDATE stock_meta SET ' + sets.join(', ') + ' WHERE symbol = ?', params);
   } else {
     await dbRun(
-      'INSERT INTO stock_meta (symbol,name,mcap_yi,bar_count,first_date,last_date,last_sync,last_full_sync) VALUES (?,?,?,?,?,?,?,?)',
+      'INSERT INTO stock_meta (symbol,name,mcap_yi,bar_count,first_date,last_date,last_sync,last_full_sync,adjust) VALUES (?,?,?,?,?,?,?,?,?)',
       [symbol, f.name || null, f.mcap_yi || 0, f.bar_count || 0,
        f.first_date || null, f.last_date || null,
-       f.last_sync || null, f.last_full_sync || null]
+       f.last_sync || null, f.last_full_sync || null,
+       f.adjust || 'qfq']
     );
   }
 }

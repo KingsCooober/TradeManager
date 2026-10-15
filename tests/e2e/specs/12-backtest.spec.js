@@ -1095,6 +1095,118 @@ test.describe('12 - 回测练习页', () => {
       expect(j.macd && j.macd.dif, '指数接口应保留 macd').toBeTruthy();
     });
   });
+  // ============================================================
+  // 复权口径降级（前复权负价 / 除权日假跳空）
+  //
+  // 背景：腾讯的前复权(qfq) 在两类情况下会给出错误数据：
+  //   1. 负价 —— 高分红股早年价格被"减去累计分红"算成负数
+  //      （兖矿能源 2015-12-24 收 -2.719），前端 BT_calcBuyVolume
+  //      遇 price<=0 直接返回 0，根本买不进；
+  //   2. 假跳空 —— 除权日折算不准，把分红除权做成暴涨（浦发银行
+  //      2017-05-25 前复权 +14.21%，主板不可能）。
+  // 后端 fetchKLineSafe 会比较两个口径的严重度，择优返回，
+  // 并在响应里带 adjust 字段；页面据此显示提示条。
+  //
+  // ⚠ 这些用例刻意**不注入 mock**：mock 数据是合成的，没有负价也没有
+  //   真实除权日，正好会掩盖这两类缺陷。代价是依赖真实上游与本地库，
+  //   上游不可用时跳过而不是误报失败。
+  // ============================================================
+  test.describe('复权口径降级', () => {
+    test('前复权负价的标的不应返回负价（回归：兖矿能源早年收 -2.719）', async ({ page }) => {
+      test.setTimeout(90000);
+      const { token } = await enterBacktestWithAuth(page);
+
+      let res;
+      try {
+        res = await page.request.get('/api/market/kline-stock/sh600188?count=2500', {
+          headers: { Authorization: 'Bearer ' + token },
+          timeout: 60000,
+        });
+      } catch (e) {
+        test.skip(true, '上游数据源不可用，跳过复权降级校验');
+        return;
+      }
+      expect(res.ok()).toBeTruthy();
+      const j = await res.json();
+
+      const neg = (j.ohlc || []).filter((o) => !(o[1] > 0)).length;
+      expect(neg, '不应存在负价（前端遇 price<=0 无法买入）').toBe(0);
+      expect(j.adjust, '负价标的应已降级为后复权').toBe('hfq');
+    });
+
+    test('个股接口必须带 adjust 字段（页面提示条依赖）', async ({ page }) => {
+      const { token } = await enterBacktestWithAuth(page);
+      const res = await page.request.get('/api/market/kline-stock/sh600000?count=250', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      expect(res.ok()).toBeTruthy();
+      const j = await res.json();
+      expect(['qfq', 'hfq'], 'adjust 应为 qfq 或 hfq').toContain(j.adjust);
+    });
+
+    test('假跳空标的的单日涨跌幅不应超过板块涨跌停（回归：浦发 +14.21%）', async ({ page }) => {
+      test.setTimeout(90000);
+      const { token } = await enterBacktestWithAuth(page);
+
+      // 主板标的的相邻交易日涨跌幅上限是 10%（前端留 1pp 余量）
+      const LIMIT = 11;
+      let checked = 0;
+      for (const sym of ['sh600000', 'sh601398']) {
+        let res;
+        try {
+          res = await page.request.get(`/api/market/kline-stock/${sym}?count=2500`, {
+            headers: { Authorization: 'Bearer ' + token },
+            timeout: 60000,
+          });
+        } catch (e) { continue; }
+        if (!res.ok()) continue;
+        const j = await res.json();
+        const dates = j.dates || [], ohlc = j.ohlc || [];
+        if (dates.length < 100) continue;
+        // 只在"真正相邻的交易日"上比较（跨长假跳空是真实的）
+        for (let i = 1; i < dates.length; i++) {
+          const gap = (new Date(dates[i]) - new Date(dates[i - 1])) / 86400000;
+          if (gap > 10) continue;
+          const p = ohlc[i - 1][1], c = ohlc[i][1];
+          if (!(p > 0)) continue;
+          const chg = Math.abs(c - p) / p * 100;
+          expect(chg, `${sym} ${dates[i]} 单日 ${chg.toFixed(2)}% 超过主板涨跌停上限`).toBeLessThan(LIMIT);
+        }
+        checked++;
+      }
+      if (checked === 0) test.skip(true, '上游数据源不可用，跳过假跳空校验');
+    });
+
+    test('页面在 adjust=hfq 时应显示后复权提示条', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+
+      // 注入一份 adjust=hfq 的响应，验证前端提示逻辑（不依赖真实上游）
+      await page.route('**/api/market/kline-stock/**', (route) => {
+        const url = route.request().url();
+        const isIndex = /sh000001|sh000510|sz399|sh000688/.test(url);
+        const body = BacktestPage.buildKline(250, isIndex ? 3000 : 24, isIndex ? '上证指数' : '兖矿能源');
+        body.adjust = isIndex ? 'qfq' : 'hfq';
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+      });
+
+      await bt.loadData();
+      const notice = page.locator('#btAdjustNotice');
+      await expect(notice, '后复权时应显示提示条').toBeVisible();
+      await expect(notice).toContainText('后复权');
+
+      // 切回 qfq 应隐藏
+      await page.route('**/api/market/kline-stock/**', (route) => {
+        const url = route.request().url();
+        const isIndex = /sh000001|sh000510|sz399|sh000688/.test(url);
+        const body = BacktestPage.buildKline(250, isIndex ? 3000 : 24, isIndex ? '上证指数' : '浦发银行');
+        body.adjust = 'qfq';
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+      });
+      await bt.loadData();
+      await expect(notice, '后复权提示条应隐藏').toBeHidden();
+    });
+  });
+
   test.describe('标的搜索', () => {
     test('输入中文名称应弹出候选，可点选填入带前缀代码', async ({ page }) => {
       const { bt } = await enterBacktestWithAuth(page);
