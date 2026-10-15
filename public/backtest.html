@@ -172,25 +172,6 @@
   position: relative;
 }
 
-/* ===== 复权口径提示（后复权降级）=====
-   高分红股的前复权早年价为负（如兖矿能源 2015 年 -2.719），后端会改用
-   后复权以保证可交易。后复权价格 ≠ 当年盘面价，必须显式说明。 */
-.bt-adjust-notice {
-  font-size: 11px;
-  line-height: 1.5;
-  color: #92400e;
-  background: #fffbeb;
-  border: 1px solid #fcd34d;
-  border-radius: 6px;
-  padding: 5px 9px;
-  margin: 0 0 8px 0;
-}
-[data-theme="dark"] .bt-adjust-notice {
-  color: #fcd34d;
-  background: rgba(120, 80, 10, 0.24);
-  border-color: rgba(252, 211, 77, 0.4);
-}
-
 /* ===== K 线加载中遮罩 =====
    慢的时候（尤其上游抖动）让用户看到"正在加载第几阶段"，
    而不是只看到按钮变成"⏳ 加载中"却不知道卡在哪。 */
@@ -674,9 +655,6 @@
     </div>
   </div>
 
-  <!-- 复权口径提示（仅当后端检测到前复权异常改用后复权时显示），位于控制栏与图表区之间 -->
-  <div class="bt-adjust-notice" id="btAdjustNotice" style="display:none;" role="status"></div>
-
   <!-- 主体两栏：左侧图表（固定 960px 绘图区），右侧指标卡 -->
   <div class="bt-main-layout">
     <div class="bt-main-left">
@@ -870,7 +848,7 @@
 <script src="js/backtest-trade.js?v=9"></script>
 <script src="js/backtest-crosshair.js?v=7"></script>
 <script src="js/backtest-chart.js?v=97"></script>
-<script src="js/backtest-main.js?v=40"></script>
+<script src="js/backtest-main.js?v=41"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

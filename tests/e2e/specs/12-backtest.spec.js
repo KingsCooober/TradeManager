@@ -1122,7 +1122,7 @@ test.describe('12 - 回测练习页', () => {
   //   2. 假跳空 —— 除权日折算不准，把分红除权做成暴涨（浦发银行
   //      2017-05-25 前复权 +14.21%，主板不可能）。
   // 后端 fetchKLineSafe 会比较两个口径的严重度，择优返回，
-  // 并在响应里带 adjust 字段；页面据此显示提示条。
+  // 并在响应里带 adjust 字段。
   //
   // ⚠ 这些用例刻意**不注入 mock**：mock 数据是合成的，没有负价也没有
   //   真实除权日，正好会掩盖这两类缺陷。代价是依赖真实上游与本地库，
@@ -1194,74 +1194,6 @@ test.describe('12 - 回测练习页', () => {
       if (checked === 0) test.skip(true, '上游数据源不可用，跳过假跳空校验');
     });
 
-    test('页面在 adjust=hfq 时应显示后复权提示条', async ({ page }) => {
-      const { bt } = await enterBacktestWithAuth(page);
-
-      // 注入一份 adjust=hfq 的响应，验证前端提示逻辑（不依赖真实上游）
-      await page.route('**/api/market/kline-stock/**', (route) => {
-        const url = route.request().url();
-        const isIndex = /sh000001|sh000510|sz399|sh000688/.test(url);
-        const body = BacktestPage.buildKline(250, isIndex ? 3000 : 24, isIndex ? '上证指数' : '兖矿能源');
-        body.adjust = isIndex ? 'qfq' : 'hfq';
-        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
-      });
-
-      await bt.loadData();
-      const notice = page.locator('#btAdjustNotice');
-      await expect(notice, '后复权时应显示提示条').toBeVisible();
-      await expect(notice).toContainText('后复权');
-
-      // 切回 qfq 应隐藏
-      await page.route('**/api/market/kline-stock/**', (route) => {
-        const url = route.request().url();
-        const isIndex = /sh000001|sh000510|sz399|sh000688/.test(url);
-        const body = BacktestPage.buildKline(250, isIndex ? 3000 : 24, isIndex ? '上证指数' : '浦发银行');
-        body.adjust = 'qfq';
-        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
-      });
-      await bt.loadData();
-      await expect(notice, '后复权提示条应隐藏').toBeHidden();
-    });
-
-    // 回归：提示条曾放在 .bt-chart-wrap 里，而 wrap 是
-    //   display:flex + align-items:stretch，于是它成了「图表 / 提示 / 侧栏」
-    //   三列布局中的一列，被纵向拉伸到整个图表高度（实测 388x379px），
-    //   文字竖排、右侧数据栏被挤走。
-    // 提示条位于控制栏与图表区之间（.bt-main-layout 之前），单行横条。
-    // 历史 bug：曾放在 .bt-chart-wrap 内，被 flex 拉伸成 388x379 竖排。
-    test('后复权提示条应是单行横条，位于控制栏与图表区之间', async ({ page }) => {
-      const { bt } = await enterBacktestWithAuth(page);
-      await page.route('**/api/market/kline-stock/**', (route) => {
-        const url = route.request().url();
-        const isIndex = /sh000001|sh000510|sz399|sh000688/.test(url);
-        const body = BacktestPage.buildKline(250, isIndex ? 3000 : 24, isIndex ? '上证指数' : '兖矿能源');
-        body.adjust = isIndex ? 'qfq' : 'hfq';
-        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
-      });
-      await bt.loadData();
-
-      const box = await page.locator('#btAdjustNotice').boundingBox();
-      // 主图 wrap（指数图复用同一 class，故用 #btChart 的父级定位）与控制栏
-      const geom = await page.locator('#btChart').evaluate(
-        (el) => {
-          const r = el.parentElement.getBoundingClientRect();
-          const cb = document.querySelector('.bt-controlbar').getBoundingClientRect();
-          const ml = document.querySelector('.bt-main-layout').getBoundingClientRect();
-          return { wrap: { x: r.x, y: r.y, width: r.width, height: r.height }, controlBottom: cb.bottom, mainTop: ml.y };
-        }
-      );
-      expect(box, '提示条应有尺寸').toBeTruthy();
-      await expect(page.locator('#btAdjustNotice')).toBeVisible();
-
-      // 单行：高度应由文字行高决定（约 20~60px），远小于图表高度
-      expect(box.height, '提示条高度应约为一行（实测被拉伸到 379px）').toBeLessThan(80);
-      // 宽度：应横向铺满（而不是被压成窄条后换行成竖排）
-      expect(box.width, '提示条宽度应接近图表宽度').toBeGreaterThan(geom.wrap.width * 0.7);
-      // 位置：应在控制栏之下、图表区（.bt-main-layout）之上
-      expect(box.y, '提示条应在控制栏之下').toBeGreaterThanOrEqual(geom.controlBottom - 2);
-      expect(box.y + box.height, '提示条应位于图表区上边界之上').toBeLessThanOrEqual(geom.mainTop + 1);
-    });
-
     // 复权口径选择权在前端：#btAdjust 下拉（auto/qfq/hfq/raw），
     // 请求应带 adjust 参数；切口径触发重拉；存档持久化。
     test('复权口径下拉应把所选口径带进请求并触发重拉', async ({ page }) => {
@@ -1290,22 +1222,6 @@ test.describe('12 - 回测练习页', () => {
       // 存档应记录所选口径
       const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('bt_state_form') || '{}'));
       expect(saved.adjust, '口径选择应写入存档').toBe('raw');
-    });
-
-    test('显式选择不复权口径时应显示不复权说明提示', async ({ page }) => {
-      const { bt } = await enterBacktestWithAuth(page);
-      await page.route('**/api/market/kline-stock/**', (route) => {
-        const url = route.request().url();
-        const isIndex = /sh000001|sh000510|sz399|sh000688/.test(url);
-        const body = BacktestPage.buildKline(250, isIndex ? 3000 : 24, isIndex ? '上证指数' : '测试标的');
-        body.adjust = isIndex ? 'qfq' : 'raw';
-        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
-      });
-      await page.selectOption('#btAdjust', 'raw');
-      await bt.loadData();
-      const notice = page.locator('#btAdjustNotice');
-      await expect(notice, '显式 raw 应显示口径说明').toBeVisible();
-      await expect(notice).toContainText('不复权');
     });
   });
 

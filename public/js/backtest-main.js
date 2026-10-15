@@ -644,47 +644,6 @@ function BT_hideLoading(which) {
   }
 }
 
-// ★ 后复权提示：后端检测到前复权数据异常时会自动改用后复权（hfq）。
-//   两类异常：
-//     1. 负价 —— 高分红股早年价格被前复权算成负数（兖矿能源 2015-12-24 收 -2.719），
-//        负价会让买入量计算直接返回 0，根本买不进；
-//     2. 假跳空 —— 除权日附近折算不准，把分红除权做成暴涨暴跌（浦发银行
-//        2017-05-25 前复权 +14.21%，主板不可能），回测会出现凭空的暴赚暴亏。
-//   后复权价格 ≠ 当年真实盘面价（如兖矿能源 2015 年真实约 5 元，后复权显示 26 元），
-//   但买卖与涨跌幅都正确，回测可用。必须显式告知，否则用户会以为数据错了。
-// 复权口径提示条：
-//   - auto 请求但后端实际用了 hfq（自动降级）→ 提示价格口径与盘面价不同
-//   - 用户显式选择 qfq/hfq/raw → 按所选口径给出对应说明
-//   - 实际口径与所选一致且无异常（如 qfq 正常）→ 不提示
-function BT_showAdjustNotice(adjust) {
-  var el = document.getElementById('btAdjustNotice');
-  if (!el) return;
-  var reqEl = document.getElementById('btAdjust');
-  var req = reqEl ? reqEl.value : 'auto';
-  var text = '';
-  if (adjust === 'hfq') {
-    if (req === 'auto') {
-      text = '⚠ 该标的前复权历史数据存在异常（负价或除权日假跳空），已自动改用后复权口径，价格数值与当年盘面价不同（涨跌幅与买卖仍准确）';
-    } else if (req === 'hfq') {
-      text = 'ℹ 当前为后复权口径：价格数值大于当年盘面价（含历史分红再投资），涨跌幅与买卖计算准确';
-    } else if (req === 'qfq') {
-      // 用户显式选 qfq 但后端返回 hfq：不会发生（显式口径不降级），防御性分支
-      text = '⚠ 数据实际使用后复权口径';
-    }
-  } else if (adjust === 'qfq' && req === 'qfq') {
-    text = 'ℹ 当前为前复权口径：价格贴近当年真实盘面价；高分红标的早年价格可能为负，属正常复权现象';
-  } else if (adjust === 'raw' && req === 'raw') {
-    text = 'ℹ 当前为不复权口径：价格为当年真实成交价，但除权日会出现大幅跳空，回测涨跌幅失真';
-  }
-  if (!text) {
-    el.style.display = 'none';
-    el.textContent = '';
-    return;
-  }
-  el.style.display = '';
-  el.textContent = text;
-}
-
 // 加载 K 线数据
 async function BT_loadData(silent) {
   var symbolEl = document.getElementById('btSymbol');
@@ -763,10 +722,6 @@ async function BT_loadData(silent) {
       BT_toast('✅ ' + symbol + ' 加载完成：' + (data.count || data.dates.length) + ' 根 K 线' +
         (data.cached ? '（缓存）' : '（实时）'), 'success');
     }
-    // ★ 后复权降级提示：高分红股的前复权会把早年价格算成负数（如兖矿能源
-    //   2015 年收盘 -2.719 → 根本买不进），后端自动改用后复权。价格数值
-    //   与当年真实盘面价不同，必须让用户知道，否则会以为数据错了。
-    BT_showAdjustNotice(data.adjust);
   } catch (e) {
     if (mySeq !== BT_loadSeq) return;   // 过期请求的失败不应打扰用户
     console.error('[backtest] 加载失败:', e);
