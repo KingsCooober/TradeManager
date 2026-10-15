@@ -620,6 +620,18 @@
       </select>
     </div>
     <div class="bt-group">
+      <label>复权:</label>
+      <!-- 复权口径：选择权在前端。auto = 异常时自动择优（默认）；
+           前复权(qfq)贴近当年盘面价但高分红股早年可能为负；
+           后复权(hfq)涨跌幅准确但价格数值放大；不复权(raw)即当年真实成交价 -->
+      <select id="btAdjust" title="复权口径：自动（异常时降级后复权）/ 前复权 / 后复权 / 不复权">
+        <option value="auto" selected>自动</option>
+        <option value="qfq">前复权</option>
+        <option value="hfq">后复权</option>
+        <option value="raw">不复权</option>
+      </select>
+    </div>
+    <div class="bt-group">
       <label>均线:</label>
       <!-- 3 条均线，配色：MA1 黑灰 / MA2 深黄 / MA3 蓝（色块即线色预览） -->
       <span class="ma-dot ma-dot-1" title="MA1 颜色：黑灰"></span>
@@ -860,7 +872,7 @@
 <script src="js/backtest-trade.js?v=9"></script>
 <script src="js/backtest-crosshair.js?v=7"></script>
 <script src="js/backtest-chart.js?v=96"></script>
-<script src="js/backtest-main.js?v=39"></script>
+<script src="js/backtest-main.js?v=40"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

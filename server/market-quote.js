@@ -700,9 +700,26 @@ function klineBadness(klines, symbol) {
  *   后复权对这两种情况都是正确的（同一根兖矿 hfq 为 25.405、茅台 1330.837；
  *   浦发 2017-05-25 hfq 为 +8.30%），代价是价格数值不等于当年真实盘面价。
  *
+/**
+ * 按指定复权口径拉取长历史 K 线。
+ * @param {string} prefer 指定口径：
+ *   - 缺省 / 'auto'：先 qfq，发现负价或假跳空时与 hfq 按严重度择优（原有行为）
+ *   - 'qfq' | 'hfq'：直接拉指定口径，**不做任何自动降级**
+ *     （口径选择权交给前端后，用户明确要前复权就给前复权——
+ *      即使它有负价，那也是用户知情后的选择，后端不应擅自替换）
+ *   - 'raw'：不复权（param 不带 adjust 段）
  * @returns {Promise<{klines: Array, adjust: string, degraded: boolean}>}
  */
-async function fetchKLineSafe(symbol, count, years) {
+async function fetchKLineSafe(symbol, count, years, prefer) {
+  const p = prefer == null ? 'auto' : String(prefer).toLowerCase();
+
+  // 用户指定了明确口径：直接拉，不做降级
+  if (p === 'qfq' || p === 'hfq' || p === 'raw') {
+    const klines = await fetchKLineFromTencentLong(symbol, years, count, p);
+    return { klines: klines, adjust: p, degraded: false };
+  }
+
+  // auto：原有逻辑 —— qfq 优先，异常时与 hfq 择优
   const qfq = await fetchKLineFromTencentLong(symbol, years, count, 'qfq');
   if (qfq.length === 0) throw new Error('腾讯区间接口未返回任何数据');
   const q = klineBadness(qfq, symbol);
@@ -912,7 +929,7 @@ function dayBeforeTencent(dateStr) {
   return yy + mm + dd;
 }
 
-async function fetchKLine(symbol, count = 30, period = 'day') {
+async function fetchKLine(symbol, count = 30, period = 'day', opts) {
   // 数据源优先级（2024 重构）：
   //   1) 腾讯「日期区间」分段并发 —— 实测 10 年 140ms，长历史唯一快路径
   //      （旧写法 param=symbol,day,,,N,qfq 的 N 有硬上限：N>=2500 直接返回 0 根，
@@ -923,14 +940,16 @@ async function fetchKLine(symbol, count = 30, period = 'day') {
   const meta = Object.values(INDEX_MAP).find(function(m) { return m.symbol === symbol; });
   const displayName = meta ? meta.name : null;
 
-  // 1) 腾讯区间分段并发（首选）；负价自动降级后复权
+  // 1) 腾讯区间分段并发（首选）；负价自动降级后复权（除非调用方指定了口径）
   try {
     const years = Math.max(1, count / 250 * 1.15);   // 多取 15% 余量，保证裁到 count 根
-    const safe = await fetchKLineSafe(symbol, count, years);
+    const safe = await fetchKLineSafe(symbol, count, years, opts && opts.adjust);
     const data = safe.klines;
     if (data.length > 0) {
       if (displayName) data[0].__name = displayName;
-      if (safe.degraded) data[0].__adjust = 'hfq';
+      // ★ 把实际使用的口径挂到首条，buildKLineSnapshot 读取后写入响应
+      //   （显式指定口径时可能是 'raw'，缺省 auto 时可能是降级后的 'hfq'）
+      data[0].__adjust = safe.adjust;
       return data;
     }
     throw new Error('区间接口返回空');
@@ -1131,7 +1150,8 @@ async function buildKLineSnapshot(symbol, name, count, opts) {
   const withIndicators = !!(opts && opts.withIndicators);
   // 1. 拉取 K线原始数据（多取 35 根用于计算指标预热期）
   //    腾讯单次最多 641 行，超过则由 fetchKLine 走"日期区间分段并发"
-  const rawKlines = await fetchKLineWithPagination(symbol, count + 35);
+  //    opts.adjust：'qfq'|'hfq'|'raw' 指定复权口径；缺省 auto（异常时自动择优）
+  const rawKlines = await fetchKLineWithPagination(symbol, count + 35, opts);
   if (rawKlines.length === 0) throw new Error('K线数据为空');
 
   // 透传 name（fetchKLine 把 INDEX_MAP 的 name 挂到首条 __name）
@@ -1177,8 +1197,8 @@ async function buildKLineSnapshot(symbol, name, count, opts) {
 
 // K线分页拉取：现在统一由 fetchKLine 内部处理（Baostock 一次拉到 10 年）
 //   保留此函数以兼容旧调用方，内部直接走 fetchKLine
-async function fetchKLineWithPagination(symbol, count) {
-  return await fetchKLine(symbol, count);
+async function fetchKLineWithPagination(symbol, count, opts) {
+  return await fetchKLine(symbol, count, 'day', opts);
 }
 
 // 日期减 N 年（YYYY-MM-DD → YYYY-MM-DD）—— 已不再使用
@@ -1224,7 +1244,13 @@ async function getKLineSnapshot(key, count = 120) {
 //   opts.noCache = true 时跳过内存缓存读写（批量预热用：避免把上千只标的
 //   的完整 K 线驻留在进程内存里，本地库已经是持久层，内存缓存无收益）。
 async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
-  const cacheKey = 'kline-stock:' + symbol + ':' + count;
+  // 复权口径：'auto'（缺省，异常时自动择优）| 'qfq' | 'hfq' | 'raw'（不复权）
+  // 口径必须参与缓存键 —— 同一标的两种口径的数据完全不同，
+  // 共用键会让用户切换口径后拿到上一种口径的缓存。
+  const ADJUST_WHITELIST = ['auto', 'qfq', 'hfq', 'raw'];
+  const reqAdjust = (opts && opts.adjust && ADJUST_WHITELIST.indexOf(String(opts.adjust).toLowerCase()) >= 0)
+    ? String(opts.adjust).toLowerCase() : 'auto';
+  const cacheKey = 'kline-stock:' + symbol + ':' + count + ':' + reqAdjust;
   // 一级：内存（预热模式下由调用方显式跳过，见末尾 noCache 说明）
   const skipMemCache = !!(opts && opts.noCache === true);
   if (!skipMemCache) {
@@ -1243,7 +1269,15 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
     try {
       meta = await klineStore.getMeta(symbol);
       // 二级：本地库（根数够 + 数据新鲜 → 直接返回，不回源）
-      if (meta && meta.bar_count >= count && klineStore.isFresh(meta)) {
+      // ★ 口径守卫：库里存的是 meta.adjust 口径（自动择优的结果，多为 qfq 或 hfq）。
+      //   用户明确指定其他口径（如 raw 不复权）时不能拿库里的直接顶上，
+      //   必须回源拉对应口径 —— 否则切换口径永远不生效。
+      //   'auto' 请求只接受库内口径为 qfq/hfq 的数据（raw 只会由显式请求产生）。
+      const metaAdjust = (meta && meta.adjust) || 'qfq';
+      const adjustMatch = (reqAdjust === 'auto')
+        ? (metaAdjust === 'qfq' || metaAdjust === 'hfq')
+        : (metaAdjust === reqAdjust);
+      if (meta && meta.bar_count >= count && klineStore.isFresh(meta) && adjustMatch) {
         const local = await klineStore.loadKLine(symbol, count);
         if (local && local.dates.length > 0) {
           const out = {
@@ -1278,7 +1312,7 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
     namePromise,
     // ★ withIndicators 缺省 false：去掉 ma5/ma10/ma20/macd/amounts，
     //   传输量从 96.5KB 降到约 25KB（实测 641 根）
-    buildKLineSnapshot(symbol, null, count)
+    buildKLineSnapshot(symbol, null, count, { adjust: reqAdjust })
   ]);
   klineData.name = name || klineData.name || null;
   klineData.key = null;
@@ -1291,7 +1325,17 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
   setDiskCache(cacheKey, klineData);
 
   // 写本地库：区分"首次/除权重拉"与"增量追加"
+  // ★ 口径守卫：本地库存的是 auto 择优口径的数据（meta.adjust）。
+  //   用户显式切换到 raw/qfq 等其他口径时，**绝不能把那份不同口径的数据写进库**，
+  //   否则下次 auto 请求从库里读出来的就是错口径（价格体系完全不同）。
+  //   只有 auto 请求（口径与库一致）或首次入库时才允许落库。
   if (storeEnabled) {
+    const metaAdjust0 = (meta && meta.adjust) || 'qfq';
+    const canPersist = (reqAdjust === 'auto') || (reqAdjust === usedAdjust && metaAdjust0 === usedAdjust);
+    if (!canPersist) {
+      console.log('[kline-store] ' + symbol + ' 请求口径 ' + reqAdjust +
+        ' 与库内口径 ' + metaAdjust0 + ' 不同，本次数据只回前端不落库');
+    } else {
     const metaOpt = { name: klineData.name, adjust: usedAdjust };
     try {
       // ★ 复权口径变了（qfq→hfq）说明旧数据整段不可比，必须整只覆盖
@@ -1317,6 +1361,7 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
     } catch (e) {
       console.warn('[kline-store] 写入本地库失败（不影响本次返回）: ' + e.message);
     }
+    }   // end canPersist else
   }
 
   return klineData;

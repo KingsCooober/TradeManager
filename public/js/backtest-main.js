@@ -58,6 +58,11 @@ function BT_collectState() {
   return {
     symbol:       symEl && symEl.value,
     years:        yrsEl && yrsEl.value,
+    // 复权口径选择权在前端（auto/qfq/hfq/raw），随存档持久化
+    adjust:       (function() {
+      var aEl = document.getElementById('btAdjust');
+      return aEl ? aEl.value : 'auto';
+    })(),
     visibleBars:  vbToSave,
     ma1: ma1 && ma1.value,
     ma2: ma2 && ma2.value,
@@ -127,6 +132,11 @@ function BT_init() {
   if (saved) {
     if (saved.symbol)      document.getElementById('btSymbol').value = saved.symbol;
     if (saved.years)       document.getElementById('btYears').value  = saved.years;
+    // 复权口径：白名单校验，非法值回退 auto
+    if (saved.adjust && ['auto', 'qfq', 'hfq', 'raw'].indexOf(saved.adjust) >= 0) {
+      var adjEl = document.getElementById('btAdjust');
+      if (adjEl) adjEl.value = saved.adjust;
+    }
     if (saved.visibleBars) {
       var _v = parseInt(saved.visibleBars);
       // ★ 缩放已取消：只接受白名单档位（90/120）。
@@ -237,6 +247,13 @@ function BT_init() {
   ['btSymbol', 'btYears', 'btVisibleBars'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', BT_saveState);
+  });
+
+  // 6.2) 复权口径 → 保存并重拉 K 线（口径不同价格体系完全不同，必须重新加载）
+  var adjSel = document.getElementById('btAdjust');
+  if (adjSel) adjSel.addEventListener('change', function() {
+    BT_saveState();
+    if (typeof BT_loadData === 'function') BT_loadData();
   });
 
   // 7) 标的输入框：搜索下拉 + 回车加载
@@ -635,16 +652,37 @@ function BT_hideLoading(which) {
 //        2017-05-25 前复权 +14.21%，主板不可能），回测会出现凭空的暴赚暴亏。
 //   后复权价格 ≠ 当年真实盘面价（如兖矿能源 2015 年真实约 5 元，后复权显示 26 元），
 //   但买卖与涨跌幅都正确，回测可用。必须显式告知，否则用户会以为数据错了。
+// 复权口径提示条：
+//   - auto 请求但后端实际用了 hfq（自动降级）→ 提示价格口径与盘面价不同
+//   - 用户显式选择 qfq/hfq/raw → 按所选口径给出对应说明
+//   - 实际口径与所选一致且无异常（如 qfq 正常）→ 不提示
 function BT_showAdjustNotice(adjust) {
   var el = document.getElementById('btAdjustNotice');
   if (!el) return;
-  if (adjust !== 'hfq') {
+  var reqEl = document.getElementById('btAdjust');
+  var req = reqEl ? reqEl.value : 'auto';
+  var text = '';
+  if (adjust === 'hfq') {
+    if (req === 'auto') {
+      text = '⚠ 该标的前复权历史数据存在异常（负价或除权日假跳空），已自动改用后复权口径，价格数值与当年盘面价不同（涨跌幅与买卖仍准确）';
+    } else if (req === 'hfq') {
+      text = 'ℹ 当前为后复权口径：价格数值大于当年盘面价（含历史分红再投资），涨跌幅与买卖计算准确';
+    } else if (req === 'qfq') {
+      // 用户显式选 qfq 但后端返回 hfq：不会发生（显式口径不降级），防御性分支
+      text = '⚠ 数据实际使用后复权口径';
+    }
+  } else if (adjust === 'qfq' && req === 'qfq') {
+    text = 'ℹ 当前为前复权口径：价格贴近当年真实盘面价；高分红标的早年价格可能为负，属正常复权现象';
+  } else if (adjust === 'raw' && req === 'raw') {
+    text = 'ℹ 当前为不复权口径：价格为当年真实成交价，但除权日会出现大幅跳空，回测涨跌幅失真';
+  }
+  if (!text) {
     el.style.display = 'none';
     el.textContent = '';
     return;
   }
   el.style.display = '';
-  el.textContent = '⚠ 该标的前复权历史数据存在异常（负价或除权日假跳空），已自动改用后复权口径，价格数值与当年盘面价不同（涨跌幅与买卖仍准确）';
+  el.textContent = text;
 }
 
 // 加载 K 线数据
@@ -677,7 +715,10 @@ async function BT_loadData(silent) {
   var mySeq = ++BT_loadSeq;
 
   try {
-    var url = '/api/market/kline-stock/' + symbol + '?count=' + count;
+    // 复权口径跟随下拉选择（auto/qfq/hfq/raw），后端按口径回数据
+    var adjEl = document.getElementById('btAdjust');
+    var reqAdjust = (adjEl && ['auto', 'qfq', 'hfq', 'raw'].indexOf(adjEl.value) >= 0) ? adjEl.value : 'auto';
+    var url = '/api/market/kline-stock/' + symbol + '?count=' + count + '&adjust=' + reqAdjust;
     var res = await authFetch(url);
     if (mySeq !== BT_loadSeq) return;   // 已有更新的请求发出，丢弃本次结果
     if (!res.ok) {
@@ -772,7 +813,11 @@ async function BT_loadIndex(silent) {
       var yearsEl = document.getElementById('btYears');
       count = BT_yearsToCount(yearsEl ? yearsEl.value : '1');
     }
-    var url = '/api/market/kline-stock/' + symbol + '?count=' + count;
+    var url = '/api/market/kline-stock/' + symbol + '?count=' + count +
+      '&adjust=' + ((function() {
+        var a = document.getElementById('btAdjust');
+        return (a && ['auto', 'qfq', 'hfq', 'raw'].indexOf(a.value) >= 0) ? a.value : 'auto';
+      })());
     var res = await authFetch(url);
     if (mySeq !== BT_indexLoadSeq) return;
     if (!res.ok) throw new Error('HTTP ' + res.status);

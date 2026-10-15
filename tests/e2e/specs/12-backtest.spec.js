@@ -1235,6 +1235,52 @@ test.describe('12 - 回测练习页', () => {
       // 位置：应在图表上方，不与图表重叠
       expect(box.y + box.height, '提示条应位于图表上边界之上').toBeLessThanOrEqual(wrap.y + 1);
     });
+
+    // 复权口径选择权在前端：#btAdjust 下拉（auto/qfq/hfq/raw），
+    // 请求应带 adjust 参数；切口径触发重拉；存档持久化。
+    test('复权口径下拉应把所选口径带进请求并触发重拉', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      const requested = [];
+      await page.route('**/api/market/kline-stock/**', (route) => {
+        const url = route.request().url();
+        const isIndex = /sh000001|sh000510|sz399|sh000688/.test(url);
+        const m = url.match(/[?&]adjust=(\w+)/);
+        if (!isIndex && m) requested.push(m[1]);
+        const body = BacktestPage.buildKline(250, isIndex ? 3000 : 24, isIndex ? '上证指数' : '测试标的');
+        body.adjust = isIndex ? 'qfq' : (m ? m[1] : 'auto');
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+      });
+
+      // 默认 auto
+      await bt.loadData();
+      expect(requested.filter((v) => v === 'auto').length, '首次加载应请求 adjust=auto').toBeGreaterThan(0);
+
+      // 切到不复权：应立即触发重拉并带上 adjust=raw
+      requested.length = 0;
+      await page.selectOption('#btAdjust', 'raw');
+      await page.waitForTimeout(1500);
+      expect(requested, '切换口径应触发重拉并携带 adjust=raw').toContain('raw');
+
+      // 存档应记录所选口径
+      const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('bt_state_form') || '{}'));
+      expect(saved.adjust, '口径选择应写入存档').toBe('raw');
+    });
+
+    test('显式选择不复权口径时应显示不复权说明提示', async ({ page }) => {
+      const { bt } = await enterBacktestWithAuth(page);
+      await page.route('**/api/market/kline-stock/**', (route) => {
+        const url = route.request().url();
+        const isIndex = /sh000001|sh000510|sz399|sh000688/.test(url);
+        const body = BacktestPage.buildKline(250, isIndex ? 3000 : 24, isIndex ? '上证指数' : '测试标的');
+        body.adjust = isIndex ? 'qfq' : 'raw';
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+      });
+      await page.selectOption('#btAdjust', 'raw');
+      await bt.loadData();
+      const notice = page.locator('#btAdjustNotice');
+      await expect(notice, '显式 raw 应显示口径说明').toBeVisible();
+      await expect(notice).toContainText('不复权');
+    });
   });
 
   test.describe('标的搜索', () => {
