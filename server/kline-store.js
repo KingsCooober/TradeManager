@@ -119,12 +119,12 @@ async function loadKLine(symbol, count, fromDate) {
   if (fromDate) {
     // 日期窗口模式：返回 fromDate（含）之后的全部行，不按根数截断
     rows = await dbAll(
-      'SELECT date, open, close, low, high, volume FROM stock_kline WHERE symbol = ? AND date >= ? ORDER BY date ASC',
+      'SELECT date, open, close, low, high, volume, amount FROM stock_kline WHERE symbol = ? AND date >= ? ORDER BY date ASC',
       [symbol, fromDate]
     );
   } else {
     rows = await dbAll(
-      'SELECT date, open, close, low, high, volume FROM stock_kline WHERE symbol = ? ORDER BY date DESC LIMIT ?',
+      'SELECT date, open, close, low, high, volume, amount FROM stock_kline WHERE symbol = ? ORDER BY date DESC LIMIT ?',
       [symbol, count]
     );
     // DESC 取回后反转成升序
