@@ -20,11 +20,10 @@ var BT_MA_DEFAULT = [5, 10, 20];
 var BT_maPeriods = BT_MA_DEFAULT.slice();  // MA 周期（从输入框实时读取）
 var BT_showFlags = { ma: true, vol: true };  // MACD/资金面板已按用户要求移除  // 显示开关
 var BT_currentIdx = null;       // 光标所在的 K 线索引（也存 localStorage）
-// 默认 90 根（与 HTML 下拉的 selected 一致）。
-// ★ 缩放已改为**连续自由缩放**（见下方 BT_clampVisibleBars / BT_zoomBy）：
-//   90 只是初始值，滚轮/拖动/下拉可得到 [15, 500] 内任意根数。
+// 默认 90 根（与 HTML 下拉的 selected 一致）。根数只允许 90/120 两档，
+// 由 BT_ALLOWED_VISIBLE_BARS 白名单校验（见下方），不再支持连续缩放。
 var BT_DEFAULT_VISIBLE_BARS = 90;   // 默认可见根数（唯一来源）
-var BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;   // 当前显示的 K 线根数（连续可变）
+var BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;   // 固定显示的 K 线根数
 // 窗口左右边界改用数据索引维护（BT_winStartIdx / BT_winEndIdx，见下方定义），
 // 不再保存成 dataZoom 百分比。原 BT_zoomLocked / BT_userZoomRange 均已移除。
 var _inDataZoomApply = false;   // 死循环保护：我们自己 setOption 时阻断 dataZoom 回调
@@ -194,37 +193,23 @@ function BT_onCursorMove(idx) {
   BT_scheduleCursorRender();
 }
 
-// ===== K 线显示根数：连续自由缩放（对齐同花顺远航版手感）=====
-// ★ 历史：此前是固定档位（只允许 90 / 120，白名单 BT_ALLOWED_VISIBLE_BARS），
-//   缩放按钮与滚轮缩放都被禁用，用户明确反馈"操作不友好"。
-//   现在恢复为**连续缩放**：滚轮以光标为锚点无级缩放，拖动平移。
-//   白名单机制彻底移除，只保留 MIN/MAX 两个边界做钳制。
-var BT_VISIBLE_BARS_MIN = 15;    // 最多放大到 15 根（远航版级别的细节）
-var BT_VISIBLE_BARS_MAX = 500;   // 最多缩小到 500 根（再细蜡烛就看不清了，见 barMaxWidth 注释）
-// 滚轮每格的缩放比例（远航版每格约 1.2 倍，这里取 1.15 手感更细腻）
-var BT_ZOOM_STEP = 1.15;
+// K 线显示根数：改为固定档位（只允许 90 / 120，默认 90），不再支持连续缩放。
+//   ★ 原为 20~350 连续缩放（+/- 按钮 + 比例锁定），按用户要求取消，
+//     因为窗口宽度固定后，"看多少根"只需两档即可，缩放反而增加误操作。
+var BT_ALLOWED_VISIBLE_BARS = [90, 120];
+// 保留 MIN/MAX 常量供兜底钳制（applyVisibleBars / setCursor 仍在用）
+var BT_VISIBLE_BARS_MIN = 90;
+var BT_VISIBLE_BARS_MAX = 120;
+// BT_ZOOM_STEP 已废弃（缩放按钮移除），保留变量避免旧代码引用报错
+var BT_ZOOM_STEP = 1.25;
 
-// 兼容占位：旧代码/旧存档可能引用过这个白名单，保留空数组避免 ReferenceError。
-// 逻辑上已不再使用（缩放连续化），判定请走 BT_clampVisibleBars。
-var BT_ALLOWED_VISIBLE_BARS = [];
-
-/** 把任意根数钳制到 [MIN, MAX] 且为整数 —— 所有窗口宽度变更的唯一收口点 */
-function BT_clampVisibleBars(n) {
-  n = Math.round(Number(n));
-  if (!isFinite(n) || n <= 0) return BT_DEFAULT_VISIBLE_BARS;
-  if (n < BT_VISIBLE_BARS_MIN) return BT_VISIBLE_BARS_MIN;
-  if (n > BT_VISIBLE_BARS_MAX) return BT_VISIBLE_BARS_MAX;
-  return n;
-}
-
-// 从输入框读取 BT_visibleBars。
-// ★ 缩放连续化后下拉框不再是"档位选择器"，而是"当前根数"的显示 + 快捷输入；
-//   下拉里没有的值（滚轮缩出来的 137 等）也要能正确读出，不能再回落到默认值。
+// 从输入框读取 BT_visibleBars（仅允许档位内的值）
 function BT_getVisibleBars() {
   var el = document.getElementById('btVisibleBars');
   var v = el ? parseInt(el.value) : BT_DEFAULT_VISIBLE_BARS;
   if (!v || v <= 0) return BT_DEFAULT_VISIBLE_BARS;
-  return BT_clampVisibleBars(v);
+  // 只接受白名单档位，其余回落到默认，避免旧存档写入任意值
+  return (BT_ALLOWED_VISIBLE_BARS.indexOf(v) >= 0) ? v : BT_DEFAULT_VISIBLE_BARS;
 }
 
 // 计算 zoom 范围（百分比）
@@ -293,33 +278,19 @@ function BT_initChart() {
     if (xAxisInfo && xAxisInfo.value !== undefined) BT_onCursorMove(xAxisInfo.value);
   });
 
-  // 监听用户缩放/平移（滚轮 / 拖动 / 拖把手）→ 把百分比窗口换算回索引窗口
-  //
-  // ★★ 关键：这里**只记录状态，绝不能回头再 setOption 写窗口**。
-  //   历史 bug：以前缩放被取消，这个 handler 把窗口"吸附"回 90/120 档位并调用
-  //   BT_applyWindow() 重新 setOption —— 如果现在照旧调用，就会和用户正在进行的
-  //   滚轮/拖动**互相打架**（ECharts 刚缩放到 137 根，我们立刻写回 90 根），
-  //   表现为"滚轮没反应/一顿一顿"。ECharts 内部已经是权威窗口了，
-  //   我们只需要把索引状态同步过来，供「上一根/下一根」与指数图同步使用。
-  //
+  // 监听用户拖动 dataZoom（slider / inside）→ 把百分比窗口换算回索引窗口
+  // 缩放已取消，宽度只允许 90/120：拖动后根数会漂移，必须吸附回最近档位，
+  // 否则出现"下拉框显示 90，实际显示 137 根"的不一致。
   // ECharts 5.x 的 dataZoom 事件 params 结构在不同场景下不一样：
   //   - 真实拖动 slider：{ start, end, from, dataZoomId, ... }（顶层属性）
   //   - 批量操作（多个 dataZoom 联动）：{ batch: [{ start, end, ... }] }（batch 数组）
+  // 所以两种格式都要兼容
   BT_chart.on('dataZoom', function(params) {
     if (_inDataZoomApply) return;   // 我们自己 setOption 触发的，跳过
     if (!BT_klineData) return;
     var s, e;
     if (params && Array.isArray(params.batch) && params.batch[0]) {
-      // 一次事件可能带多个 dataZoom 的变更，取跨度最大的那个作为权威窗口
-      // （inside 与 slider 由框选/联动同时改时，两者本应一致，取任一即可；
-      //   取"最宽"可避免拿到中间态导致窗口宽度抖动）
       s = params.batch[0].start; e = params.batch[0].end;
-      for (var q = 1; q < params.batch.length; q++) {
-        var bq = params.batch[q];
-        if (bq && typeof bq.start === 'number' && (bq.end - bq.start) > (e - s)) {
-          s = bq.start; e = bq.end;
-        }
-      }
     } else if (params && typeof params.start === 'number') {
       s = params.start; e = params.end;
     } else {
@@ -333,22 +304,25 @@ function BT_initChart() {
     // 可见根数 = endIdx - startIdx + 1（不是 endIdx - startIdx）。
     var startIdx = Math.max(0, Math.round(s / 100 * (total - 1)));
     var endIdx   = Math.min(total - 1, Math.round(e / 100 * (total - 1)));
-    if (endIdx < startIdx) endIdx = startIdx;
     var bars = Math.max(1, endIdx - startIdx + 1);
-
-    // ★ 连续缩放：直接采纳实际根数（钳制到 [MIN, MAX]），不再吸附档位。
-    BT_winStartIdx = startIdx;
-    BT_winEndIdx   = endIdx;
-    var clamped = BT_clampVisibleBars(bars);
-    if (clamped !== BT_visibleBars) {
-      BT_visibleBars = clamped;
-      BT_syncVisibleBarsSelect();   // 只更新下拉框显示（不触发 change）
+    // 吸附到最近的允许档位
+    var snapped = BT_ALLOWED_VISIBLE_BARS[0];
+    var best = Infinity;
+    for (var bi = 0; bi < BT_ALLOWED_VISIBLE_BARS.length; bi++) {
+      var d = Math.abs(BT_ALLOWED_VISIBLE_BARS[bi] - bars);
+      if (d < best) { best = d; snapped = BT_ALLOWED_VISIBLE_BARS[bi]; }
     }
+    var vis = Math.min(snapped, total);
+    // 用吸附后的窗口覆盖状态，再走统一的 setOption 通道
+    BT_winStartIdx = Math.max(0, Math.min(startIdx, total - vis));
+    if (snapped !== BT_visibleBars) {
+      BT_visibleBars = snapped;
+      BT_syncVisibleBarsSelect();   // 同步下拉框显示（不触发 change）
+    }
+    BT_applyWindow();
 
-    // 窗口变化时刷新买卖标记（标记位置随 K 线移动）
+    // 窗口变化时刷新买卖标记
     BT_refreshChartMarkers();
-    // 自绘十字光标覆盖层也要按新窗口重画
-    if (typeof BT_paintCrosshair === 'function') BT_paintCrosshair();
   });
 
   // 主题切换时重绘
@@ -779,35 +753,26 @@ function BT_getBaseOption() {
         splitLine: { show: false } }
     ],
     dataZoom: [
-      // ★★ inside 缩放：对齐同花顺远航版手感（本次重构的核心之一）
-      //   历史：这里曾被设成 `disabled: true` + 三个 move/zoom 全 false，
-      //   等于把滚轮缩放和拖动平移**全部关掉**，只剩下拉档位一个途径 →
-      //   用户反馈"操作不友好"。现在恢复原生交互：
-      //     - 滚轮 → 以鼠标位置为锚点缩放（ECharts 原生行为，锚点跟随光标）
-      //     - 按住左键拖动 → 平移窗口（moveOnMouseMove）
-      //   边界直接用 minValueSpan / maxValueSpan 在数据源头上锁死，
-      //   这样用户无论怎么滚都不会滚出 [MIN, MAX]，比事后再钳制更跟手。
       { type: 'inside', xAxisIndex: [0, 1, 2, 3],
-        disabled: false,
-        zoomLock: false,
-        moveOnMouseMove: true,      // 左键拖动 → 平移
-        moveOnMouseWheel: false,    // 滚轮只缩放，不平移（远航版同此行为）
-        zoomOnMouseWheel: true,     // 滚轮 → 缩放
-        minValueSpan: BT_VISIBLE_BARS_MIN,   // 最少显示 15 根（最多放大）
-        maxValueSpan: BT_VISIBLE_BARS_MAX,   // 最多显示 500 根（最多缩小）
-        throttle: 30,
+        disabled: true,             // 禁用 inside（鼠标/滚轮拖动）
+        zoomLock: true,
+        moveOnMouseMove: false,
+        moveOnMouseWheel: false,
+        zoomOnMouseWheel: false,
         start: 0, end: 100
       },
-      // 底部滑块：两端把手恢复显示 → 也能直接拖宽度（连续，不再吸附档位）
       { show: true, xAxisIndex: [0, 1, 2, 3], type: 'slider', bottom: 6, height: 18,
-        brushSelect: false,          // 保留：Ctrl+框选改宽度意义不大，且易误触
-        zoomLock: false,             // ★ 解除锁定：允许拖两端把手改窗口宽度
-        handle: { show: true },      // ★ 恢复把手（原为隐藏，物理上不可拖）
-        moveHandle: { show: true,    // 中间可移动把手 → 拖动平移窗口
+        // 关键：禁用所有改窗口宽度的路径
+        //   brushSelect: false → 禁用"鼠标框选调整宽度"（Ctrl+拖动框选）
+        //   zoomLock: true    → 锁定窗口大小，handle 不能改宽度
+        //   handle: show: false → 隐藏两端把手，物理上不可拖
+        brushSelect: false,
+        zoomLock: true,
+        handle:     { show: false },     // 隐藏两端把手 → 无法改变窗口宽度
+        moveHandle: { show: true,        // 显示中间可移动把手 → 可拖动平移窗口
                       style: { color: 'rgba(100,100,100,0.25)', borderColor: '#888', borderWidth: 1 } },
-        // 窗口由 BT_winStartIdx/BT_winEndIdx 权威维护，start 会在 BT_applyWindow 中重算
-        minValueSpan: BT_VISIBLE_BARS_MIN,
-        maxValueSpan: BT_VISIBLE_BARS_MAX,
+        // 固定显示窗口：默认只显示最近 60 根 K线（单根 K线 视觉宽度固定）
+        // start 会在 BT_renderKLineChart 中根据数据长度动态计算
         start: 0, end: 100,
         showDetail: false,
         showDataShadow: false,
@@ -1021,16 +986,16 @@ function BT_renderKLine(data) {
     BT_hidePeriodBanner();
   }
 
-  // ★ 显示根数：以内存中的 BT_visibleBars 为权威（连续缩放后可能是任意值），
-  //   仅当它不可用时才从下拉框兜底。反之若在这里无条件读下拉框，
-  //   会把滚轮刚缩出来的 137 根覆盖回下拉框里的旧值。
-  if (!(typeof BT_visibleBars === 'number' && BT_visibleBars > 0)) {
-    var visEl = document.getElementById('btVisibleBars');
-    BT_visibleBars = visEl ? (parseInt(visEl.value) || BT_DEFAULT_VISIBLE_BARS)
-                           : BT_DEFAULT_VISIBLE_BARS;
+  // ★ BT_visibleBars 由 select 选项决定（只允许 90 / 120），不要在这里覆盖
+  //   如果 select 还没初始化（页面刷新早于 BT_initUI），用默认值兜底
+  var visEl = document.getElementById('btVisibleBars');
+  if (visEl) {
+    BT_visibleBars = parseInt(visEl.value) || BT_DEFAULT_VISIBLE_BARS;
   }
-  // 钳制到 [MIN, MAX]（旧存档可能存着 350 之类的越界值）
-  BT_visibleBars = BT_clampVisibleBars(BT_visibleBars);
+  // 吸附到允许档位：旧存档可能存着任意值（如 350），缩放已取消只能落在 90/120
+  if (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) < 0) {
+    BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;
+  }
 
   var dates = data.dates;
   var ohlc  = data.ohlc;
@@ -1793,9 +1758,13 @@ function BT_setCursor(idx, mode) {
   if (!BT_chart || !BT_klineData) return;
   var total = BT_klineData.dates.length;
   if (total === 0) return;
-  // ★ 可见根数钳制到 [MIN, MAX] —— 所有窗口变更路径的必经收口点
-  //   （下拉切换、滚轮缩放、拖动、数据加载后的自动定位）。
-  BT_visibleBars = BT_clampVisibleBars(BT_visibleBars);
+  // ★ 可见根数吸附到允许档位（90 / 120）——所有窗口变更路径的必经收口点
+  //   （下拉切换、拖 slider、数据加载后的自动定位）。
+  //   缩放已取消：任何来源的越界值（如旧存档 350）都会被吸附回 90/120。
+  if (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) < 0) {
+    BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;
+    BT_syncVisibleBarsSelect();
+  }
   if (idx < 0) idx = 0;
   if (idx >= total) idx = total - 1;
 
@@ -1806,103 +1775,47 @@ function BT_setCursor(idx, mode) {
   if (typeof BT_renderCustomTooltip === 'function') BT_renderCustomTooltip(BT_currentIdx);
 }
 
-// 应用"显示"下拉框的根数变更（select change 入口）
-// 统一委托给 BT_zoomToBars：以当前光标为锚点缩放，符合"改根数时视线不跳走"的直觉。
+// 应用"显示根数"变更：调整窗口宽度，尽量保持光标可见
+// 注意：BT_visibleBars 已由调用方设置好（select change / dataZoom 吸附），这里只负责落地
 function BT_applyVisibleBars() {
+  if (!BT_chart || !BT_klineData) return;
+  // select change 到达时 value 已更新 → 从 select 读最新档位
   var selVis = BT_getVisibleBars();
-  BT_zoomToBars(selVis);
-}
-
-// ===== 连续缩放（对齐同花顺远航版）=====
-// 以「窗口中心（或光标）」为锚点，按 BT_ZOOM_STEP 倍率改 BT_visibleBars 后重算窗口。
-//
-// ★ 为什么不用 ECharts 的 dataZoom 百分比做锚点？
-//   滚轮缩放由 ECharts inside 组件原生处理（锚点天然跟着鼠标，手感最好），
-//   这里的函数是给**按钮/快捷键/外部调用**用的程序化缩放入口，
-//   两者最终都汇聚到 BT_winStartIdx/BT_winEndIdx 这套索引状态上，不会打架。
-//
-// @param factor  缩放倍率：<1 放大（根数变少），>1 缩小（根数变多）
-// @param anchorIdx 锚点索引（该根 K 线尽量留在原屏幕位置）；缺省用窗口中心
-function BT_zoomBy(factor, anchorIdx) {
-  if (!BT_chart || !BT_klineData) return;
+  if (selVis !== BT_visibleBars) BT_visibleBars = selVis;
   var total = BT_klineData.dates.length;
   if (total === 0) return;
-
-  var oldVis = Math.min(BT_visibleBars, total);
-  var newVis = BT_clampVisibleBars(oldVis * factor);
-  newVis = Math.min(newVis, total);
-  if (newVis === oldVis) return;   // 已到边界，避免无意义重绘
-
-  // 锚点：默认窗口中心；越界则钳回窗口内
-  var win = BT_getWindowRange();
-  var anchor = (anchorIdx == null) ? Math.round((win.start + win.end) / 2) : anchorIdx;
-  if (anchor < win.start) anchor = win.start;
-  if (anchor > win.end) anchor = win.end;
-  // 锚点在窗口内的相对位置（0 = 最左，1 = 最右），缩放后保持该相对位置不变
-  var ratio = (oldVis > 1) ? (anchor - win.start) / (oldVis - 1) : 0.5;
-
-  BT_visibleBars = newVis;
-  BT_winStartIdx = Math.round(anchor - ratio * (newVis - 1));
+  var vis = Math.min(BT_visibleBars, total);
+  if (BT_currentIdx == null) BT_currentIdx = total - 1;
+  // 优先保证光标仍在窗口内；窗口尽量保持原位（不硬跳回最右）
+  // ★ 闭区间：可见范围是 [start, start + vis - 1]
+  var start = BT_winStartIdx;
+  if (BT_currentIdx < start) {
+    start = BT_currentIdx;
+  } else if (BT_currentIdx > start + vis - 1) {
+    start = BT_currentIdx - vis + 1;
+  }
+  start = Math.max(0, Math.min(start, total - vis));
+  BT_winStartIdx = start;
   BT_applyWindow();
-
-  BT_syncVisibleBarsSelect();
-  BT_refreshChartMarkers();
+  // 窗口宽度变了，光标覆盖层要重画
   if (typeof BT_paintCrosshair === 'function') BT_paintCrosshair();
-  if (typeof BT_saveState === 'function') BT_saveState();
 }
 
-// 放大：可见根数变少（≈ 远航版「+」/ 鼠标上滚）
-function BT_zoomIn() {
-  var anchor = (BT_currentIdx != null) ? BT_currentIdx : null;
-  BT_zoomBy(1 / BT_ZOOM_STEP, anchor);
-}
-// 缩小：可见根数变多（≈ 远航版「-」/ 鼠标下滚）
-function BT_zoomOut() {
-  var anchor = (BT_currentIdx != null) ? BT_currentIdx : null;
-  BT_zoomBy(BT_ZOOM_STEP, anchor);
-}
-// 缩放到指定根数（「显示」下拉选择、重置视图用）
-function BT_zoomToBars(bars) {
-  if (!BT_chart || !BT_klineData) return;
-  var total = BT_klineData.dates.length;
-  if (total === 0) return;
-  var oldVis = Math.min(BT_visibleBars, total);
-  var newVis = Math.min(BT_clampVisibleBars(bars), total);
-  if (newVis === oldVis) return;
-  var win = BT_getWindowRange();
-  var anchor = (BT_currentIdx != null) ? BT_currentIdx : win.end;
-  if (anchor < win.start) anchor = win.start;
-  if (anchor > win.end) anchor = win.end;
-  var ratio = (oldVis > 1) ? (anchor - win.start) / (oldVis - 1) : 0.5;
-  BT_visibleBars = newVis;
-  BT_winStartIdx = Math.round(anchor - ratio * (newVis - 1));
-  BT_applyWindow();
-  BT_syncVisibleBarsSelect();
-  BT_refreshChartMarkers();
-  if (typeof BT_paintCrosshair === 'function') BT_paintCrosshair();
-  if (typeof BT_saveState === 'function') BT_saveState();
-}
-// 兼容占位：缩放锁定在连续缩放模型下无意义（ECharts 用 min/maxValueSpan 约束）
-function BT_toggleZoomLock() { /* 无操作：窗口宽度始终可自由缩放 */ }
+// ===== 缩放已取消（按用户要求）=====
+// 原 BT_zoomIn / BT_zoomOut / BT_syncVisibleBarsSelect / BT_toggleZoomLock 均移除：
+//   - 显示根数只允许 90 / 120 两档，通过下拉框切换即可；
+//   - 缩放按钮与比例锁定按钮已从控制栏删除，窗口宽度恒定。
 
-// 同步「显示」下拉框：连续缩放后根数可能是任意值（如 137），
-// 下拉里没有对应 option 就动态补一个，避免出现「下拉显示 90、图上却是 137 根」。
+// 兼容占位：若有旧代码/旧存档仍调用缩放函数，给个明确提示而不是报错
+function BT_zoomIn()  { BT_toast('已取消缩放，请在「显示」里选择 90 / 120 根', 'warn'); }
+function BT_zoomOut() { BT_toast('已取消缩放，请在「显示」里选择 90 / 120 根', 'warn'); }
+function BT_toggleZoomLock() { /* 缩放取消后锁定恒为 true，无操作 */ }
+// 兼容占位：旧的"同步下拉框"逻辑（缩放时才需要），现在只保证选中值合法
 function BT_syncVisibleBarsSelect() {
   var el = document.getElementById('btVisibleBars');
   if (!el) return;
-  var v = BT_clampVisibleBars(BT_visibleBars);
+  var v = (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) >= 0) ? BT_visibleBars : BT_DEFAULT_VISIBLE_BARS;
   BT_visibleBars = v;
-  var opt = el.querySelector('option[value="' + v + '"]');
-  if (!opt) {
-    // 清掉上一次动态补的临时项（标记 data-dynamic），避免下拉越积越长
-    var old = el.querySelectorAll('option[data-dynamic="1"]');
-    for (var i = 0; i < old.length; i++) el.removeChild(old[i]);
-    opt = document.createElement('option');
-    opt.value = String(v);
-    opt.textContent = v + ' 根';
-    opt.setAttribute('data-dynamic', '1');
-    el.appendChild(opt);
-  }
   el.value = String(v);
 }
 
@@ -2122,8 +2035,7 @@ function BT_pinIndexZoomToLatest() {
   if (!BT_indexChart || !BT_indexData) return;
   var total = BT_indexData.dates.length;
   if (total <= 1) return;
-  // ★ 连续缩放：直接用当前根数（已钳制在 [MIN, MAX]），不再判定档位白名单
-  var vis = BT_clampVisibleBars(BT_visibleBars);
+  var vis = (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) >= 0) ? BT_visibleBars : BT_DEFAULT_VISIBLE_BARS;
   var visPct = Math.min(100, vis / (total - 1) * 100);
   var start = Math.max(0, 100 - visPct);
   _inDataZoomApply = true;

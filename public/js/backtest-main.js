@@ -139,13 +139,12 @@ function BT_init() {
     }
     if (saved.visibleBars) {
       var _v = parseInt(saved.visibleBars);
-      // ★ 连续缩放：接受任意合法根数（旧存档的 60/250/350 等也照常恢复），
-      //   只把它钳制到 [BT_VISIBLE_BARS_MIN, BT_VISIBLE_BARS_MAX]。
-      //   历史：此处曾用 BT_ALLOWED_VISIBLE_BARS 白名单吸附回 90/120，
-      //   缩放恢复连续后必须放开，否则滚轮缩出来的 137 根刷新后就丢了。
-      if (!isNaN(_v) && _v > 0) {
-        BT_visibleBars = BT_clampVisibleBars(_v);
-        BT_syncVisibleBarsSelect();   // 该值可能不在下拉选项里 → 自动补一个
+      // ★ 缩放已取消：只接受白名单档位（90/120）。
+      //   旧存档可能存着任意值（60/250/350 等），这里吸附回默认，避免
+      //   出现"下拉框没有该档位、实际却按该值渲染"的不一致。
+      if (!isNaN(_v) && BT_ALLOWED_VISIBLE_BARS.indexOf(_v) >= 0) {
+        BT_visibleBars = _v;
+        document.getElementById('btVisibleBars').value = String(_v);
       } else {
         BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;
         document.getElementById('btVisibleBars').value = String(BT_DEFAULT_VISIBLE_BARS);
