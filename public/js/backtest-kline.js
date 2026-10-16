@@ -21,6 +21,11 @@
 	// ============ 常量 ============
 	var KC = (typeof klinecharts !== 'undefined') ? klinecharts : null;
 
+	// ★ 浏览器没有 Node 的 global 变量（页面无构建步骤、脚本直接跑在 window 作用域）。
+	//   本文件按 Node 习惯写了大量 global.BT_* —— 在浏览器会抛 ReferenceError 中断整个
+	//   模块（线上 2025-11 回测页全挂的根因）。这里统一绑定：global ≡ window。
+	var global = window;
+
 	var BT_MIN_CHART_H = 240;
 	var BT_MAX_CHART_H = 432;
 	var BT_VISIBLE_BARS_MIN = 15;
