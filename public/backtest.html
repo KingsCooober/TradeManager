@@ -833,8 +833,8 @@
 
 <div id="btToast" class="bt-toast"></div>
 
-<!-- 回测K线引擎：klinecharts 10.0.2（本地 vendor，替代 ECharts CDN） -->
-<script src="js/vendor/klinecharts.min.js"></script>
+<!-- 引入 ECharts（CDN） -->
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 
 <!-- 复用项目内已有模块（按依赖顺序） -->
 <script src="js/utils.js?v=9"></script>
@@ -845,9 +845,10 @@
 <!-- 统一弹窗/toast 组件（showConfirm/alertDialog/showToast），与其他页面一致 -->
 <script src="js/ui.js?v=5"></script>
 
-<!-- 回测专用模块（顺序：交易 → 图表(klinecharts) → 入口；crosshair/draw 已由 klinecharts 内置能力替代，不再加载） -->
+<!-- 回测专用模块（顺序：交易 → 十字光标 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=9"></script>
-<script src="js/backtest-kline.js?v=1"></script>
+<script src="js/backtest-crosshair.js?v=7"></script>
+<script src="js/backtest-chart.js?v=98"></script>
 <script src="js/backtest-main.js?v=42"></script>
 
 <script>
