@@ -1333,10 +1333,13 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
       //     按5年请求存入、first_date=2021）——后者其实是未覆盖，应回源补齐。
       //     简化处理：bar_count 明显小于 2016 至今应有根数（~2620）且 first_date
       //     晚于窗口起点 + 2 年时视为未覆盖回源（命中后走 replace 补齐）。
-      const isLateListing = meta.first_date && meta.first_date > KLINE_STORE_START;
+      // ★ meta 可能为 null（该股票从未落库）—— null.first_date 会抛 TypeError，
+      //   虽被外层 catch 兜住回源上游、功能不断，但白跑一趟还污染日志。
+      //   命中条件本来就要求 meta 非空，这里统一短路。
+      const isLateListing = !!(meta && meta.first_date && meta.first_date > KLINE_STORE_START);
       const shortLegacy = isLateListing && meta.first_date > '2018-01-01' &&
         meta.bar_count < 2620 - 30;
-      const windowCovered = meta.first_date && ((meta.first_date <= KLINE_STORE_START || isLateListing) && !shortLegacy);
+      const windowCovered = !!(meta && meta.first_date && ((meta.first_date <= KLINE_STORE_START || isLateListing) && !shortLegacy));
       let staleCutoff = null;
       if (reqStart) {
         const d = new Date(Date.now() - 4 * 86400000);

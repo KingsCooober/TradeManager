@@ -432,8 +432,11 @@
 	function _makeDataLoader() {
 		return {
 			getBars: function (params) {
-				// 数据全部一次性给入（本地数组），init 一次拉全
-				var list = _toKLineData(BT_klineData);
+				// 数据全部一次性给入（本地数组），init 一次拉全。
+				// ★ setSymbol/setPeriod/setDataLoader 时机可能早于 BT_renderKLine（BT_klineData 仍为 null），
+				//   此时给空数组让图表先空着 —— 等 BT_renderKLine → resetData() 再真正拉数。
+				//   否则这里抛错会中断 BT_initChart，图表永远起不来（线上"K线加载失败"根因）。
+				var list = BT_klineData ? _toKLineData(BT_klineData) : [];
 				params.callback(list, false);
 			}
 		};
@@ -626,9 +629,12 @@
 
 	// ============ crosshair 驱动 ============
 	// 在 chart 上把 crosshair 钉在 dataIndex；若 silent=true 不派发 onCrosshairChange（防回环）。
-	// 注意：klinecharts setCrosshair 内部只读 x 像素 → 必须先换算像素坐标。
+	// 注意1：klinecharts 10.0.2 的 chart 实例不暴露 setCrosshair（只有 getChartStore().setCrosshair）。
+	// 注意2：store.setCrosshair 内部只读入参 x（像素）换算 dataIndex → 必须先 convertToPixel。
 	function _setCrosshairOn(chart, idx, silent) {
 		if (!chart || !KC) return;
+		var store = chart.getChartStore ? chart.getChartStore() : null;
+		if (!store || !store.setCrosshair) return;
 		var data = chart.getDataList();
 		if (!data || !data.length) return;
 		var i = Math.max(0, Math.min(data.length - 1, idx));
@@ -637,10 +643,10 @@
 		var px = chart.convertToPixel({ dataIndex: i, value: bar.close }, { paneId: PANE_CANDLE });
 		var opt = { notExecuteAction: !!silent };
 		if (px && px.x !== undefined) {
-			chart.setCrosshair({ x: px.x, y: px.y }, opt);
+			store.setCrosshair({ x: px.x, y: px.y }, opt);
 		} else {
 			// 换算失败（尺寸未就绪等）退化为仅清空重画
-			chart.setCrosshair({}, opt);
+			store.setCrosshair({}, opt);
 		}
 	}
 
