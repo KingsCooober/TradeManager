@@ -24,8 +24,6 @@ const marketFund = require('./market-fund');
 const marketSentiment = require('./market-sentiment');
 // 市场数据历史快照（每天拉到数据时自动写入 market_history 表，供折线图展示）
 const marketHistory = require('./market-history');
-// 行情总览（迁移自 easy-stock：核心指数 / 行业趋势 / 资金流 / 两融 / 龙虎榜）
-const marketOverview = require('./market-overview');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -41,6 +39,14 @@ try {
   require('./research-proxy').mount(app, { autostart: require.main === module, auth: auth });
 } catch (e) {
   console.warn('  研报库代理未加载（不影响主站）：', e.message);
+}
+
+// 行情总览：/overview/* 反向代理到 easy-stock 后端 + 它的前端构建产物（见 overview-proxy.js）
+// ★ 同样必须挂在 express.json() 之前（原因同上）。
+try {
+  require('./overview-proxy').mount(app, { auth: auth });
+} catch (e) {
+  console.warn('  行情总览代理未加载（不影响主站）：', e.message);
 }
 
 // 请求体解析。默认上限只有 100KB，而 /api/sync 会一次性上传用户的全部
@@ -1093,104 +1099,6 @@ app.get('/api/market/sentiment', auth.authMiddleware, async (req, res) => {
   } catch (e) {
     console.error('[market] getSentimentSnapshot 失败:', e.message);
     res.status(500).json({ error: '情绪面获取失败: ' + e.message });
-  }
-});
-
-// ==================== 行情总览（迁移自 easy-stock） ====================
-// 数据源说明见 market-overview.js 顶部注释。所有接口返回 { data, meta }，
-// meta.stale=true 表示实时抓取失败、返回的是最近一次成功快照（前端应显示降级提示）。
-
-// 指数快照：scope=core（国内核心+恒生+美股核心）| global（全部 17 个）
-app.get('/api/market/overview/indexes', auth.authMiddleware, async (req, res) => {
-  try {
-    const scope = String(req.query.scope || 'global').toLowerCase();
-    if (scope !== 'core' && scope !== 'global') {
-      return res.status(400).json({ error: 'scope 只能是 core 或 global' });
-    }
-    const result = await marketOverview.getMarketIndexes(scope);
-    res.json({ data: result.value, meta: result.meta });
-  } catch (e) {
-    console.error('[market-overview] indexes 失败:', e.message);
-    res.status(502).json({ error: '指数行情获取失败：' + e.message });
-  }
-});
-
-// 指数 K 线：id 见 MARKET_INDEX_CATALOG（sse/szse/chinext/csi300...），period=day|week|month
-app.get('/api/market/overview/index-series', auth.authMiddleware, async (req, res) => {
-  try {
-    const id = String(req.query.id || '').toLowerCase().trim();
-    if (!id) return res.status(400).json({ error: '缺少 id 参数' });
-    const period = String(req.query.period || 'day').toLowerCase();
-    if (['day', 'week', 'month'].indexOf(period) < 0) {
-      return res.status(400).json({ error: 'period 只能是 day / week / month' });
-    }
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 120, 1), 500);
-    const result = await marketOverview.getMarketIndexSeries(id, period, limit);
-    res.json({ data: result.value, meta: result.meta });
-  } catch (e) {
-    console.error('[market-overview] index-series 失败:', e.message);
-    res.status(502).json({ error: '指数K线获取失败：' + e.message });
-  }
-});
-
-// 行业趋势强度排行（东财二级行业板块）
-app.get('/api/market/overview/industries', auth.authMiddleware, async (req, res) => {
-  try {
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
-    const result = await marketOverview.getIndustryMomentum(limit);
-    res.json({ data: result.value, meta: result.meta });
-  } catch (e) {
-    console.error('[market-overview] industries 失败:', e.message);
-    res.status(502).json({ error: '行业强度获取失败：' + e.message });
-  }
-});
-
-// 资金流排行：dimension=industry|theme|stock，sort=net|change|ratio
-app.get('/api/market/overview/flows', auth.authMiddleware, async (req, res) => {
-  try {
-    const dimension = String(req.query.dimension || '').toLowerCase();
-    if (['industry', 'theme', 'stock'].indexOf(dimension) < 0) {
-      return res.status(400).json({ error: 'dimension 只能是 industry / theme / stock' });
-    }
-    const sortKey = String(req.query.sort || 'net').toLowerCase();
-    if (['net', 'change', 'ratio'].indexOf(sortKey) < 0) {
-      return res.status(400).json({ error: 'sort 只能是 net / change / ratio' });
-    }
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-    const result = await marketOverview.getFundFlows(dimension, sortKey, limit);
-    res.json({ data: result.value, meta: result.meta });
-  } catch (e) {
-    console.error('[market-overview] flows 失败:', e.message);
-    // FLOW_UNAVAILABLE：数据源被风控且无同口径替代 → 前端显示「暂不可用」而不是标红报错
-    res.status(503).json({ error: e.message, code: e.code || 'FLOW_ERROR' });
-  }
-});
-
-// 融资融券余额趋势（沪深合计口径，交易日盘后更新）
-app.get('/api/market/overview/margin-balance', auth.authMiddleware, async (req, res) => {
-  try {
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 120, 1), 500);
-    const result = await marketOverview.getMarginBalance(limit);
-    res.json({ data: result.value, meta: result.meta });
-  } catch (e) {
-    console.error('[market-overview] margin-balance 失败:', e.message);
-    res.status(502).json({ error: '两融余额获取失败：' + e.message });
-  }
-});
-
-// 龙虎榜：trade_date 可选（YYYY-MM-DD），不传取最新一批
-app.get('/api/market/overview/billboard', auth.authMiddleware, async (req, res) => {
-  try {
-    const tradeDate = String(req.query.trade_date || '').trim();
-    if (tradeDate && !/^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) {
-      return res.status(400).json({ error: 'trade_date 须为 YYYY-MM-DD' });
-    }
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-    const result = await marketOverview.getBillboard(tradeDate, limit);
-    res.json({ data: result.value, meta: result.meta });
-  } catch (e) {
-    console.error('[market-overview] billboard 失败:', e.message);
-    res.status(502).json({ error: '龙虎榜获取失败：' + e.message });
   }
 });
 
