@@ -1,0 +1,225 @@
+package httpapi
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"time"
+
+	"easy-stock/backend/internal/agent"
+	"easy-stock/backend/internal/appsettings"
+	"easy-stock/backend/internal/foundation"
+	"easy-stock/backend/internal/marketemotion"
+	"easy-stock/backend/internal/methodology"
+	"easy-stock/backend/internal/portfolioinspection"
+	"easy-stock/backend/internal/review"
+	"easy-stock/backend/internal/stockanalysis"
+	"easy-stock/backend/internal/strategy/inflection"
+	"easy-stock/backend/internal/themeindex"
+)
+
+type RealtimeProvider interface {
+	Realtime(ctx context.Context, symbols []string) ([]foundation.Quote, error)
+}
+
+type KLineProvider interface {
+	KLine(ctx context.Context, symbol string, period string, limit int) ([]foundation.KLine, error)
+}
+
+type NewsProvider interface {
+	LatestNews(ctx context.Context, limit int) ([]foundation.NewsItem, error)
+}
+
+type StockNewsSearchProvider interface {
+	SearchStockNews(ctx context.Context, symbol, query string, limit int) ([]foundation.NewsItem, error)
+}
+
+type SectorMapProvider interface {
+	Build(ctx context.Context, themeID string) (foundation.SectorMap, error)
+}
+
+type SnapshotSectorMapProvider interface {
+	BuildSnapshot(ctx context.Context, themeID string, snapshotID string) (foundation.SectorMap, error)
+}
+
+type ThemeOverviewProvider interface {
+	Overviews(ctx context.Context) ([]foundation.ThemeOverview, foundation.SourceMeta, error)
+}
+
+type ThemeRadarFallback interface {
+	SectorMapProvider
+	ThemeOverviewProvider
+}
+
+type LimitUpProvider interface {
+	RecentLimitUps(ctx context.Context, lookbackDays int) ([]foundation.LimitUpEvent, error)
+}
+
+type StockThemeAttributionProvider interface {
+	StockThemes(ctx context.Context, symbol string, lookbackDays int) ([]foundation.StockThemeAttribution, error)
+}
+
+type MarketPoolProvider interface {
+	BrokenLimitUpPool(ctx context.Context, date time.Time) ([]foundation.MarketLimitEvent, error)
+	LimitDownPool(ctx context.Context, date time.Time) ([]foundation.MarketLimitEvent, error)
+}
+
+type StockConceptProvider interface {
+	StockCatalog(ctx context.Context) ([]foundation.StockCatalogEntry, error)
+}
+
+type StockBusinessProfileProvider interface {
+	StockBusinessProfile(ctx context.Context, symbol string) (foundation.StockBusinessProfile, error)
+	StockFundamentals(ctx context.Context, symbol string) (foundation.StockFundamentals, error)
+}
+
+type StockValuationProvider interface {
+	StockValuations(context.Context, []string) ([]foundation.StockValuation, error)
+}
+
+type StockFinancialHistoryProvider interface {
+	StockFinancialHistory(ctx context.Context, symbol string, limit int) ([]foundation.StockFundamentals, error)
+}
+
+type StockFinancialSupplementProvider interface {
+	StockFinancialEvidence(ctx context.Context, symbol string, limit int) ([]foundation.StockFinancialEvidence, error)
+}
+
+type IndustryStocksProvider interface {
+	IndustryStocks(context.Context, string, int) ([]foundation.BoardStock, foundation.SourceMeta, error)
+}
+
+type MarketAnnouncementContentProvider interface {
+	MarketAnnouncementContent(ctx context.Context, id string) (string, error)
+}
+
+type MarketReportContentProvider interface {
+	MarketReportContent(ctx context.Context, kind string, infoCode string) (foundation.MarketResearchDetail, error)
+}
+
+type StockDirectoryProvider interface {
+	StockCatalog(ctx context.Context) ([]foundation.StockCatalogEntry, error)
+}
+
+type ETFActionProvider interface {
+	ETFActions(context.Context, string) (foundation.ETFActions, error)
+}
+type ETFExecutionProvider interface {
+	ETFExecution(context.Context, string) (foundation.ETFExecution, error)
+}
+type ETFEvidenceProvider interface {
+	ETFHoldings(context.Context, string, string) (foundation.ETFHoldings, error)
+	ETFDisclosures(context.Context, string) ([]foundation.ETFAnnouncement, error)
+	ETFAnnouncementBody(context.Context, foundation.ETFAnnouncement) (foundation.ETFAnnouncement, error)
+}
+type ETFProvider interface {
+	ETFDirectory(context.Context) ([]foundation.Instrument, error)
+	ETFProfile(context.Context, string) (foundation.ETFProfile, error)
+	ETFNetValues(context.Context, string) (foundation.ETFNetValues, error)
+}
+
+type RawKLineProvider interface {
+	RawKLine(context.Context, string, string, int) ([]foundation.KLine, error)
+}
+
+type HotStockProvider interface {
+	HotStockRanks(ctx context.Context, limit int) []foundation.HotStockRankList
+}
+
+type FuturesPositionProvider interface {
+	Trend(ctx context.Context, variety string, limit int) (foundation.MarketFuturesPositionSeries, error)
+	Members(ctx context.Context, contract string, tradeDate string) (foundation.MarketFuturesMembers, error)
+	Consensus(ctx context.Context, tradeDate string) (foundation.MarketFuturesConsensus, error)
+}
+
+type MarketOverviewProvider interface {
+	MarketIndexes(ctx context.Context, scope string) ([]foundation.MarketIndexSnapshot, foundation.SourceMeta, error)
+	MarketIndexSeries(ctx context.Context, id string, period string, limit int) (foundation.MarketIndexSeries, error)
+	IndustryMomentum(ctx context.Context, limit int) ([]foundation.MarketIndustryMomentum, foundation.SourceMeta, error)
+	MarketFundFlows(ctx context.Context, dimension string, sortKey string, limit int) ([]foundation.MarketFundFlow, foundation.SourceMeta, error)
+	MarketMarginSeries(ctx context.Context, limit int) ([]foundation.MarketMarginPoint, foundation.SourceMeta, error)
+	MarketBillboard(ctx context.Context, tradeDate string, limit int) ([]foundation.MarketBillboardItem, foundation.SourceMeta, error)
+	MarketBillboardDetail(ctx context.Context, symbol string, tradeDate string, reason string) (foundation.MarketBillboardDetail, foundation.SourceMeta, error)
+	MarketAnnouncements(ctx context.Context, query string, symbol string, category string, limit int) ([]foundation.MarketResearchItem, foundation.SourceMeta, error)
+	MarketReports(ctx context.Context, kind string, query string, symbol string, industry string, limit int) ([]foundation.MarketResearchItem, foundation.SourceMeta, error)
+}
+
+type InflectionEvaluator interface {
+	Evaluate(request inflection.EvaluationRequest) (inflection.Evaluation, error)
+}
+
+type ReviewImporter interface {
+	ImportURL(ctx context.Context, rawURL string) (review.Post, error)
+}
+
+type ETFDirectionMarketProvider interface {
+	ETFIndexSeries(context.Context, string, int) (foundation.ETFMarketSeries, error)
+	ETFSectorSeries(context.Context, string, int) (foundation.ETFMarketSeries, error)
+}
+
+type Config struct {
+	ETFDirectionMarket       ETFDirectionMarketProvider
+	ETFUnderlyingFinancials  StockFinancialSupplementProvider
+	ETFUnderlyingValuation   StockValuationProvider
+	ETFExecution             ETFExecutionProvider
+	ETF                      ETFProvider
+	ETFKLinePrimary          RawKLineProvider
+	ETFKLineFallback         RawKLineProvider
+	Token                    string
+	Realtime                 RealtimeProvider
+	KLinePrimary             KLineProvider
+	KLineFallback            KLineProvider
+	News                     NewsProvider
+	StockNews                StockNewsSearchProvider
+	SectorMap                SectorMapProvider
+	ThemeOverview            ThemeOverviewProvider
+	ThemeIndex               *themeindex.Service
+	ThemeRadarFallback       ThemeRadarFallback
+	LimitUp                  LimitUpProvider
+	MarketPools              MarketPoolProvider
+	StockConcept             StockConceptProvider
+	StockValuation           StockValuationProvider
+	StockBusiness            StockBusinessProfileProvider
+	StockFinancialSupplement StockFinancialSupplementProvider
+	StockDirectory           StockDirectoryProvider
+	IndustryStocks           IndustryStocksProvider
+	HotStocks                HotStockProvider
+	FuturesPosition          FuturesPositionProvider
+	MarketOverview           MarketOverviewProvider
+	Inflection               InflectionEvaluator
+	ReviewDBPath             string
+	PortfolioDBPath          string
+	StockResearchDBPath      string
+	StockResearchStore       *stockanalysis.ResearchStore
+	MarketEmotionDBPath      string
+	ThemeRadarDBPath         string
+	DuanxianxiaBaseURL       string
+	WeChatAPIURL             string
+	ReviewHTTP               *http.Client
+	ReviewStore              *review.Store
+	PortfolioStore           *portfolioinspection.Store
+	MarketEmotionStore       *marketemotion.Store
+	ReviewImporter           ReviewImporter
+	SettingsPath             string
+	SettingsStore            *appsettings.Store
+	ReviewAutomation         *review.Automation
+	ReviewCalendar           review.TradingCalendar
+	RemoteDailyReviewURL     string
+	RemoteDailySync          *review.RemoteDailySync
+	AgentGateway             agent.Gateway
+	MasteryLibrary           *methodology.Library
+	Logger                   *log.Logger
+	StrictPersistence        bool
+}
+
+func normalizeConfig(value any) Config {
+	switch cfg := value.(type) {
+	case Config:
+		return cfg
+	case *Config:
+		if cfg != nil {
+			return *cfg
+		}
+	}
+	return Config{}
+}
