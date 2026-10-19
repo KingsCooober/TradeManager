@@ -251,6 +251,23 @@ body {
 .header-tab[data-page="research"] { background: #7c3aed; }
 .header-tab[data-page="aihot"] { background: #0f766e; }
 
+/* 外部站点头（行情总览挂载的 easy-stock）：与站内 Tab 同尺寸同字形，
+   但用虚线描边区分「点了会开新标签页」，避免用户误以为是本站内页 */
+.header-tab.header-tab-external {
+  background: #0891b2;
+  box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.55);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.header-tab.header-tab-external::after {
+  content: "↗";
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
 .header-right {
   display: flex;
   align-items: center;

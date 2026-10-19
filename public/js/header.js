@@ -45,7 +45,6 @@ function renderAppHeader(page) {
       '<nav class="header-tabs">' +
         '<a href="index.html" class="header-tab' + (page === 'index' ? ' active' : '') + '" data-page="index" title="实时记录开仓 / 平仓 / 仓位管理；计算器辅助决策">📊 交易管理</a>' +
         '<a href="daily-review.html" class="header-tab' + (page === 'daily' ? ' active' : '') + '" data-page="daily" title="每日盘后总结：纪律 / 大盘 / 心态 / 复盘笔记">📋 每日复盘</a>' +
-        '<a href="/overview/" class="header-tab' + (page === 'market' ? ' active' : '') + '" data-page="market" title="行情总览：核心指数、行业趋势强度、资金流向、两融余额、龙虎榜、公告研报（easy-stock 挂载）">🌐 行情总览</a>' +
         '<a href="diary2.html" class="header-tab' + (page === 'diary' ? ' active' : '') + '" data-page="diary" title="历史交易深度复盘：筛选 / 排序 / 单笔分析">📖 复盘总结</a>' +
         '<a href="backtest.html" class="header-tab' + (page === 'backtest' ? ' active' : '') + '" data-page="backtest" title="看着历史 K 线手动模拟买卖的练习工具">🎯 回测练习</a>' +
         '<a href="research.html" class="header-tab' + (page === 'research' ? ' active' : '') + '" data-page="research" title="研报库：订阅式抓取公开研报、AI 摘要要点、划词高亮与批注、按行业标签归档">📑 研报库</a>' +
@@ -53,6 +52,12 @@ function renderAppHeader(page) {
       '</nav>' +
     '</div>' +
     '<div class="header-right">' +
+      // 行情总览是挂载进来的 easy-stock 整站（/overview/），不属于本站内页：
+      // 放最右侧、用外部样式区分，并在新标签页打开，避免用户丢失交易台的当前操作状态
+      '<a href="/overview/" target="_blank" rel="noopener"' +
+        ' class="header-tab header-tab-external' + (page === 'market' ? ' active' : '') + '"' +
+        ' data-page="market"' +
+        ' title="行情总览（easy-stock 整站）：核心指数、行业趋势强度、资金流向、两融余额、龙虎榜、公告研报 —— 点击在新标签页打开">🌐 行情总览</a>' +
       // 同步指示灯/状态条只在加载了 sync.js 的页面有意义：
       // research 页未加载 sync.js（且 aihot 自己隐藏指示灯），渲染成永久 idle 的死点只会误导
       (page === 'research' ? '' :
