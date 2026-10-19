@@ -962,6 +962,17 @@ async function fetchKLine(symbol, count = 30, period = 'day', opts) {
   const meta = Object.values(INDEX_MAP).find(function(m) { return m.symbol === symbol; });
   const displayName = meta ? meta.name : null;
 
+  // ★ 非日线周期（week/month）走独立快路径：
+  //   下面的区间分段逻辑（fetchKLineFromTencentLong）把 'day' 写死，
+  //   传什么 period 都会拿到日线并被当成周线/月线返回（行情总览的周/月切换踩过这个坑）。
+  //   腾讯单次接口对 week/month 有 641 根上限，足够（641 周 ≈ 12 年）。
+  if (period && period !== 'day') {
+    const wk = await fetchKLineFromTencentPeriod(symbol, Math.min(count, 640), period);
+    if (!wk.length) throw new Error('腾讯 ' + period + ' K线返回空: ' + symbol);
+    if (displayName) wk[0].__name = displayName;
+    return wk;
+  }
+
   // 1) 腾讯区间分段并发（首选）；负价自动降级后复权（除非调用方指定了口径）
   //    opts.startDate：按起始日期拉（如 '2016-01-01'），此时 count 只是裁剪上限
   try {
