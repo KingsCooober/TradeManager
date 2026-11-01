@@ -18,6 +18,7 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 const PREFIX = '/overview';
 const UPSTREAM_HOST = process.env.OVERVIEW_HOST || '127.0.0.1';
@@ -56,6 +57,93 @@ function probe(callback) {
   req.on('error', () => callback(false));
   req.end();
 }
+
+/* ============================ 子进程管理 ============================
+ * 与 research-proxy.js 同一套约定：随交易台启动、挂了自动重启、交易台退出时一并结束。
+ * 二进制是 Go 交叉编译产出（overview/README.md），路径固定在 scripts/easy-stock-server。
+ * Windows 本地编译产物带 .exe 后缀，这里按平台补后缀，两种产物都能被认出来
+ * （否则 Windows 上会一直报「二进制不存在」并且永远拉不起后端）。
+ */
+const BIN_BASE = path.join(__dirname, '..', 'scripts', 'easy-stock-server');
+const BIN_PATH = process.platform === 'win32' && fs.existsSync(BIN_BASE + '.exe') ? BIN_BASE + '.exe' : BIN_BASE;
+const LOG_PATH = path.join(__dirname, 'overview.log');
+let child = null;
+let restarts = 0;
+let shuttingDown = false;
+let lastStartAt = 0;
+let childStartedAt = 0;
+let lastStartError = '';
+const MAX_RESTARTS = 5;
+const RESTART_DELAY = 5000;
+const START_COOLDOWN = 8000;    // 手动触发时的冷却，防连点
+
+function serviceRunning() {
+  return !!child && child.exitCode === null && !child.killed;
+}
+
+function stopService() {
+  shuttingDown = true;
+  if (serviceRunning()) {
+    try { child.kill('SIGTERM'); } catch (e) { /* 忽略 */ }
+  }
+}
+
+/** 启动 easy-stock 后端。非 detached —— 交易台退出时它随之一并结束，不留孤儿进程 */
+function startService(reason) {
+  if (shuttingDown || serviceRunning()) return { started: false, message: '已在运行' };
+  if (!fs.existsSync(BIN_PATH)) {
+    lastStartError = '二进制不存在: ' + BIN_PATH;
+    console.warn('[行情总览] ' + lastStartError);
+    return { started: false, message: '后端二进制不存在（见 overview/README.md 的编译说明）' };
+  }
+  lastStartAt = Date.now();
+  lastStartError = '';
+  try {
+    const out = fs.openSync(LOG_PATH, 'a');
+    child = spawn(BIN_PATH, [], {
+      cwd: path.join(__dirname, '..'),
+      stdio: ['ignore', out, out],
+      env: Object.assign({}, process.env, {
+        A_STOCK_ADDR: UPSTREAM_HOST + ':' + UPSTREAM_PORT,
+        // Hermes AI 运行时（Python 3.11 + hermes-agent editable 安装）。
+        // 不设这个变量时 Go 后端会去找「二进制同级 ../hermes-runtime」，这里显式指过去更稳。
+        // 目录约定：<runtimeRoot>/venv/bin/python（见 agent/runtime.go:runtimePythonForOS）。
+        A_STOCK_HERMES_RUNTIME_ROOT: process.env.A_STOCK_HERMES_RUNTIME_ROOT
+          || path.join(__dirname, '..', 'hermes-runtime')
+      })
+    });
+    child.on('error', (err) => {
+      lastStartError = err.message;
+      console.warn(`[行情总览] 启动失败（${reason}）：${err.message}`);
+    });
+    childStartedAt = Date.now();
+    child.on('exit', (code, signal) => {
+      child = null;
+      if (shuttingDown) return;
+      console.warn(`[行情总览] 进程退出 (code=${code}, signal=${signal || '-'})`);
+      // 跑够一段时间才退出，说明不是启动失败的死循环 → 清零重启计数
+      if (Date.now() - childStartedAt > 60000) restarts = 0;
+      if (restarts < MAX_RESTARTS) {
+        restarts += 1;
+        console.warn(`[行情总览] ${RESTART_DELAY / 1000} 秒后自动重启（第 ${restarts}/${MAX_RESTARTS} 次）`);
+        setTimeout(() => startService('自动重启'), RESTART_DELAY);
+      } else {
+        console.warn('[行情总览] 重启次数过多，已停止自动重启；可访问 /overview/ 手动重试');
+      }
+    });
+    console.log(`[行情总览] 已启动（${reason}）：${BIN_PATH} -> ${UPSTREAM_HOST}:${UPSTREAM_PORT}`);
+    return { started: true, message: '已启动' };
+  } catch (e) {
+    lastStartError = e.message;
+    return { started: false, message: e.message };
+  }
+}
+
+// 交易台退出时一并结束，不留孤儿进程
+process.on('exit', stopService);
+['SIGINT', 'SIGTERM'].forEach((sig) => {
+  process.on(sig, () => { stopService(); setTimeout(() => process.exit(0), 300); });
+});
 
 /**
  * 计算转发给上游的路径。
@@ -256,12 +344,50 @@ function proxyUpgrade(req, socket, head) {
     socket.on('close', () => upSocket.destroy());
   });
   upstream.on('response', (r) => {
-    // 上游不支持升级（例如返回 404），直接把状态回给客户端后断开
+    // 上游不支持升级（例如返回 404）：回一个明确的 HTTP 错误再断开，
+    // 不要裸 destroy —— 否则浏览器只看到「连接异常关闭」，排查时毫无线索。
     r.resume();
+    try {
+      socket.write('HTTP/1.1 ' + (r.statusCode || 502) + ' ' + (r.statusMessage || 'Bad Gateway') + '\r\n'
+        + 'Content-Length: 0\r\nConnection: close\r\n\r\n');
+    } catch (e) { /* 客户端已断开 */ }
     socket.destroy();
   });
-  upstream.on('error', () => socket.destroy());
+  upstream.on('error', (err) => {
+    console.warn(`[行情总览] WebSocket 上游连接失败：${(err && err.message) || err}`);
+    try {
+      socket.write('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+    } catch (e) { /* 客户端已断开 */ }
+    socket.destroy();
+  });
+  upstream.setTimeout(UPSTREAM_TIMEOUT, () => upstream.destroy(new Error('WebSocket 上游握手超时')));
   upstream.end();
+}
+
+/**
+ * 把 HTTP server 的 `upgrade` 事件接到 easy-stock 上游。
+ *
+ * ⚠️ 这段必须真挂上去，否则 AI 对话（/api/v1/ai/ws）和实时行情（/api/v1/ws/stream）
+ *    根本连不通：浏览器 WebSocket 握手无人处理 → socket 被静默丢弃 →
+ *    前端要等满 20s 的 HANDSHAKE_TIMEOUT_MS 才报「连接 Agent 运行时超时」。
+ *    症状很像「Hermes 挂了」，实际是代理层漏挂事件。
+ *
+ * @param {import('http').Server} server app.listen() 的返回值
+ */
+function attachUpgrade(server) {
+  if (!server || typeof server.on !== 'function' || server.__overviewUpgrade) return false;
+  server.__overviewUpgrade = true;
+  server.on('upgrade', (req, socket, head) => {
+    const url = String(req.url || '');
+    if (url !== PREFIX && url.indexOf(PREFIX + '/') !== 0) return;
+    try {
+      proxyUpgrade(req, socket, head);
+    } catch (err) {
+      console.warn(`[行情总览] WebSocket 升级失败：${(err && err.message) || err}`);
+      socket.destroy();
+    }
+  });
+  return true;
 }
 
 /**
@@ -278,15 +404,52 @@ function mount(app, options) {
     console.warn('             先在 easy-stock/frontend 跑 npm run build，或设置 OVERVIEW_DIST 指向 dist 目录');
   }
 
+  // —— 随交易台一起启动（默认开；被测试 require、或显式关闭时不启动）
+  //    与 research-proxy 同一套约定：已经在跑则复用，不在跑就拉起
+  const autostart = opts.autostart !== false && process.env.OVERVIEW_AUTOSTART !== '0';
+  if (autostart) {
+    probe((healthy) => {
+      if (healthy) {
+        console.log(`  行情总览后端已在运行（${UPSTREAM_HOST}:${UPSTREAM_PORT}），直接复用`);
+      } else {
+        startService('随交易台启动');
+      }
+    });
+  } else {
+    console.log('  行情总览自动启动已关闭（OVERVIEW_AUTOSTART=0）');
+  }
+
   // —— 健康检查（只对本机开放，供页面引导与排障）
   app.get('/api/overview/status', (req, res) => {
     if (!isLocalRequest(req)) return res.status(403).json({ error: '仅本机可访问' });
     probe((healthy) => res.json({
       healthy: healthy,
+      managed: serviceRunning(),
       upstream: `${UPSTREAM_HOST}:${UPSTREAM_PORT}`,
+      port: UPSTREAM_PORT,
       dist: DIST_DIR,
-      distReady: hasDist
+      distReady: hasDist,
+      lastError: lastStartError || ''
     }));
+  });
+
+  // —— 手动启动/重试（只对本机开放；对称 research-proxy 的 /api/research/start）
+  app.post('/api/overview/start', (req, res) => {
+    if (!isLocalRequest(req)) return res.status(403).json({ error: '仅本机可访问，请手动启动行情总览后端' });
+    if (process.env.OVERVIEW_AUTOSTART === '0') {
+      return res.json({ healthy: false, error: '已通过 OVERVIEW_AUTOSTART=0 关闭自动启动' });
+    }
+    probe((healthy) => {
+      if (healthy) return res.json({ healthy: true, message: '行情总览后端已在运行' });
+      if (serviceRunning()) {
+        return res.json({ healthy: false, spawned: false, message: '正在启动行情总览后端…' });
+      }
+      if (Date.now() - lastStartAt < START_COOLDOWN) {
+        return res.json({ healthy: false, spawned: false, message: '刚刚已经尝试启动，请稍候…' });
+      }
+      const r = startService('手动重试');
+      res.json({ healthy: false, spawned: r.started, message: r.message });
+    });
   });
 
   // —— 鉴权闸门：easy-stock 本身没有账号体系，必须在代理层挡住匿名访客。
@@ -347,6 +510,7 @@ function mount(app, options) {
 
 module.exports = {
   mount,
+  attachUpgrade,
   PREFIX,
   UPSTREAM_HOST,
   UPSTREAM_PORT,

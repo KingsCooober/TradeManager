@@ -4,6 +4,7 @@ import {
 	ArrowDown,
 	ArrowDownUp,
 	ArrowUp,
+	Bot,
 	Building2,
 	CalendarDays,
 	ChevronDown,
@@ -15,7 +16,10 @@ import {
 	TrendingUp,
 	WalletCards,
 } from 'lucide-react';
-import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useState } from 'react';
+import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { MessageContent } from '../MarkdownContent';
+import { KLinePanel } from './KLinePanel';
+import { useStockPeek } from './StockKLineModal';
 import type {
 	MarketBillboardItem,
 	MarketBillboardDetail,
@@ -68,6 +72,26 @@ export function SourceNotice({ meta }: { meta: SourceMeta | null }) {
 	</div>;
 }
 
+// ★ 核心指数覆盖全球主要市场（A/H + 亚太 + 美洲 + 欧洲），选择器按地区分组排列，
+//   避免 20+ 个指数挤成一条长横滚。未知地区不丢：按出现顺序补在末尾，
+//   上游（backend/internal/providers/eastmoney/market_overview.go 的目录表）新增市场时前端不用改。
+const INDEX_REGION_ORDER = ['中国', '中国香港', '亚太', '美洲', '欧洲'];
+
+function groupIndexesByRegion(indexes: MarketIndexSnapshot[]): [string, MarketIndexSnapshot[]][] {
+	const groups = new Map<string, MarketIndexSnapshot[]>();
+	for (const item of indexes) {
+		const key = item.region || '其他';
+		const bucket = groups.get(key);
+		if (bucket) bucket.push(item);
+		else groups.set(key, [item]);
+	}
+	return [...groups.entries()].sort((a, b) => {
+		const ia = INDEX_REGION_ORDER.indexOf(a[0]);
+		const ib = INDEX_REGION_ORDER.indexOf(b[0]);
+		return (ia === -1 ? INDEX_REGION_ORDER.length : ia) - (ib === -1 ? INDEX_REGION_ORDER.length : ib);
+	});
+}
+
 export function CoreIndexView({ indexes, selectedID, onSelect, series, seriesLoading, meta }: {
 	indexes: MarketIndexSnapshot[];
 	selectedID: string;
@@ -77,21 +101,26 @@ export function CoreIndexView({ indexes, selectedID, onSelect, series, seriesLoa
 	meta: SourceMeta | null;
 }) {
 	const selected = indexes.find((item) => item.id === selectedID) || indexes[0];
+	// 区间固定看近一年；要看更长/更短直接滚轮缩放、拖动平移（klinecharts 内置）
 	const lines = series?.lines || [];
 	const first = lines[0]?.close || 0;
 	const latest = lines.at(-1)?.close || selected?.price || 0;
 	const returnPercent = first ? (latest / first - 1) * 100 : 0;
 	const high = lines.length ? Math.max(...lines.map((line) => line.high)) : 0;
 	const low = lines.length ? Math.min(...lines.map((line) => line.low)) : 0;
+	const groups = groupIndexesByRegion(indexes);
 	return <div className="market-data-view">
 		<SourceNotice meta={meta} />
-		<div className="market-index-selector">{indexes.map((item) => <button type="button" className={item.id === selected?.id ? 'active' : ''} key={item.id} onClick={() => onSelect(item.id)}>
-			<span>{item.name}</span><strong>{formatPrice(item.price)}</strong><em className={toneClass(item.change_percent)}>{formatPercent(item.change_percent)}</em>
-		</button>)}</div>
+		<div className="market-index-selector">{groups.map(([region, items]) => <section className="market-index-group" key={region}>
+			<header><span>{region}</span><em>{items.length} 个</em></header>
+			<div className="market-index-group-items">{items.map((item) => <button type="button" className={item.id === selected?.id ? 'active' : ''} key={item.id} onClick={() => onSelect(item.id)}>
+				<span>{item.name}</span><strong>{formatPrice(item.price)}</strong><em className={toneClass(item.change_percent)}>{formatPercent(item.change_percent)}</em>
+			</button>)}</div>
+		</section>)}</div>
 		{selected ? <section className="market-index-detail">
-			<header><div><span>{selected.region} · {selected.market}</span><h3>{selected.name}</h3><small>最近 {lines.length || '--'} 个交易周期 · {statusLabel(selected.status)}</small></div><div><strong>{formatPrice(selected.price)}</strong><em className={toneClass(selected.change_percent)}>{formatPercent(selected.change_percent)}</em></div></header>
+			<header><div><span>{selected.region} · {selected.market}</span><h3>{selected.name}</h3><small>{lines.length >= 200 ? '近一年' : '最近'} {lines.length || '--'} 个交易日 · {statusLabel(selected.status)}</small></div><div><strong>{formatPrice(selected.price)}</strong><em className={toneClass(selected.change_percent)}>{formatPercent(selected.change_percent)}</em></div></header>
 			<div className="market-index-chart-wrap">
-				{seriesLoading ? <div className="market-chart-loading">走势图加载中…</div> : <IndexLineChart lines={lines} />}
+				{seriesLoading ? <div className="market-chart-loading">走势图加载中…</div> : <KLinePanel lines={lines} height={330} />}
 				<aside>
 					<MiniStat label="区间收益" value={formatPercent(returnPercent)} tone={toneClass(returnPercent)} />
 					<MiniStat label="区间高点" value={formatPrice(high)} />
@@ -312,6 +341,7 @@ function paddedExtent(values: number[]) {
 }
 
 function SectorFundFlowTable({ items, meta }: { items: MarketFundFlow[]; meta: SourceMeta | null }) {
+	const openStock = useStockPeek();
 	const netAvailable = hasField(meta, 'net_inflow');
 	const fallbackMainAvailable = hasField(meta, 'main_net_inflow');
 	const [sortState, setSortState] = useState<SortState>({ key: 'net_value', direction: 'desc' });
@@ -337,7 +367,10 @@ function SectorFundFlowTable({ items, meta }: { items: MarketFundFlow[]; meta: S
 			<span className={availableTone(-item.outflow, hasField(meta, 'outflow'))}>{formatAvailable(item.outflow, hasField(meta, 'outflow'), moneyCell)}</span>
 			<strong className={availableTone(netValue, netValueAvailable)}>{formatAvailable(netValue, netValueAvailable, moneyCell)}</strong>
 			<em className={availableTone(item.net_inflow_ratio, hasField(meta, 'net_inflow_ratio'))}>{formatAvailable(item.net_inflow_ratio, hasField(meta, 'net_inflow_ratio'), formatPercent)}</em>
-			<span className="market-flow-leader">{hasField(meta, 'leader_name') ? <><strong>{item.leader_name || '--'}</strong><small>{item.leader_symbol || ''}{item.leader_name ? ` · ${formatPercent(item.leader_change_percent)}` : ''}</small></> : <small>--</small>}</span>
+			<span className="market-flow-leader">{hasField(meta, 'leader_name') ? (item.leader_name && item.leader_symbol
+				// 行业榜里的领涨标的也是个股，点开能直接看它走势
+				? <button type="button" className="stock-peek-name inline" title={`查看 ${item.leader_name} 近一年走势`} onClick={() => openStock(item.leader_symbol || '', item.leader_name)}><strong>{item.leader_name}</strong><small>{item.leader_symbol} · {formatPercent(item.leader_change_percent)}</small></button>
+				: <><strong>{item.leader_name || '--'}</strong><small>{item.leader_symbol || ''}{item.leader_name ? ` · ${formatPercent(item.leader_change_percent)}` : ''}</small></>) : <small>--</small>}</span>
 		</article>;
 	})}</div>;
 }
@@ -370,7 +403,15 @@ function StockFundFlowTable({ items, meta }: { items: MarketFundFlow[]; meta: So
 }
 
 function FlowIdentity({ item, index }: { item: MarketFundFlow; index: number }) {
-	return <span><i>{String(index + 1).padStart(2, '0')}</i><span><strong>{item.name}</strong><small>{item.symbol || item.code}</small></span></span>;
+	const openStock = useStockPeek();
+	const symbol = (item.symbol || '').trim();
+	// 只有个股榜单能点开走势：行业/题材的 code 不是股票代码，点开必然查不到数据
+	const clickable = item.dimension === 'stock' && Boolean(symbol);
+	return <span><i>{String(index + 1).padStart(2, '0')}</i><span>
+		{clickable
+			? <button type="button" className="stock-peek-name" title={`查看 ${item.name} 近一年走势`} onClick={() => openStock(symbol, item.name)}><strong>{item.name}</strong><small>{symbol}</small></button>
+			: <><strong>{item.name}</strong><small>{item.symbol || item.code}</small></>}
+	</span></span>;
 }
 
 export function BillboardView({ items, tradeDate, onTradeDate, meta, details, onLoadDetail }: {
@@ -383,6 +424,7 @@ export function BillboardView({ items, tradeDate, onTradeDate, meta, details, on
 }) {
 	const [query, setQuery] = useState('');
 	const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set());
+	const openStock = useStockPeek();
 	const visible = items.filter((item) => !query || `${item.name}${item.symbol}${item.reason}`.toLowerCase().includes(query.toLowerCase()));
 	const netTotal = items.reduce((sum, item) => sum + item.net_amount, 0);
 	useEffect(() => setExpandedKeys(new Set()), [items]);
@@ -411,7 +453,9 @@ export function BillboardView({ items, tradeDate, onTradeDate, meta, details, on
 			const detailEntry = details[key];
 			const detailID = `billboard-seats-${index}`;
 			return <article className={expanded ? 'expanded' : ''} key={key}>
-				<header className="market-billboard-card-header"><span><strong>{item.name}</strong><small>{item.symbol} · {item.trade_date}</small></span><em className={toneClass(item.change_percent)}>{formatPercent(item.change_percent)}</em></header>
+				<header className="market-billboard-card-header"><span>{item.symbol
+					? <button type="button" className="stock-peek-name" title={`查看 ${item.name} 近一年走势`} onClick={() => openStock(item.symbol, item.name)}><strong>{item.name}</strong><small>{item.symbol} · {item.trade_date}</small></button>
+					: <><strong>{item.name}</strong><small>{item.symbol} · {item.trade_date}</small></>}</span><em className={toneClass(item.change_percent)}>{formatPercent(item.change_percent)}</em></header>
 				<p>{item.reason || '未提供上榜原因'}</p>{item.summary && <blockquote>{item.summary}</blockquote>}
 				<footer><span>买入 <strong>{moneyCell(item.buy_amount)}</strong></span><span>卖出 <strong>{moneyCell(item.sell_amount)}</strong></span><span>净额 <strong className={toneClass(item.net_amount)}>{moneyCell(item.net_amount)}</strong></span><span>机构买方 <strong>{item.institution_buyers}</strong></span><span>换手 <strong>{formatPercent(item.turnover_rate)}</strong></span></footer>
 				<button type="button" className="market-billboard-toggle" aria-expanded={expanded} aria-controls={detailID} onClick={() => toggleDetail(item)}><ChevronDown size={14} />{expanded ? '收起买卖五席' : '查看买一至买五 / 卖一至卖五'}</button>
@@ -461,7 +505,7 @@ function billboardDetailKey(item: MarketBillboardItem) {
 	return `${item.trade_date}|${item.symbol}|${item.reason}`;
 }
 
-export function ResearchView({ items, kind, queryDraft, onQueryDraft, onSearch, category, onCategory, meta, details, onLoadDetail }: {
+export function ResearchView({ items, kind, queryDraft, onQueryDraft, onSearch, category, onCategory, meta, details, onLoadDetail, onAskReport, industryTags, activeIndustry, onIndustry, pager }: {
 	items: MarketResearchItem[];
 	kind: 'announcement' | 'stock' | 'industry';
 	queryDraft: string;
@@ -472,8 +516,23 @@ export function ResearchView({ items, kind, queryDraft, onQueryDraft, onSearch, 
 	meta: SourceMeta | null;
 	details: Record<string, ResearchDetailEntry>;
 	onLoadDetail: (item: MarketResearchItem) => void;
+	onAskReport?: (item: MarketResearchItem) => void;
+	/** 行业标签（本地研报库专用）：点击按行业过滤，数量由后端统计 */
+	industryTags?: { name: string; count: number }[];
+	activeIndustry?: string;
+	onIndustry?: (name: string) => void;
+	/** 分页（本地研报库专用）：total 由后端 COUNT(*) 给出，和标签数量对得上 */
+	pager?: { page: number; pageSize: number; total: number; onPage: (page: number) => void };
 }) {
 	const [openKey, setOpenKey] = useState('');
+	// 行业标签默认只露出「≥3 篇」的行业，长尾收进「更多」，免得一排铺满 79 个
+	const [allTagsShown, setAllTagsShown] = useState(false);
+	const openStock = useStockPeek();
+	const pageTopRef = useRef<HTMLDivElement | null>(null);
+	// 翻页后把列表顶部滚回视野，否则永远停在第 2 页的底部
+	useEffect(() => {
+		if (pager && pager.page > 0) pageTopRef.current?.scrollIntoView({ block: 'start' });
+	}, [pager?.page]);
 	useEffect(() => setOpenKey(''), [items, kind]);
 	const toggle = (item: MarketResearchItem) => {
 		const key = researchDetailKey(item);
@@ -484,7 +543,35 @@ export function ResearchView({ items, kind, queryDraft, onQueryDraft, onSearch, 
 	return <div className="market-data-view">
 		<SourceNotice meta={meta} />
 		<form className="market-filter-bar" onSubmit={(event) => { event.preventDefault(); onSearch(); }}><label><Search size={14} /><input aria-label="搜索研究信号" value={queryDraft} onChange={(event) => onQueryDraft(event.target.value)} placeholder={kind === 'announcement' ? '搜索公告标题或输入股票关键词' : '搜索公司、行业、机构或观点'} /></label>{kind === 'announcement' && <select aria-label="公告分类" value={category} onChange={(event) => onCategory(event.target.value)}><option value="all">全部公告</option><option value="重大">重大事项</option><option value="业绩">业绩公告</option><option value="融资">融资公告</option><option value="风险">风险提示</option></select>}<button type="submit"><Search size={14} />检索</button></form>
-		{items.length ? <div className="market-research-list">{items.map((item, index) => {
+		{/* 只剩「未分类」时说明库里的研报都没有行业标注（比如现在只有 21财经脱水研报），
+		    这时标签条没有任何筛选价值，直接不渲染 */}
+		{industryTags && industryTags.some((tag) => tag.name !== '未分类') ? (() => {
+			const primary = industryTags.filter((tag) => tag.count >= 3);
+			const rest = industryTags.filter((tag) => tag.count < 3);
+			const shown = allTagsShown ? industryTags : primary;
+			// 从「更多」里选中的行业要一直露出来，否则选完标签会自己消失
+			const activeHidden = activeIndustry ? rest.find((tag) => tag.name === activeIndustry) : undefined;
+			return <div className={`market-industry-tags${allTagsShown ? ' expanded' : ''}`} role="group" aria-label="按行业筛选（申万二级）" title="行业分类口径：申万二级（已去掉 Ⅱ 后缀）">
+				<button type="button" className={activeIndustry ? '' : 'active'} onClick={() => onIndustry?.('')}>全部</button>
+				{shown.map((tag) => <button
+					type="button"
+					key={tag.name}
+					className={activeIndustry === tag.name ? 'active' : ''}
+					aria-pressed={activeIndustry === tag.name}
+					onClick={() => onIndustry?.(activeIndustry === tag.name ? '' : tag.name)}
+				>{tag.name}<em>{tag.count}</em></button>)}
+				{activeHidden ? <button
+					type="button"
+					className="active"
+					aria-pressed="true"
+					onClick={() => onIndustry?.('')}
+				>{activeHidden.name}<em>{activeHidden.count}</em></button> : null}
+				{rest.length > 0 ? <button type="button" className="market-industry-more" onClick={() => setAllTagsShown((value) => !value)}>
+					{allTagsShown ? '收起' : `更多 ${rest.length}`}
+				</button> : null}
+			</div>;
+		})() : null}
+		{items.length ? <div className="market-research-list" ref={pageTopRef}>{items.map((item, index) => {
 			const key = researchDetailKey(item);
 			const open = openKey === key;
 			const entry = details[key];
@@ -494,8 +581,10 @@ export function ResearchView({ items, kind, queryDraft, onQueryDraft, onSearch, 
 			const stockCode = (item.symbol || '').trim();
 			const industryName = (item.industry_name || '').trim();
 			const hasStock = Boolean(stockName || stockCode);
-			// 标的名做成徽标，其余（行业/机构/研究员）退成普通说明文字，让“是哪只票”一眼可见。
-			const chip = hasStock ? { label: stockName || stockCode, code: stockName ? stockCode : '', tone: 'stock' } : industryName ? { label: industryName, code: '', tone: 'industry' } : null;
+			// 标的名做成徽标，其余（行业/机构/研究员）退成普通说明文字，让"是哪只票"一眼可见。
+			// 只显示名称不跟代码：脱水研报的代码对读研报没帮助，名称才认得出来。
+			// 名称取不到时（行情接口挂了）才退回显示代码，总比空着强。
+			const chip = hasStock ? { label: stockName || stockCode, code: '', tone: 'stock' } : industryName ? { label: industryName, code: '', tone: 'industry' } : null;
 			const subjectRest = [hasStock ? industryName : '', item.organization, item.researchers].map((value) => (value || '').trim()).filter(Boolean).join(' · ');
 			return <article className={open ? 'expanded' : ''} key={key}>
 				<button type="button" className="market-research-head" aria-expanded={open} aria-controls={detailID} onClick={() => toggle(item)}>
@@ -503,20 +592,49 @@ export function ResearchView({ items, kind, queryDraft, onQueryDraft, onSearch, 
 					<span className="market-research-headline">
 						<span className="market-research-meta"><span className="market-research-tag">{item.category || (kind === 'stock' ? '个股研报' : kind === 'industry' ? '行业研报' : '公告')}</span><time>{formatDateTime(item.published_at)}</time></span>
 						<strong className="market-research-title">{item.title}</strong>
-						<small className="market-research-subject">{chip ? <span className={`market-research-chip ${chip.tone}`}>{chip.label}{chip.code ? <em>{chip.code}</em> : null}</span> : null}<span className="market-research-subject-text">{subjectRest || (chip ? '' : '市场研究信号')}</span></small>
+						<small className="market-research-subject">{chip ? (chip.tone === 'stock' && stockCode
+							// 标的名可以点开走势；外层整条是 <button>，里面不能再嵌 button，用带 role 的 span
+							? <span
+								role="button"
+								tabIndex={0}
+								className={`market-research-chip ${chip.tone} stock-peek-trigger`}
+								title={`查看 ${chip.label} 近一年走势`}
+								onClick={(event) => { event.stopPropagation(); openStock(stockCode, chip.label); }}
+								onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); openStock(stockCode, chip.label); } }}
+							>{chip.label}</span>
+							: <span className={`market-research-chip ${chip.tone}`}>{chip.label}</span>) : null}<span className="market-research-subject-text">{subjectRest || (chip ? '' : '市场研究信号')}</span></small>
 						<span className="market-research-stats">{item.rating && <span>评级 <strong>{item.rating}</strong>{item.previous_rating && ` / 前值 ${item.previous_rating}`}</span>}{(item.target_low || item.target_high) && <span>目标价 <strong>{formatTarget(item.target_low, item.target_high)}</strong></span>}{item.eps ? <span>预测 EPS <strong>{item.eps.toFixed(2)}</strong></span> : null}{item.pe ? <span>预测 PE <strong>{item.pe.toFixed(1)}</strong></span> : null}</span>
 					</span>
 					<ChevronDown size={16} className="market-research-chevron" aria-hidden="true" />
 				</button>
 				{open && <div className="market-research-detail" id={detailID}>
-					{body ? <div className="market-research-body">{formatArticleParagraphs(body).map((paragraph, index) => <p className={isIndentedParagraph(paragraph, index) ? 'indent' : undefined} key={index}>{paragraph}</p>)}</div> : null}
+					{/* 本地研报库存的是 Markdown 原文，必须按 Markdown 渲染；
+					    东财那两路是纯文本，继续走段落切分，保持原有缩进效果。 */}
+					{body ? (item.kind === 'local-report'
+						? <div className="market-research-body market-research-markdown"><MessageContent content={body} markdown /></div>
+						: <div className="market-research-body">{formatArticleParagraphs(body).map((paragraph, index) => <p className={isIndentedParagraph(paragraph, index) ? 'indent' : undefined} key={index}>{paragraph}</p>)}</div>) : null}
 					{!body && entry?.state === 'loading' && <div className="market-research-detail-state"><LoaderCircle className="spin" size={15} /><span>{kind === 'announcement' ? '正在读取公告正文' : '正在读取研报正文'}</span></div>}
 					{!body && entry?.state === 'error' && <div className="market-research-detail-state error"><AlertTriangle size={15} /><span>{entry.error || '正文加载失败'}</span><button type="button" onClick={() => onLoadDetail(item)}>重试</button></div>}
 					<div className="market-research-fields-panel"><span className="market-research-fields-caption">关键指标</span><dl className="market-research-fields">{researchDetailFields(item).map(([label, value]) => <div key={label}><dt>{label}</dt><dd className={fieldValueClass(label)}>{value}</dd></div>)}</dl></div>
-					<div className="market-research-detail-foot"><span>{kind === 'announcement' ? '交易所公告' : '东方财富研报'} · {formatDateTime(item.published_at)}</span>{item.url && <a href={item.url} target="_blank" rel="noreferrer"><ExternalLink size={12} aria-hidden="true" />查看原文</a>}</div>
+					<div className="market-research-detail-foot"><span>{kind === 'announcement' ? '交易所公告' : item.kind === 'local-report' ? '本地研报库' : '东方财富研报'} · {formatDateTime(item.published_at)}</span>{onAskReport && item.kind === 'local-report' && <button type="button" className="market-research-ai" onClick={() => onAskReport(item)}><Bot size={12} aria-hidden="true" />AI 解读这一篇</button>}{item.url && <a href={item.url} target="_blank" rel="noreferrer"><ExternalLink size={12} aria-hidden="true" />查看原文</a>}</div>
 				</div>}
 			</article>;
 		})}</div> : <EmptyData title="暂无匹配研究信号" detail="调整关键词或公告分类后重新检索。" />}
+		{pager ? (() => {
+			const pages = Math.max(1, Math.ceil(pager.total / pager.pageSize));
+			const page = Math.min(pager.page, pages - 1);
+			const from = pager.total === 0 ? 0 : page * pager.pageSize + 1;
+			const to = Math.min(pager.total, (page + 1) * pager.pageSize);
+			return <div className="market-pager">
+				<span>共 {pager.total} 篇{from > 0 ? `，当前显示 ${from}–${to}` : ''} · 第 {page + 1}/{pages} 页</span>
+				<div>
+					<button type="button" disabled={page === 0} onClick={() => pager.onPage(0)}>首页</button>
+					<button type="button" disabled={page === 0} onClick={() => pager.onPage(page - 1)}>上一页</button>
+					<button type="button" disabled={page >= pages - 1} onClick={() => pager.onPage(page + 1)}>下一页</button>
+					<button type="button" disabled={page >= pages - 1} onClick={() => pager.onPage(pages - 1)}>末页</button>
+				</div>
+			</div>;
+		})() : null}
 	</div>;
 }
 
@@ -604,18 +722,8 @@ function stockSortValue(item: MarketFundFlow, key: string, _meta: SourceMeta | n
 	return item[key as keyof MarketFundFlow] as string | number | null;
 }
 
-function IndexLineChart({ lines }: { lines: MarketIndexSeries['lines'] }) {
-	if (lines.length < 2) return <div className="market-chart-loading">暂无足够走势数据</div>;
-	const values = lines.map((line) => line.close);
-	const minValue = Math.min(...values);
-	const maxValue = Math.max(...values);
-	const range = maxValue - minValue || 1;
-	const points = values.map((value, index) => `${(index / (values.length - 1)) * 100},${92 - ((value - minValue) / range) * 80}`).join(' ');
-	const area = `0,100 ${points} 100,100`;
-	const up = values.at(-1)! >= values[0];
-	return <div className={`market-index-chart ${up ? 'up' : 'down'}`}><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="指数收盘走势"><defs><linearGradient id="marketArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="currentColor" stopOpacity=".22" /><stop offset="1" stopColor="currentColor" stopOpacity="0" /></linearGradient></defs><polygon points={area} fill="url(#marketArea)" /><polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.8" vectorEffect="non-scaling-stroke" /></svg><span>{formatPrice(maxValue)}</span><span>{formatPrice(minValue)}</span></div>;
-}
-
+// 指数日 K + 成交量副图。原来的折线看不出开盘/收盘和量能，
+// 这里直接按蜡烛图画：上主图价格、下副图成交量，鼠标悬停给当日明细。
 function EmptyData({ title, detail }: { title: string; detail: string }) {
 	return <div className="market-module-empty"><AlertTriangle size={22} /><strong>{title}</strong><span>{detail}</span></div>;
 }

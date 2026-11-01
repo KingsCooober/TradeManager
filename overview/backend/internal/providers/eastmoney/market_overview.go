@@ -26,6 +26,10 @@ type marketIndexDefinition struct {
 	Core     bool
 }
 
+// 市场核心指数目录（/api/v1/market/indexes?scope=core 直接按本表顺序返回）。
+// ★ Core 语义：是否出现在「市场核心指数」页面的选择器里。用户要求覆盖全球主要市场，
+//   所以亚太（日经/韩国/台湾/新加坡/印度/澳洲）、美洲（美/加/巴西）、欧洲（英/德/法）全部标 Core。
+//   secid 全部实测过 ulist.np 快照与 stock/kline 日线两条链路（2026-11）。
 var marketIndexCatalog = []marketIndexDefinition{
 	{ID: "sse", SecID: "1.000001", Name: "上证指数", Region: "中国", Market: "CN", Currency: "CNY", Core: true},
 	{ID: "szse", SecID: "0.399001", Name: "深证成指", Region: "中国", Market: "CN", Currency: "CNY", Core: true},
@@ -35,15 +39,20 @@ var marketIndexCatalog = []marketIndexDefinition{
 	{ID: "csi1000", SecID: "1.000852", Name: "中证1000", Region: "中国", Market: "CN", Currency: "CNY", Core: true},
 	{ID: "star50", SecID: "1.000688", Name: "科创50", Region: "中国", Market: "CN", Currency: "CNY", Core: true},
 	{ID: "hsi", SecID: "100.HSI", Name: "恒生指数", Region: "中国香港", Market: "HK", Currency: "HKD", Core: true},
-	{ID: "nikkei", SecID: "100.N225", Name: "日经225", Region: "亚太", Market: "JP", Currency: "JPY"},
-	{ID: "kospi", SecID: "100.KS11", Name: "韩国综合", Region: "亚太", Market: "KR", Currency: "KRW"},
-	{ID: "taiwan", SecID: "100.TWII", Name: "台湾加权", Region: "亚太", Market: "TW", Currency: "TWD"},
+	{ID: "nikkei", SecID: "100.N225", Name: "日经225", Region: "亚太", Market: "JP", Currency: "JPY", Core: true},
+	{ID: "kospi", SecID: "100.KS11", Name: "韩国综合", Region: "亚太", Market: "KR", Currency: "KRW", Core: true},
+	{ID: "taiwan", SecID: "100.TWII", Name: "台湾加权", Region: "亚太", Market: "TW", Currency: "TWD", Core: true},
+	{ID: "sti", SecID: "100.STI", Name: "新加坡海峡时报", Region: "亚太", Market: "SG", Currency: "SGD", Core: true},
+	{ID: "sensex", SecID: "100.SENSEX", Name: "印度孟买SENSEX", Region: "亚太", Market: "IN", Currency: "INR", Core: true},
+	{ID: "asx200", SecID: "100.AS51", Name: "澳洲标普200", Region: "亚太", Market: "AU", Currency: "AUD", Core: true},
 	{ID: "dow", SecID: "100.DJIA", Name: "道琼斯", Region: "美洲", Market: "US", Currency: "USD", Core: true},
 	{ID: "sp500", SecID: "100.SPX", Name: "标普500", Region: "美洲", Market: "US", Currency: "USD", Core: true},
 	{ID: "nasdaq", SecID: "100.NDX", Name: "纳斯达克", Region: "美洲", Market: "US", Currency: "USD", Core: true},
-	{ID: "ftse", SecID: "100.FTSE", Name: "英国富时100", Region: "欧洲", Market: "UK", Currency: "GBP"},
-	{ID: "dax", SecID: "100.GDAXI", Name: "德国DAX", Region: "欧洲", Market: "DE", Currency: "EUR"},
-	{ID: "cac", SecID: "100.FCHI", Name: "法国CAC40", Region: "欧洲", Market: "FR", Currency: "EUR"},
+	{ID: "tsx", SecID: "100.TSX", Name: "加拿大S&P/TSX", Region: "美洲", Market: "CA", Currency: "CAD", Core: true},
+	{ID: "bovespa", SecID: "100.BVSP", Name: "巴西BOVESPA", Region: "美洲", Market: "BR", Currency: "BRL", Core: true},
+	{ID: "ftse", SecID: "100.FTSE", Name: "英国富时100", Region: "欧洲", Market: "UK", Currency: "GBP", Core: true},
+	{ID: "dax", SecID: "100.GDAXI", Name: "德国DAX", Region: "欧洲", Market: "DE", Currency: "EUR", Core: true},
+	{ID: "cac", SecID: "100.FCHI", Name: "法国CAC40", Region: "欧洲", Market: "FR", Currency: "EUR", Core: true},
 }
 
 var eastmoneyIndustryMomentumFields = []string{
@@ -67,48 +76,75 @@ func (c *Client) MarketIndexes(ctx context.Context, scope string) ([]foundation.
 		}
 		definitions = append(definitions, item)
 	}
-	secids := make([]string, 0, len(definitions))
-	for _, item := range definitions {
-		secids = append(secids, item.SecID)
-	}
-	endpoint := c.quoteBaseURL + "/api/qt/ulist.np/get"
-	params := url.Values{}
-	params.Set("fltt", "2")
-	params.Set("secids", strings.Join(secids, ","))
-	params.Set("fields", "f12,f13,f14,f2,f3,f4,f124")
-	requestURL := endpoint + "?" + params.Encode()
-	start := time.Now()
-	var payload struct {
-		RC   int `json:"rc"`
-		Data struct {
-			Diff []map[string]any `json:"diff"`
-		} `json:"data"`
-	}
-	if err := c.getJSONWithRetry(ctx, requestURL, &payload); err != nil {
-		return nil, foundation.SourceMeta{}, err
-	}
-	if payload.RC != 0 {
-		return nil, foundation.SourceMeta{}, fmt.Errorf("eastmoney index rc=%d", payload.RC)
-	}
-	meta := foundation.SourceMeta{Source: "eastmoney:index", SourceURL: requestURL, FetchedAt: time.Now(), LatencyMS: time.Since(start).Milliseconds()}
+	// ★ 分批拉取：把 20+ 个指数（含海外）一次性塞进 ulist.np 时，上游会偶发只回 A 股/港股、
+	//   把日经/韩国/欧洲那一段整段吞掉，页面看起来就是「全球指数时有时无」。
+	//   按批请求再合并：单批失败只丢那一批，整体全失败才报错。
+	const indexQuoteBatchSize = 8
 	definitionsBySecID := make(map[string]marketIndexDefinition, len(definitions))
 	for _, item := range definitions {
 		definitionsBySecID[item.SecID] = item
 	}
-	items := make([]foundation.MarketIndexSnapshot, 0, len(payload.Data.Diff))
-	for _, raw := range payload.Data.Diff {
-		secid := fmt.Sprintf("%d.%s", int(asFloat(raw["f13"])), asString(raw["f12"]))
-		definition, ok := definitionsBySecID[secid]
-		if !ok {
+	start := time.Now()
+	items := make([]foundation.MarketIndexSnapshot, 0, len(definitions))
+	var meta foundation.SourceMeta
+	var lastErr error
+	for begin := 0; begin < len(definitions); begin += indexQuoteBatchSize {
+		end := begin + indexQuoteBatchSize
+		if end > len(definitions) {
+			end = len(definitions)
+		}
+		secids := make([]string, 0, end-begin)
+		for _, item := range definitions[begin:end] {
+			secids = append(secids, item.SecID)
+		}
+		params := url.Values{}
+		params.Set("fltt", "2")
+		params.Set("secids", strings.Join(secids, ","))
+		params.Set("fields", "f12,f13,f14,f2,f3,f4,f124")
+		var payload struct {
+			RC   int `json:"rc"`
+			Data struct {
+				Diff []map[string]any `json:"diff"`
+			} `json:"data"`
+		}
+		// 主域名偶发 EOF/限流时切到备用行情域名（与 board.go 的兜底策略一致）
+		var requestURL string
+		var batchErr error
+		for _, base := range append([]string{c.quoteBaseURL}, c.quoteFallbackURLs...) {
+			requestURL = base + "/api/qt/ulist.np/get?" + params.Encode()
+			payload.RC, payload.Data.Diff = 0, nil
+			if err := c.getJSONWithRetry(ctx, requestURL, &payload); err != nil {
+				batchErr = err
+				continue
+			}
+			if payload.RC != 0 {
+				batchErr = fmt.Errorf("eastmoney index rc=%d", payload.RC)
+				continue
+			}
+			batchErr = nil
+			break
+		}
+		if batchErr != nil {
+			lastErr = batchErr
 			continue
 		}
-		tradeTime := time.Unix(int64(asFloat(raw["f124"])), 0)
-		items = append(items, foundation.MarketIndexSnapshot{
-			ID: definition.ID, SecID: definition.SecID, Code: asString(raw["f12"]), Name: firstString(asString(raw["f14"]), definition.Name),
-			Region: definition.Region, Market: definition.Market, Currency: definition.Currency,
-			Price: asFloat(raw["f2"]), ChangePercent: asFloat(raw["f3"]), Change: asFloat(raw["f4"]), TradeTime: tradeTime,
-			Status: indexStatus(tradeTime, time.Now()), Meta: meta,
-		})
+		if meta.Source == "" {
+			meta = foundation.SourceMeta{Source: "eastmoney:index", SourceURL: requestURL, FetchedAt: time.Now(), LatencyMS: time.Since(start).Milliseconds()}
+		}
+		for _, raw := range payload.Data.Diff {
+			secid := fmt.Sprintf("%d.%s", int(asFloat(raw["f13"])), asString(raw["f12"]))
+			definition, ok := definitionsBySecID[secid]
+			if !ok {
+				continue
+			}
+			tradeTime := time.Unix(int64(asFloat(raw["f124"])), 0)
+			items = append(items, foundation.MarketIndexSnapshot{
+				ID: definition.ID, SecID: definition.SecID, Code: asString(raw["f12"]), Name: firstString(asString(raw["f14"]), definition.Name),
+				Region: definition.Region, Market: definition.Market, Currency: definition.Currency,
+				Price: asFloat(raw["f2"]), ChangePercent: asFloat(raw["f3"]), Change: asFloat(raw["f4"]), TradeTime: tradeTime,
+				Status: indexStatus(tradeTime, time.Now()), Meta: meta,
+			})
+		}
 	}
 	order := map[string]int{}
 	for index, item := range definitions {
@@ -116,6 +152,9 @@ func (c *Client) MarketIndexes(ctx context.Context, scope string) ([]foundation.
 	}
 	sort.SliceStable(items, func(i, j int) bool { return order[items[i].ID] < order[items[j].ID] })
 	if len(items) == 0 {
+		if lastErr != nil {
+			return nil, foundation.SourceMeta{}, lastErr
+		}
 		return nil, foundation.SourceMeta{}, fmt.Errorf("eastmoney returned no index snapshots")
 	}
 	return items, meta, nil

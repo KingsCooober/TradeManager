@@ -51,8 +51,10 @@ func WithHTTPClient(value *http.Client) Option {
 
 func NewClient(options ...Option) *Client {
 	client := &Client{
-		quoteBaseURL:          "https://qt.gtimg.cn",
-		klineBaseURL:          "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+		quoteBaseURL: "https://qt.gtimg.cn",
+		// 2026-10-20：web.ifzq.gtimg.cn 已经返回 501（域名被拦），
+		// 换到同源的 proxy.finance.qq.com/ifzqgtimg 才能正常取到前复权日线。
+		klineBaseURL:          "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get",
 		industryBaseURL:       "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/mktHs/rank",
 		industryStocksBaseURL: "https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList",
 		httpClient:            &http.Client{Timeout: 12 * time.Second},
@@ -87,7 +89,7 @@ var indexCatalog = []indexDefinition{
 	{ID: "dow", QuoteKey: "usDJI", KLineKey: "usDJI", Code: ".DJI", Name: "道琼斯", Region: "美洲", Market: "US", Currency: "USD", Core: true},
 	{ID: "sp500", QuoteKey: "usINX", KLineKey: "usINX", Code: ".INX", Name: "标普500", Region: "美洲", Market: "US", Currency: "USD", Core: true},
 	{ID: "nasdaq", QuoteKey: "usIXIC", KLineKey: "usIXIC", Code: ".IXIC", Name: "纳斯达克", Region: "美洲", Market: "US", Currency: "USD", Core: true},
-	{ID: "ftse", QuoteKey: "ukUKX", KLineKey: "ukUKX", Code: "UKX", Name: "英国富时100", Region: "欧洲", Market: "UK", Currency: "GBP"},
+	{ID: "ftse", QuoteKey: "ukUKX", KLineKey: "ukUKX", Code: "UKX", Name: "英国富时100", Region: "欧洲", Market: "UK", Currency: "GBP", Core: true},
 }
 
 func (c *Client) MarketIndexes(ctx context.Context, scope string) ([]foundation.MarketIndexSnapshot, foundation.SourceMeta, error) {

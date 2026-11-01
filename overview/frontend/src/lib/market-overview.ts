@@ -28,7 +28,8 @@ export type MarketOverviewView =
 	| 'billboard'
 	| 'announcements'
 	| 'institution-reports'
-	| 'industry-research';
+	| 'industry-research'
+	| 'local-reports';
 
 export type MarketOverviewModule = {
 	id: MarketOverviewView;
@@ -49,7 +50,7 @@ export const marketOverviewGroups: MarketOverviewGroup[] = [
 		name: '市场总览',
 		modules: [
 			{ id: 'pulse', name: '新闻快讯', description: '市场新闻、题材与数据源状态', status: 'ready' },
-			{ id: 'core-indexes', name: '市场核心指数', description: 'A/H/美核心指数走势与强弱', status: 'ready' },
+			{ id: 'core-indexes', name: '市场核心指数', description: '全球核心指数（A/H/日韩/美欧等）走势与强弱', status: 'ready' },
 		],
 	},
 	{
@@ -72,6 +73,7 @@ export const marketOverviewGroups: MarketOverviewGroup[] = [
 			{ id: 'announcements', name: '公告雷达', description: '重要公告分类与影响线索', status: 'ready' },
 			{ id: 'institution-reports', name: '机构观点', description: '评级、目标价与观点变化', status: 'ready' },
 			{ id: 'industry-research', name: '产业透视', description: '行业景气、产业链与研究证据', status: 'ready' },
+			{ id: 'local-reports', name: '行业研报', description: '本地沉淀的机构研报全文检索', status: 'ready' },
 		],
 	},
 ];
@@ -283,7 +285,15 @@ export function buildMarketModulePrompt(view: Exclude<MarketOverviewView, 'pulse
 		lines.push(...evidence.billboard.slice(0, 20).map((item, index) => `${index + 1}. ${item.name}（${item.symbol}）：${item.trade_date} 上榜，净买额 ${formatMoney(item.net_amount)}，买入 ${formatMoney(item.buy_amount)}，卖出 ${formatMoney(item.sell_amount)}，机构买方 ${item.institution_buyers}，原因 ${item.reason}`));
 	}
 	if (evidence.research?.length) {
-		lines.push(...evidence.research.slice(0, 25).map((item, index) => `${index + 1}. [${item.published_at || '时间未知'}] ${item.title}；标的 ${item.stock_name || item.industry_name || item.symbol || '行业/市场'}；机构 ${item.organization || '未标注'}；评级 ${item.rating || '未标注'}；分类 ${item.category || item.kind}；原文 ${item.url}`));
+		// 只给标题级清单，不塞原文链接 —— 25 条 URL 会把上下文挤满，
+		// 真正要读全文应该按 id 调本机研报工具（见页面里单篇的「AI 解读」）。
+		lines.push(...evidence.research.slice(0, 12).map((item, index) => `${index + 1}. [${item.published_at || '时间未知'}] ${item.title}；标的 ${item.stock_name || item.industry_name || item.symbol || '行业/市场'}；机构 ${item.organization || '未标注'}；评级 ${item.rating || '未标注'}；分类 ${item.category || item.kind}`));
+		if (evidence.research.some((item) => item.kind === 'local-report')) {
+			lines.push('（本地研报库可用 get_report(report_id=…) 取全文；需要精选就用 get_must_read，不要在回答里堆链接。）');
+		}
+		if (evidence.research.length > 12) {
+			lines.push(`（仅列出前 12 条，当前页共 ${evidence.research.length} 条。）`);
+		}
 	}
 	const source = evidence.meta?.source || firstEvidenceSource(evidence) || '未知';
 	const fetchedAt = evidence.meta?.fetched_at || '未知';
@@ -297,6 +307,46 @@ export function buildMarketModulePrompt(view: Exclude<MarketOverviewView, 'pulse
 		`【${module.name}证据】`,
 		...(lines.length ? lines : ['暂无可用证据']),
 	].join('\n');
+}
+
+/**
+ * 单篇研报的「AI 解读」prompt。
+ * 只带这一篇的 id/标题/机构/日期 —— 绝不把整页列表塞进去，
+ * 让模型自己按 id 去本机研报库取全文。
+ */
+export function buildResearchReportPrompt(item: MarketResearchItem): string {
+	const meta = [
+		`机构：${item.organization || '未标注'}`,
+		`日期：${(item.published_at || '').slice(0, 10) || '未标注'}`,
+		item.industry_name ? `行业：${item.industry_name}` : '',
+		item.rating ? `评级：${item.rating}` : '',
+		item.stock_name ? `标的：${item.stock_name}${item.symbol ? `（${item.symbol}）` : ''}` : '',
+	].filter(Boolean).join('｜');
+
+	if (item.kind === 'local-report') {
+		return [
+			`请解读这篇研报（本机研报库，report_id=${item.id}）：`,
+			`《${item.title}》`,
+			meta,
+			'',
+			`第一步：调用 get_report(report_id=${item.id}) 读取全文（不够就调大 max_chars 或翻页）。`,
+			'第二步：按下面结构回答，不要复述原文：',
+			'1）一句话结论：这篇到底在说什么',
+			'2）3 个关键数据（带数字和同比/环比）',
+			'3）对交易的含义：如果有我的持仓/自选，点明是哪只票、什么方向、催化是什么',
+			'4）风险与证据不足：哪些结论只是推演，原文没有直接支撑',
+			'不要贴原文链接，不要罗列无关条目。',
+		].join('\n');
+	}
+
+	return [
+		'请解读这条研究信号：',
+		`《${item.title}》`,
+		meta,
+		item.url ? `原文：${item.url}` : '',
+		'',
+		'按「一句话结论 / 关键数据 / 对交易的含义 / 风险与证据不足」四段回答；无法核实的地方直接说明，不要编造数据。',
+	].filter(Boolean).join('\n');
 }
 
 function firstEvidenceSource(evidence: MarketOverviewEvidence) {
