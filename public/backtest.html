@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>回测练习 - Trade Manager</title>
-<link rel="stylesheet" href="css/main.css?v=21">
+<link rel="stylesheet" href="css/main.css?v=22">
 <style>
 /* 回测页专用样式（独立内联，避免污染 main.css） */
 .bt-page { padding: 16px; max-width: 1600px; margin: 0 auto; }
@@ -73,7 +73,26 @@
   padding: 4px 10px; background: var(--bg-subtle, #f5f7fa);
   border-radius: 6px;
 }
-.bt-controlbar .bt-actions { margin-left: auto; display: flex; gap: 8px; }
+.bt-controlbar .bt-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+/* 练习轮次进度（随机按钮右边的小字） */
+.bt-universe-hint {
+  font-size: 12px; color: var(--text-secondary, #8a90a0);
+  white-space: nowrap; cursor: help; user-select: none;
+}
+.bt-universe-hint:empty { display: none; }
+/* 累计战绩的统计范围说明（标明只算本版） */
+.bt-career-scope {
+  font-size: 12px; color: var(--text-secondary, #8a90a0);
+  margin: 2px 0 8px;
+}
+.bt-career-scope b { color: var(--text-primary, #333); font-weight: 600; }
+/* 历史记录里的版本徽标 */
+.bt-engine {
+  display: inline-block; font-size: 11px; line-height: 1.6;
+  padding: 0 5px; border-radius: 3px; white-space: nowrap;
+}
+.bt-engine-kc { background: rgba(43, 92, 255, .13); color: #4b7bff; }
+.bt-engine-ec { background: rgba(178, 106, 0, .14); color: #d1902a; }
 
 /* ===== 标的搜索下拉（名称/拼音/代码） ===== */
 .bt-symbol-box { position: relative; display: inline-block; }
@@ -513,6 +532,42 @@
   margin-bottom: 12px;
 }
 .bt-trades h3 { margin: 0 0 10px; font-size: 15px; }
+
+/* ===== 累计战绩（历史记录表上方的汇总条）=====
+   宿在 .bt-trades 卡片内部，所以不再叠一层背景+边框，只用浅底格子区分。
+   auto-fit + minmax 保证窄屏自动折行，不会把 12 列的表格挤变形。 */
+.bt-career {
+  display: grid;
+  /* 固定 6 列：12 格正好两行排满（用 auto-fit 会变成 10+2，第二行右边一大片空白很难看） */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin: 2px 0 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--border-color, #e3e6ed);
+}
+@media (max-width: 1200px) { .bt-career { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 820px)  { .bt-career { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.bt-career-item {
+  background: var(--bg-input, #f7f9fc);
+  border-radius: 6px;
+  padding: 6px 9px;
+  display: flex; flex-direction: column; gap: 1px;
+  min-width: 0;
+}
+.bt-career-item .bt-career-label {
+  font-size: 11px; color: var(--text-secondary, #8a93a3); white-space: nowrap;
+}
+.bt-career-item .bt-career-value {
+  font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bt-career-item .bt-career-sub {
+  font-size: 11px; color: var(--text-secondary, #8a93a3); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.bt-career-empty {
+  grid-column: 1 / -1; font-size: 12px; color: var(--text-secondary, #8a93a3);
+}
 .bt-trades table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .bt-trades th {
   text-align: left;
@@ -574,6 +629,12 @@
 
 <main class="bt-page">
 
+  <div class="bt-intro">
+    🎯 <b>回测练习</b>（ECharts 引擎版）：看着历史 K 线手动模拟买卖，练盘感与纪律。
+    &nbsp;|&nbsp; 另有 <a href="backtest-kc.html" style="color:#4361ee;font-weight:700">Klinecharts 引擎版 →</a>
+    （副图指标由引擎内置提供，工程量与手感可直接对比）
+  </div>
+
   <!-- 控制栏：标的 + 均线周期 + MACD/量 开关 + 加载按钮 -->
   <div class="bt-controlbar">
     <div class="bt-group">
@@ -603,12 +664,12 @@
     </div>
     <div class="bt-group">
       <label>复权:</label>
-      <!-- 复权口径：选择权在前端。auto = 异常时自动择优（默认）；
+      <!-- 复权口径：选择权在前端，默认前复权（与 Klinecharts 版统一）。
            前复权(qfq)贴近当年盘面价但高分红股早年可能为负；
-           后复权(hfq)涨跌幅准确但价格数值放大；不复权(raw)即当年真实成交价 -->
-      <select id="btAdjust" title="复权口径：自动（异常时降级后复权）/ 前复权 / 后复权 / 不复权">
-        <option value="auto" selected>自动</option>
-        <option value="qfq">前复权</option>
+           后复权(hfq)涨跌幅准确但价格数值放大；不复权(raw)即当年真实成交价。
+           注：「自动」选项已下线，存量存档里的 auto 会被白名单校验回落到前复权。 -->
+      <select id="btAdjust" title="复权口径：前复权 / 后复权 / 不复权。⚠️ 前复权在多年窗口下可能把早期价格压到 0 以下（负价会让止损与收益计算失真），长周期建议用后复权">
+        <option value="qfq" selected>前复权</option>
         <option value="hfq">后复权</option>
         <option value="raw">不复权</option>
       </select>
@@ -650,6 +711,10 @@
       <input type="number" id="btInitCapital" value="1000000" min="1000" step="1000" style="width: 110px;" onchange="BT_setInitCapital()">
     </div>
     <div class="bt-actions">
+      <button class="btn btn-gray" id="btnRandomSymbol" onclick="BT_randomSymbol()"
+              title="从标的池（沪深 A 股市值前 3500 只）随机取一只并直接加载；抽中时会自动补全最近缺失的交易日">🔀 随机标的</button>
+      <!-- 练习轮次进度：已练 X / 池子总量，未练过的标的抽完之前不会重复抽到 -->
+      <span class="bt-universe-hint" id="btUniverseHint"></span>
       <button class="btn btn-primary" id="btnLoad" onclick="BT_loadData()">📥 加载 K 线</button>
       <button class="btn btn-gray"   id="btnClear" onclick="BT_clearTrades()">🗑 清空交易</button>
       <button class="btn btn-warning" id="btnFinish" onclick="BT_finishBacktest()" title="标记当前标的的回测结束（保存本次回测摘要）">🏁 完成回测</button>
@@ -684,7 +749,7 @@
           <div><span>低</span><b id="idxLow">--</b></div>
           <div><span>涨跌</span><b id="idxPct">--</b></div>
         </div>
-        <div class="bt-cursor-vol"><span>成交额</span><b id="idxVol">--</b></div>
+        <div class="bt-cursor-vol"><span>成交量</span><b id="idxVol">--</b></div>
         <div class="bt-cursor-ma" id="idxMa"><!-- 由 BT_renderMaList 动态填充 --></div>
       </div>
     </div>
@@ -808,12 +873,18 @@
       <button class="btn btn-sm btn-gray" style="float: right; margin-left: 8px;"
               onclick="BT_clearAllHistory()" title="清空所有历史记录">🗑 清空全部</button>
     </h3>
+    <!-- 累计战绩：**只统计本版（ECharts）的局**。两版共用同一份 backtest_history
+         （下面的表格里两版记录都会列出来），但战绩各算各的 —— 玩法差异太大。
+         聚合口径在 utils.js 的 btHistoryAggregate(list, engine) -->
+    <div class="bt-career-scope" id="btCareerScope"></div>
+    <div class="bt-career" id="btCareer"><span class="bt-career-empty">统计中…</span></div>
     <table>
       <thead>
         <tr>
           <th style="width: 50px; text-align: center;">#</th>
           <th>标的</th>
           <th style="text-align: center;">完成时间</th>
+          <th style="text-align: center; width: 72px;">版本</th>
           <th style="text-align: right;">初始资金</th>
           <th style="text-align: right;">交易数</th>
           <th style="text-align: right;">胜率</th>
@@ -837,8 +908,8 @@
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 
 <!-- 复用项目内已有模块（按依赖顺序） -->
-<script src="js/utils.js?v=9"></script>
-<script src="js/header.js?v=16"></script>
+<script src="js/utils.js?v=12"></script>
+<script src="js/header.js?v=19"></script>
 <script>renderAppHeader('backtest');</script>
 <script src="js/sync.js?v=12"></script>
 <script src="js/store.js?v=2"></script>
@@ -848,8 +919,8 @@
 <!-- 回测专用模块（顺序：交易 → 十字光标 → 图表 → 入口） -->
 <script src="js/backtest-trade.js?v=9"></script>
 <script src="js/backtest-crosshair.js?v=7"></script>
-<script src="js/backtest-chart.js?v=98"></script>
-<script src="js/backtest-main.js?v=42"></script>
+<script src="js/backtest-chart.js?v=101"></script>
+<script src="js/backtest-main.js?v=50"></script>
 
 <script>
 // 主题初始化（与 diary2.html 一致）

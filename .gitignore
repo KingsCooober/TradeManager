@@ -49,3 +49,28 @@ playwright-report/trace.*.zip
 # 覆盖率报告
 coverage/
 *.lcov
+
+# ===== 本地构建工具链与临时产物 =====
+# Go 工具链解压目录、编译缓存、探针脚本（含 80MB 源码包）
+.buildtmp/
+# Vite/esbuild 临时目录
+.esbuild-tmp/
+# 前端构建中间产物（发布只用 public/overview-app/ 里的拷贝）
+overview/frontend/dist/
+overview/frontend/tsconfig.tsbuildinfo
+
+# Go 交叉编译二进制（Linux 版无后缀，Windows 版 .exe）
+scripts/easy-stock-server
+scripts/easy-stock-server.exe
+scripts/easy-stock-server.exe~
+
+# AI 配置本体（含明文 API Key，每台机器独立生成）
+server/ai-config.json
+
+# 一次性验证/排查脚本（不属于产品代码）
+scripts/_verify-*.js
+
+# 本地一次性辅助脚本与临时清单
+_inst.sh
+_py.sh
+研报待删清单-*.html

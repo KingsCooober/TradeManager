@@ -58,10 +58,11 @@ function BT_collectState() {
   return {
     symbol:       symEl && symEl.value,
     years:        yrsEl && yrsEl.value,
-    // 复权口径选择权在前端（auto/qfq/hfq/raw），随存档持久化
+    // 复权口径选择权在前端（qfq/hfq/raw，默认 qfq），随存档持久化
+    //   「自动」选项已下线：与 Klinecharts 版的选项集保持一致，两版默认都是前复权
     adjust:       (function() {
       var aEl = document.getElementById('btAdjust');
-      return aEl ? aEl.value : 'auto';
+      return aEl ? aEl.value : 'qfq';
     })(),
     visibleBars:  vbToSave,
     ma1: ma1 && ma1.value,
@@ -104,7 +105,13 @@ function BT_saveState() {
 function BT_loadState() {
   try {
     var raw = localStorage.getItem(BT_lsKey('form'));
-    if (!raw) return null;
+    if (!raw) {
+      // 本机从没在这版练过 → 接上另一版（backtest-kc.html）刚用过的标的，
+      // 而不是留在表单默认值上。两版的标的记忆共用 bt_shared_symbol。
+      var shared = (typeof btSharedGetSymbol === 'function') ? btSharedGetSymbol() : null;
+      if (shared && shared.symbol) return { symbol: shared.symbol };
+      return null;
+    }
     return JSON.parse(raw);
   } catch (e) { return null; }
 }
@@ -132,8 +139,8 @@ function BT_init() {
   if (saved) {
     if (saved.symbol)      document.getElementById('btSymbol').value = saved.symbol;
     if (saved.years)       document.getElementById('btYears').value  = saved.years;
-    // 复权口径：白名单校验，非法值回退 auto
-    if (saved.adjust && ['auto', 'qfq', 'hfq', 'raw'].indexOf(saved.adjust) >= 0) {
+    // 复权口径：白名单校验，非法值（含已下线的存量 'auto'）保留 HTML 默认的前复权
+    if (saved.adjust && ['qfq', 'hfq', 'raw'].indexOf(saved.adjust) >= 0) {
       var adjEl = document.getElementById('btAdjust');
       if (adjEl) adjEl.value = saved.adjust;
     }
@@ -194,12 +201,28 @@ function BT_init() {
       _restoredMA = _rawMA.slice(0, 3);      // 用户自定义 → 保留（超过 3 条则截断）
     }
     if (_restoredMA.length > 0) {
-      // 统一写回输入框，保证界面与内存一致（含截断/迁移后的情况）
-      for (var _mi = 0; _mi < _restoredMA.length && _mi < 3; _mi++) {
-        var _el = document.getElementById('ma' + (_mi + 1));
-        if (_el) _el.value = _restoredMA[_mi];
+      // ★ 只有"迁移"改了配置时才按下标回写输入框（旧 4 条默认值 / 旧 4 条自定义截断成 3 条）。
+      //   否则必须保留 161-163 恢复出来的原字符串：存档里可能有空槽
+      //   （用户把 ma1 删掉了，存档是 ma1='' ma2=10 ma3=20），
+      //   若按拍平后的 [10,20] 写回，会把 MA10 塞进 ma1 槽、MA20 塞进 ma2 槽，
+      //   ma3 还留着旧的 20 → 变成 10/20/20 三条均线（两条重复的 MA20）。
+      var _savedNonEmpty = ['ma1', 'ma2', 'ma3'].map(function(id) {
+        var s = saved[id];
+        return typeof s === 'string' ? s.trim() : '';
+      }).filter(function(s) { return s !== ''; });
+      if (_restoredMA.join(',') !== _savedNonEmpty.join(',')) {
+        for (var _mi = 0; _mi < _restoredMA.length && _mi < 3; _mi++) {
+          var _el = document.getElementById('ma' + (_mi + 1));
+          if (_el) _el.value = _restoredMA[_mi];
+        }
       }
-      BT_maPeriods = _restoredMA;
+      // 内存值以输入框实际内容为准（含空槽位），同时同步 BT_maSlots 槽位映射，
+      // 否则删过 ma1 的存档会按拍平下标取色 → MA10 变成 MA1 的黑灰。
+      var _synced = (typeof BT_syncMAFromInputs === 'function') ? BT_syncMAFromInputs() : false;
+      if (!_synced) {
+        BT_maPeriods = _restoredMA;
+        if (typeof BT_maSlots !== 'undefined') BT_maSlots = [0, 1, 2];
+      }
     }
   }
   // 兜底：BT_visibleBars 若仍是初始默认值（即用户从未调过缩放），
@@ -308,6 +331,9 @@ function BT_init() {
 
   // 11.1) 渲染历史回测记录（从 localStorage 读取）
   BT_renderHistory();
+
+  // 11.1.1) 练习轮次进度（随机按钮旁边的小字）：失败静默，不影响页面
+  BT_loadUniverseStats();
 
   // 11.2) 初始化大盘指数图表 + 加载默认指数
   //    只有 showIndex=true 时才拉数据 + 初始化 ECharts（避免无意义拉取）
@@ -644,6 +670,138 @@ function BT_hideLoading(which) {
   }
 }
 
+/* ---- 随机标的 ---- */
+
+// 最近随机抽过的标的（仅本地，用于"连点两次别抽到同一只"）
+var BT_RANDOM_PICKED_KEY = 'bt_random_picked';
+
+/* ============================ 练习轮次标记 ============================ */
+//
+// 池子里每只标的都带一个 drawn_count = "练到第几轮"。
+// 后端随机抽取的 SQL 是 ORDER BY drawn_count ASC, RANDOM()，
+// 永远先挑最小的那一档 —— 整池练完一遍之前不会重复抽到同一只。
+//
+// ★ 标记在**加载成功之后**才上报，不是抽中那一刻：
+//   抽到了但数据拉不回来（停牌、接口抖动）不该消耗掉这只票。
+// ★ 后端幂等（只有处于最低档的标的才 +1），所以刷新页面、
+//   反复加载同一只都不会把它的标记顶到天上，本地不必去重。
+
+var BT_UNIVERSE = { drawn: 0, untouched: 0, total: 0, round: 1, remaining: 0 };
+
+function BT_renderUniverseHint() {
+  var el = document.getElementById('btUniverseHint');
+  if (!el) return;
+  var s = BT_UNIVERSE;
+  if (!s.total) { el.textContent = ''; return; }
+  el.textContent = '剩 ' + s.remaining + ' 只未练 · 第 ' + s.round + ' 轮';
+  el.title = '随机池共 ' + s.total + ' 只标的，累计练过 ' + s.drawn + ' 只。\n'
+    + '当前第 ' + s.round + ' 轮，这一轮还剩 ' + s.remaining + ' 只没练过。\n'
+    + '随机抽取只在「练得最少」的那一档里挑，所以整池过完一遍之前不会重复抽到同一只。\n'
+    + '标记在加载成功后才计数（加载失败不消耗标的）。';
+}
+
+/** 拉一次池子统计（只用于展示进度，失败静默） */
+function BT_loadUniverseStats() {
+  return authFetch('/api/backtest/universe/stats')
+    .then(function (res) { return res && res.ok ? res.json() : null; })
+    .then(function (j) {
+      if (!j || !j.total) return;
+      BT_UNIVERSE = {
+        drawn: j.drawn || 0, untouched: j.untouched || 0,
+        total: j.total || 0, round: j.round || 1,
+        remaining: j.remaining || 0
+      };
+      BT_renderUniverseHint();
+    })
+    .catch(function () { });
+}
+
+/** 给标的打「已练」标记（后端幂等，失败不影响练习） */
+function BT_markDrawn(symbol) {
+  if (!/^(sh|sz|bj)\d{6}$/.test(symbol || '')) return Promise.resolve();
+  return authFetch('/api/backtest/universe/mark', {
+    method: 'POST',
+    body: JSON.stringify({ symbol: symbol })
+  })
+    .then(function (res) { return res && res.ok ? res.json() : null; })
+    .then(function (j) {
+      if (!j || !j.inUniverse) return;
+      BT_UNIVERSE = {
+        drawn: j.drawn || 0, untouched: j.untouched || 0,
+        total: j.total || 0, round: j.round || 1,
+        remaining: j.remaining || 0
+      };
+      BT_renderUniverseHint();
+    })
+    .catch(function () { /* 标记失败不影响练习 */ });
+}
+
+/**
+ * 从后端标的池随机取一只，填进输入框并直接加载。
+ *
+ * 池子是建池时按总市值排序固定的前 3500 只沪深 A 股（表 bt_universe），
+ * 历史数据由 prewarm-kline.js --universe 从 2016-01-04 灌满；
+ * 后端在抽中时会检查新鲜度并同步补最新交易日（ensure=1），
+ * 所以不会出现"抽到的票缺最近几根"。
+ */
+async function BT_randomSymbol() {
+  var btn = document.getElementById('btnRandomSymbol');
+  var oldLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '抽取中…'; }
+  try {
+    var recent = [];
+    try { recent = JSON.parse(localStorage.getItem(BT_RANDOM_PICKED_KEY) || '[]'); } catch (e) { recent = []; }
+    if (!Array.isArray(recent)) recent = [];
+    var exclude = recent.slice(0, 5);
+    var symEl = document.getElementById('btSymbol');
+    var cur = (symEl && symEl.value || '').trim().toLowerCase();
+    if (/^(sh|sz)\d{6}$/.test(cur)) exclude.unshift(cur);
+
+    // 「2016 年至今」要求至少 1200 根，其余模式放宽到 150 根，
+    // 否则刚上市的大盘新股会被整批排除，随机池白白缩小
+    var yearsEl = document.getElementById('btYears');
+    var minBars = (yearsEl && yearsEl.value === 'from2016') ? 1200 : 150;
+
+    var url = '/api/backtest/universe/random?minBars=' + minBars +
+      (exclude.length ? '&exclude=' + encodeURIComponent(exclude.join(',')) : '');
+    var res = await authFetch(url);
+    var j = null;
+    try { j = await res.json(); } catch (e) { j = null; }
+    if (!res || !res.ok || !j || !j.symbol) {
+      throw new Error((j && j.error) || ('HTTP ' + (res && res.status)));
+    }
+
+    if (symEl) symEl.value = j.symbol;
+    recent = [j.symbol].concat(recent.filter(function (s) { return s !== j.symbol; })).slice(0, 5);
+    try { localStorage.setItem(BT_RANDOM_PICKED_KEY, JSON.stringify(recent)); } catch (e) {}
+
+    // 池子进度（响应里的 drawn/untouched 是**抽取之前**的统计，mark 完成后会再刷一次）
+    if (j.total) {
+      BT_UNIVERSE = {
+        drawn: j.drawn || 0, untouched: j.untouched || 0,
+        total: j.total || 0, round: j.round || 1,
+        remaining: j.remaining || 0
+      };
+      BT_renderUniverseHint();
+    }
+    // 轮次提示：drawnCount = 这只票此前练过几次
+    var dn = j.drawnCount || 0;
+    var roundTag = dn > 0
+      ? '· 池里没练过的已抽空，这是第 ' + (dn + 1) + ' 次'
+      : '· 首次练习';
+
+    BT_toast('🎲 抽到 ' + (j.name || j.symbol) + '（市值第 ' + j.rank + ' 名 / ' +
+      (j.bars || 0) + ' 根' + (j.filled ? '，已补最新' : '') +
+      (j.stale ? '，⚠️ 补数未成功' : '') + '）' + roundTag, j.stale ? 'error' : 'success');
+
+    await BT_loadData();
+  } catch (e) {
+    BT_toast('随机标的失败：' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = oldLabel || '🔀 随机标的'; }
+  }
+}
+
 // 加载 K 线数据
 async function BT_loadData(silent) {
   var symbolEl = document.getElementById('btSymbol');
@@ -677,9 +835,9 @@ async function BT_loadData(silent) {
   var mySeq = ++BT_loadSeq;
 
   try {
-    // 复权口径跟随下拉选择（auto/qfq/hfq/raw），后端按口径回数据
+    // 复权口径跟随下拉选择（qfq/hfq/raw，默认 qfq），后端按口径回数据
     var adjEl = document.getElementById('btAdjust');
-    var reqAdjust = (adjEl && ['auto', 'qfq', 'hfq', 'raw'].indexOf(adjEl.value) >= 0) ? adjEl.value : 'auto';
+    var reqAdjust = (adjEl && ['qfq', 'hfq', 'raw'].indexOf(adjEl.value) >= 0) ? adjEl.value : 'qfq';
     var url = '/api/market/kline-stock/' + symbol + '?count=' + count + '&adjust=' + reqAdjust +
       (reqStart ? '&from=' + reqStart : '');
     var res = await authFetch(url);
@@ -704,6 +862,9 @@ async function BT_loadData(silent) {
       await BT_loadTrades(symbol);
     }
 
+    // 两版共用的标的记忆：记一笔，klinecharts 版（backtest-kc.html）打开时直接接上
+    if (typeof btSharedSetSymbol === 'function') btSharedSetSymbol(symbol, BT_currentSymbolName);
+
     BT_renderKLine(data);
     BT_renderTrades();
     BT_renderStats();
@@ -722,6 +883,9 @@ async function BT_loadData(silent) {
     if (typeof BT_loadIndex === 'function') BT_loadIndex(/*silent*/ true);
 
     BT_saveStateNow();  // 切标的/改周期是关键状态，立即落盘（不等防抖）
+    // ★ 加载成功才给这只标的打「已练」标记（失败路径不会走到这里，
+    //   拉不到数据的票不该被消耗掉）。异步 fire-and-forget，不阻塞渲染。
+    BT_markDrawn(symbol);
     if (!silent) {
       BT_toast('✅ ' + symbol + ' 加载完成：' + (data.count || data.dates.length) + ' 根 K 线' +
         (data.cached ? '（缓存）' : '（实时）'), 'success');
@@ -778,7 +942,7 @@ async function BT_loadIndex(silent) {
     var url = '/api/market/kline-stock/' + symbol + '?count=' + count +
       '&adjust=' + ((function() {
         var a = document.getElementById('btAdjust');
-        return (a && ['auto', 'qfq', 'hfq', 'raw'].indexOf(a.value) >= 0) ? a.value : 'auto';
+        return (a && ['qfq', 'hfq', 'raw'].indexOf(a.value) >= 0) ? a.value : 'qfq';
       })()) +
       (reqStart ? '&from=' + reqStart : '');
     var res = await authFetch(url);
@@ -957,6 +1121,10 @@ async function BT_finishBacktest() {
     id:             'bt_' + Date.now() + '_' + Math.floor(Math.random() * 10000),
     symbol:         BT_currentSymbol,
     name:           BT_currentSymbolName || null,   // ★ 标的名称（浦发银行等）
+    // ★ 来源版本：两版共用同一份 backtest_history，累计战绩要按版本分开统计
+    //   （utils.js 的 btHistoryAggregate(list, engine) 靠这个字段过滤）。
+    //   老记录没有这个字段的，一律当 'echarts' 处理。
+    engine:         'echarts',
     finishedAt:     new Date().toISOString(),
     // 资金快照
     initCapital:    +BT_initCapital.toFixed(2),
@@ -1071,6 +1239,96 @@ async function BT_migrateHistoryFromLocalStorage() {
 }
 
 // 历史回测记录：从 DataStore 加载并渲染
+/**
+ * 累计战绩条（历史记录表上方）。
+ *
+ * 数据来自 BT_renderHistory 已经读好的 list —— 不再单独查一次 DataStore，
+ * 保证"表格里看到的记录"和"汇总算的局数"永远对得上（否则删一条记录后
+ * 表格变了、汇总还是旧的，很怪）。
+ *
+ * 聚合口径（胜率按笔加权、收益按局平均、R 值只算 klinecharts 版）
+ * 统一实现在 utils.js 的 btHistoryAggregate()，kc 版用的是同一个函数。
+ */
+/** 历史记录的「版本」徽标：kc 局标 Klinecharts，其余（含没有 engine 字段的老记录）标 ECharts */
+function BT_engineBadge(engine) {
+  if (engine === 'klinecharts') {
+    return '<span class="bt-engine bt-engine-kc" title="klinecharts 版：逐根揭示、按 R 计">Kline</span>';
+  }
+  return '<span class="bt-engine bt-engine-ec" title="ECharts 版：全量回测、看累计收益">ECharts</span>';
+}
+
+function BT_renderCareer(list) {
+  var el = document.getElementById('btCareer');
+  if (!el) return;
+  // 两版共用同一份 history，但累计战绩各算各的（玩法差异太大，混在一起平均没意义）
+  var counts = (typeof btHistoryEngineCounts === 'function')
+    ? btHistoryEngineCounts(list || []) : null;
+  var kcN = (counts && counts.klinecharts) || 0;
+
+  // 范围提示：说清楚这块只算本版，另一版的局在别处
+  var scopeEl = document.getElementById('btCareerScope');
+  if (scopeEl) {
+    scopeEl.innerHTML = '📊 累计战绩 <b>仅统计本版（ECharts）</b>' +
+      (kcN ? ' · 另有 Klinecharts 版 ' + kcN + ' 局不计入' : '') +
+      (counts && counts.echarts ? ' · 本版 ' + counts.echarts + ' 局' : '');
+  }
+
+  var a = (typeof btHistoryAggregate === 'function') ? btHistoryAggregate(list || [], 'echarts') : null;
+  if (!a || !a.sessions) {
+    el.innerHTML = '<span class="bt-career-empty">' +
+      (kcN
+        ? '本版还没有练习记录 —— Klinecharts 版有 ' + kcN + ' 局，但两版累计战绩分开统计，不会混在一起'
+        : '本版还没有练习记录 —— 点「🏁 完成回测」后会自动累计') +
+      '</span>';
+    return;
+  }
+  var pnlCls = a.totalPnl > 0 ? 'bt-buy' : (a.totalPnl < 0 ? 'bt-sell' : '');
+  var avgCls = a.avgReturn > 0 ? 'bt-buy' : (a.avgReturn < 0 ? 'bt-sell' : '');
+  var money = a.totalPnl >= 0 ? '+' : '-';
+  money += '¥' + Math.abs(a.totalPnl).toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+  var fmt2 = function (v) {
+    return (v === null || v === undefined || !isFinite(v)) ? '--' : (v >= 0 ? '+' : '') + v.toFixed(2);
+  };
+
+  var html =
+    '<div class="bt-career-item"><span class="bt-career-label">练习局数</span>' +
+      '<span class="bt-career-value">' + a.sessions + ' 局</span>' +
+      '<span class="bt-career-sub">' + a.distinctSymbols + ' 只标的</span></div>' +
+    '<div class="bt-career-item"><span class="bt-career-label">累计交易</span>' +
+      '<span class="bt-career-value">' + a.trades + ' 笔</span>' +
+      '<span class="bt-career-sub">已平仓 ' + a.closed + ' 笔</span></div>' +
+    '<div class="bt-career-item"><span class="bt-career-label">总胜率</span>' +
+      '<span class="bt-career-value">' + a.winRate.toFixed(1) + '%</span>' +
+      '<span class="bt-career-sub">' + a.wins + '胜 / ' + a.losses + '负</span></div>' +
+    '<div class="bt-career-item"><span class="bt-career-label">赚钱的局</span>' +
+      '<span class="bt-career-value">' + a.winSessionRate.toFixed(0) + '%</span>' +
+      '<span class="bt-career-sub">' + a.winSessions + '/' + a.sessions + ' 局</span></div>' +
+    '<div class="bt-career-item"><span class="bt-career-label">累计盈亏</span>' +
+      '<span class="bt-career-value ' + pnlCls + '">' + money + '</span></div>' +
+    '<div class="bt-career-item"><span class="bt-career-label">平均每局</span>' +
+      '<span class="bt-career-value ' + avgCls + '">' + fmt2(a.avgReturn) + '%</span></div>' +
+    '<div class="bt-career-item"><span class="bt-career-label">最好 / 最差单局</span>' +
+      '<span class="bt-career-value"><span class="bt-buy">' + fmt2(a.bestReturn) + '%</span> ' +
+      '<span class="bt-sell">' + fmt2(a.worstReturn) + '%</span></span></div>' +
+    '<div class="bt-career-item"><span class="bt-career-label">平均盈亏比</span>' +
+      '<span class="bt-career-value">' + (a.avgPF == null ? '--' : a.avgPF.toFixed(2)) + '</span></div>' +
+    '<div class="bt-career-item"><span class="bt-career-label">最差单局回撤</span>' +
+      '<span class="bt-career-value bt-sell">' + a.maxDrawdown.toFixed(2) + '%</span></div>' +
+    '<div class="bt-career-item"><span class="bt-career-label">最大连亏</span>' +
+      '<span class="bt-career-value">' + a.maxConsecLoss + ' 笔</span></div>';
+
+  // R 值只有 klinecharts 版记录，没练过就不显示，免得一直显示 0R 误导
+  if (a.rSessions > 0) {
+    html +=
+      '<div class="bt-career-item"><span class="bt-career-label">累计 R</span>' +
+        '<span class="bt-career-value">' + (a.totalR >= 0 ? '+' : '') + a.totalR.toFixed(2) + 'R</span>' +
+        '<span class="bt-career-sub">' + a.rSessions + ' 局有 R 记录</span></div>' +
+      '<div class="bt-career-item"><span class="bt-career-label">平均 R</span>' +
+        '<span class="bt-career-value">' + (a.avgR >= 0 ? '+' : '') + a.avgR.toFixed(2) + 'R</span></div>';
+  }
+  el.innerHTML = html;
+}
+
 async function BT_renderHistory() {
   var box = document.getElementById('btHistoryBody');
   if (!box) return;
@@ -1084,13 +1342,16 @@ async function BT_renderHistory() {
     try { list = JSON.parse(localStorage.getItem(BT_lsKey('history')) || '[]'); } catch (e) { list = []; }
   }
   if (!list.length) {
-    box.innerHTML = '<tr><td colspan="12" class="bt-empty">还没有历史回测记录，完成一轮回测后会自动保存到这里。</td></tr>';
+    box.innerHTML = '<tr><td colspan="13" class="bt-empty">还没有历史回测记录，完成一轮回测后会自动保存到这里。</td></tr>';
     BT_historySearchCache = [];
+    BT_renderCareer([]);   // 汇总条也要清空（否则删光后还挂着旧的累计数）
     return;
   }
 
   // 缓存一份给全局搜索用（performGlobalSearch 是同步接口，不能 await DataStore）
   BT_historySearchCache = list;
+  // 累计战绩：直接用这一份 list 聚合，不再查一次库
+  BT_renderCareer(list);
 
   // ★ 补全名称：老数据可能没存 name → 批量查 /api/market/stock-names 拿到名称
   //   流程：同步渲染（先用 symbol 占位）→ 后台异步查名称 → 查到后局部刷新"标的"列
@@ -1136,6 +1397,7 @@ async function BT_renderHistory() {
       '<td style="text-align: center;">' + (i + 1) + '</td>' +
       '<td class="bt-symbol-cell">' + symbolHtml + '</td>' +
       '<td style="font-size: 12px; color: var(--text-secondary, #999); text-align: center;">' + finished + '</td>' +
+      '<td style="text-align: center;">' + BT_engineBadge(s.engine) + '</td>' +
       '<td style="text-align: right;">' + initCap + '</td>' +
       '<td style="text-align: right;">' + s.tradeCount + '</td>' +
       '<td style="text-align: right;">' + winRate + '</td>' +

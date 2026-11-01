@@ -17,7 +17,12 @@ var BT_renderCustomTooltip = null;  // 自定义 DOM tooltip 渲染函数（由 
 var BT_klineData = null;        // 当前 K 线完整数据 {dates, ohlc, volumes, ma5/10/20, macd, count, ...}
 // MA 周期默认值：单一来源（HTML 里的 ma1~ma3 初始 value 需与其保持一致）
 var BT_MA_DEFAULT = [5, 10, 20];
-var BT_maPeriods = BT_MA_DEFAULT.slice();  // MA 周期（从输入框实时读取）
+var BT_maPeriods = BT_MA_DEFAULT.slice();  // MA 周期（从输入框实时读取，只含"有值"的槽位）
+// ★ BT_maSlots：BT_maPeriods 每一项对应的输入框槽位（0=ma1 / 1=ma2 / 2=ma3）。
+//   存在的原因：清空 ma1 后 BT_maPeriods 变成 [10,20]（第 0 项来自槽位 1），
+//   若仍按下标取色/命名，MA10 会突然变成"MA1 的黑灰"，与工具栏色点和线色脱节。
+//   有了 slots 就能做到「线色/图例跟槽位绑定，删掉一条不影响其余线的颜色」。
+var BT_maSlots = [0, 1, 2];
 var BT_showFlags = { ma: true, vol: true };  // MACD/资金面板已按用户要求移除  // 显示开关
 var BT_currentIdx = null;       // 光标所在的 K 线索引（也存 localStorage）
 // 默认 90 根（与 HTML 下拉的 selected 一致）。根数只允许 90/120 两档，
@@ -226,6 +231,50 @@ function BT_maColors() {
   return isDark
     ? ['#CBD5E1', '#E0A800', '#5B8DEF']   // 暗色：浅灰 / 深黄提亮 / 蓝提亮
     : ['#374151', '#C99700', '#2563EB'];  // 亮色：黑灰 / 深黄 / 蓝
+}
+
+// ===== 均线槽位（ma1 / ma2 / ma3）=====
+// 第 i 条均线（BT_maPeriods 下标）对应的输入框槽位号
+function BT_maSlotAt(i) {
+  var s = BT_maSlots && BT_maSlots[i];
+  return (s == null) ? i : s;
+}
+// 均线 series 的稳定 id：按槽位编号（不是按周期），这样改周期 = 原地更新，
+//   删除一条 = 该槽位不再产出 series，不会像以前那样留下"幽灵 MA"。
+function BT_maSeriesId(i, prefix) {
+  return (prefix || 'bt-ma-') + BT_maSlotAt(i);
+}
+// 读 ma1~ma3 输入框 → { periods, slots }
+//   空字符串 / 非法值 / 越界（>400）= 该槽位没有均线（就是"删掉这条均线"）
+function BT_readMAFromInputs() {
+  var periods = [], slots = [];
+  for (var i = 0; i < 3; i++) {
+    var el = document.getElementById('ma' + (i + 1));
+    if (!el) continue;
+    var raw = el.value == null ? '' : String(el.value).trim();
+    if (!raw) continue;
+    var v = parseInt(raw, 10);
+    if (!isNaN(v) && v > 0 && v <= 400) { periods.push(v); slots.push(i); }
+  }
+  return { periods: periods, slots: slots };
+}
+// 把输入框内容同步到 BT_maPeriods / BT_maSlots（启动恢复存档后必须调一次，
+//   否则内存里是"拍平后的旧数组"，和图上的槽位对不上）
+function BT_syncMAFromInputs() {
+  var r = BT_readMAFromInputs();
+  if (!r.periods.length) return false;   // 全空：不动内存（调用方负责提示/回填）
+  BT_maPeriods = r.periods;
+  BT_maSlots = r.slots;
+  return true;
+}
+// 把 BT_maPeriods 写回输入框（删除到一条不剩时用它回滚 UI，避免"框里空了图上还在"）
+function BT_writeMAInputs() {
+  for (var i = 0; i < 3; i++) {
+    var el = document.getElementById('ma' + (i + 1));
+    if (!el) continue;
+    var k = (BT_maSlots || []).indexOf(i);
+    el.value = (k >= 0) ? String(BT_maPeriods[k]) : '';
+  }
 }
 
 // 初始化图表实例
@@ -787,15 +836,18 @@ function BT_getBaseOption() {
 // 关键：后端返回的 volumes[idx] 单位是"手"（market-quote.js L103 注释：// 手）
 //   1 手 = 100 股，所以股数 = vol × 100
 //   显示策略：>=100 手（≥1 万股）时用"万股"为主单位，否则用"股"
-function BT_formatVolume(vol) {
-  if (!vol || vol <= 0) return '0 股';
-  var shares = vol * 100;   // 手 → 股
-  if (vol >= 100) {
-    // 万股为主单位 + 精确股数作为次单位
-    var wanShares = (shares / 10000).toFixed(2);
-    return wanShares + ' 万股 <span style="color:#999;font-size:11px;">(' + shares.toLocaleString() + ' 股)</span>';
-  }
-  return shares.toLocaleString() + ' 股';
+function BT_formatVolume(vol, showShares) {
+  // ★ 入参单位：手（实际手数）。2026-10-24 起后端 volumes 已统一为手，
+  //   不再有「万手」口径 —— 这里也不做任何换算，手数一位不丢。
+  //   （旧代码按「万手」处理，shares = vol * 100 实际算出来小 1 万倍，tooltip 一直是错的）
+  // showShares=false 用于指数：指数没有"股"的概念，且手数已达亿级，再挂股数会撑破面板。
+  var hand = Math.round(vol || 0);
+  if (hand <= 0) return '0 手';
+  var txt = hand.toLocaleString('zh-CN') + ' 手';
+  if (showShares === false) return txt;
+  var shares = hand * 100;   // 手 → 股（1 手 = 100 股）
+  return txt + ' <span style="color:#999;font-size:11px;">(' +
+    shares.toLocaleString('zh-CN') + ' 股)</span>';
 }
 
 // 格式化成交额（入参单位：万元）
@@ -831,7 +883,7 @@ function BT_renderMaList(containerId, prefix) {
     box.appendChild(div);
     // 给 span 上色（dot 颜色与图表 MA 线一致）
     var span = div.querySelector('span');
-    if (span) span.style.color = BT_maColors()[i] || '#666';
+    if (span) span.style.color = BT_maColors()[BT_maSlotAt(i)] || '#666';
   }
 }
 
@@ -847,7 +899,7 @@ function BT_fillMaValues(containerId, prefix, data, idx) {
     var el = document.getElementById(prefix + 'MaP_' + i);
     if (el) {
       el.textContent = v != null ? v.toFixed(2) : '--';
-      el.style.color = BT_maColors()[i] || '#666';
+      el.style.color = BT_maColors()[BT_maSlotAt(i)] || '#666';
     }
   }
 }
@@ -889,7 +941,7 @@ function BT_tooltipFormatter(params) {
     var p = BT_maPeriods[i];
     var arr = BT_computeMAFromCloses(BT_klineData.ohlc, p);
     if (arr[idx] != null) {
-      lines.push('<div style="line-height:1.7;"><span style="color:' + BT_maColors()[i] + '">●</span> MA' + p + ': <b>' + arr[idx].toFixed(2) + '</b></div>');
+      lines.push('<div style="line-height:1.7;"><span style="color:' + BT_maColors()[BT_maSlotAt(i)] + '">●</span> MA' + p + ': <b>' + arr[idx].toFixed(2) + '</b></div>');
     }
   }
 
@@ -973,33 +1025,17 @@ function BT_refreshEquityCurve() {
   if (typeof BT_renderStats === 'function') BT_renderStats();
 }
 
-// 渲染 K 线主图
-function BT_renderKLine(data) {
-  if (!BT_chart) BT_initChart();
-  BT_klineData = data;
-  // 切换标的 / 重新加载 → 窗口回到默认（光标钉在窗口最右），见 BT_initWindow
-  BT_initialWindowDone = false;
-  // 检测是否月线降级数据（后端因接口限制自动降级）→ 显示顶部 banner
-  if (data && data.__period === 'month') {
-    BT_showPeriodBanner('📅 当前为月线模式（接口不支持日级 10 年，月线可展示 17+ 年长期趋势）');
-  } else {
-    BT_hidePeriodBanner();
-  }
-
-  // ★ BT_visibleBars 由 select 选项决定（只允许 90 / 120），不要在这里覆盖
-  //   如果 select 还没初始化（页面刷新早于 BT_initUI），用默认值兜底
-  var visEl = document.getElementById('btVisibleBars');
-  if (visEl) {
-    BT_visibleBars = parseInt(visEl.value) || BT_DEFAULT_VISIBLE_BARS;
-  }
-  // 吸附到允许档位：旧存档可能存着任意值（如 350），缩放已取消只能落在 90/120
-  if (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) < 0) {
-    BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;
-  }
-
-  var dates = data.dates;
-  var ohlc  = data.ohlc;
-  var vols  = data.volumes;
+// ===== 主图 series 构建（单一来源）=====
+// 返回完整 series 数组：[K线] + [MA × N] + [成交] + [VOL5]
+//   ★ 为什么要抽成函数：load 数据时的"全量渲染"和改均线时的"只换 series"必须用同一份代码。
+//     以前两条路径各写一遍，改均线那条还靠 setOption 的默认 merge —— 而 ECharts 的
+//     merge 是按 series 的 id/name 匹配的，"这条均线这次没传" ≠ "删掉这条均线"，
+//     没传的那些 series 会被原样保留下来（这就是"删了均线图上还在"的根因）。
+//   ★ MA 的 series id 绑定槽位（bt-ma-0/1/2），不是周期：改周期是原地更新，
+//     删某条时该槽位不再产出 series，配合 replaceMerge 才能真正把它从图上去掉。
+function BT_buildMainSeries(data) {
+  var ohlc = data.ohlc;
+  var vols = data.volumes;
 
   // 计算 N 条 MA（数量由 BT_maPeriods 决定，支持 1-6 条）
   var closes = ohlc.map(function(o) { return o[1]; });
@@ -1010,13 +1046,14 @@ function BT_renderKLine(data) {
       type: 'line',
       data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
       smooth: true,
-      lineStyle: { width: 1.5, color: BT_maColors()[i] },
+      id: BT_maSeriesId(i),
+      lineStyle: { width: 1.5, color: BT_maColors()[BT_maSlotAt(i)] },
       showSymbol: false,
       z: 5
     });
   }
 
-  // K 线 + 量 + MACD
+  // K 线 + 量
   var klineSeries = {
     name: 'K线',
     type: 'candlestick',
@@ -1134,15 +1171,47 @@ function BT_renderKLine(data) {
   //   原 DIF/DEA/MACD 三个 series 不再构建。
   //   注意：grid[2]/xAxis[2]/yAxis[2] 仍保留占位（height 0 / show false），
   //   维持 series 与轴的索引稳定，指数图复用本 option 不受影响。
-
   // 资金曲线已移除（用户要求）：不再构建 equity series。
   //   注意：grid / xAxis / yAxis 仍保留第 4 个占位（height 0、show false），
   //   因为指数图复用 BT_getBaseOption() 并按下标访问 yAxis[3]/xAxis[3]，删掉会错位。
 
+  return [klineSeries].concat(maLines).concat([volSeries, volMA5Series]);
+}
+
+// 渲染 K 线主图
+function BT_renderKLine(data) {
+  if (!BT_chart) BT_initChart();
+  BT_klineData = data;
+  // 切换标的 / 重新加载 → 窗口回到默认（光标钉在窗口最右），见 BT_initWindow
+  BT_initialWindowDone = false;
+  // 检测是否月线降级数据（后端因接口限制自动降级）→ 显示顶部 banner
+  if (data && data.__period === 'month') {
+    BT_showPeriodBanner('📅 当前为月线模式（接口不支持日级 10 年，月线可展示 17+ 年长期趋势）');
+  } else {
+    BT_hidePeriodBanner();
+  }
+
+  // ★ BT_visibleBars 由 select 选项决定（只允许 90 / 120），不要在这里覆盖
+  //   如果 select 还没初始化（页面刷新早于 BT_initUI），用默认值兜底
+  var visEl = document.getElementById('btVisibleBars');
+  if (visEl) {
+    BT_visibleBars = parseInt(visEl.value) || BT_DEFAULT_VISIBLE_BARS;
+  }
+  // 吸附到允许档位：旧存档可能存着任意值（如 350），缩放已取消只能落在 90/120
+  if (BT_ALLOWED_VISIBLE_BARS.indexOf(BT_visibleBars) < 0) {
+    BT_visibleBars = BT_DEFAULT_VISIBLE_BARS;
+  }
+
+  var dates = data.dates;
+
+  // K线 / MA_N / 成交 / VOL5 的 series 统一由 BT_buildMainSeries 构建（单一来源）
+  //   同一份代码同时服务于"加载数据全量渲染"和"改均线只换 series"两条路径
+  var mainSeries = BT_buildMainSeries(data);
+
   // 应用到图表
   BT_chart.setOption({
     xAxis: [{ data: dates }, { data: dates }, { data: dates }, { data: dates }],
-    series: [klineSeries].concat(maLines).concat([volSeries, volMA5Series])
+    series: mainSeries
   });
 
   // 显示/隐藏子图（通过 grid 的 height 控制）
@@ -1374,7 +1443,7 @@ function BT_setupIndexTooltip() {
       '<div style="line-height:1.7;">' +
         '<div>开 <b>' + ohlc[0].toFixed(2) + '</b>　收 <b style="color:' + riseColor + '">' + ohlc[1].toFixed(2) + '</b>' + pctHtml + '</div>' +
         '<div>高 <b>' + ohlc[3].toFixed(2) + '</b>　低 <b>' + ohlc[2].toFixed(2) + '</b></div>' +
-        (vol > 0 ? '<div>成交额 <b>' + vol.toLocaleString() + ' 万元</b></div>' : '') +
+        (vol > 0 ? '<div>成交量 <b>' + BT_formatVolume(vol) + '</b></div>' : '') +
       '</div>'
     ];
 
@@ -1383,7 +1452,7 @@ function BT_setupIndexTooltip() {
       var p = BT_maPeriods[i];
       var arr = BT_computeMAFromCloses(BT_indexData.ohlc, p);
       if (arr[idx] != null) {
-        lines.push('<div style="line-height:1.7;"><span style="color:' + BT_maColors()[i] + '">●</span> MA' + p + ': <b>' + arr[idx].toFixed(2) + '</b></div>');
+        lines.push('<div style="line-height:1.7;"><span style="color:' + BT_maColors()[BT_maSlotAt(i)] + '">●</span> MA' + p + ': <b>' + arr[idx].toFixed(2) + '</b></div>');
       }
     }
 
@@ -1412,23 +1481,23 @@ function BT_setupIndexTooltip() {
   BT_indexChart.on('globalout', function() { tt.style.display = 'none'; });
 }
 
-// 切换 MA 周期后重画（从输入框读）
-// 修改 MA 周期：保留空 slot（用户可清空），但**不**重画整个图，只更新 MA 系列 → 不动 xAxis/dataZoom/grid
+// 切换 MA 周期 / 删除均线（从输入框读）
+// ★ 删除语义：把某个输入框清空 = 删掉该槽位那条均线（不再"必须凑满 3 条"）。
+//   ★★ 旧实现的根因（"删了均线图上没变化"）：
+//     清空后只是把 BT_maPeriods 拍平成 [5,10]，然后 setOption({ series }) 走默认 merge。
+//     ECharts 的 merge 是"按 id/name 匹配置换传入的 series"，**没有传入的 series 不会被删除**，
+//     所以 MA20 那条 line 一直留在图上（而右侧数据栏已经只剩 2 行，界面自相矛盾）。
+//     现在：BT_maPeriods + BT_maSlots 跟输入框槽位一一对应，重画走 replaceMerge 整体替换。
 function BT_updateMAPeriods() {
-  var inputs = [document.getElementById('ma1'), document.getElementById('ma2'),
-                document.getElementById('ma3')];
-  var newPeriods = [];
-  for (var i = 0; i < 3; i++) {
-    var raw = inputs[i] && inputs[i].value && String(inputs[i].value).trim();
-    if (!raw) continue;   // 空字符串 → 跳过（清空该 slot）
-    var v = parseInt(raw);
-    if (v && v > 0 && v <= 400) newPeriods.push(v);
-  }
-  if (newPeriods.length === 0) {
+  var r = BT_readMAFromInputs();
+  if (!r.periods.length) {
     BT_toast('至少需要 1 条均线', 'warn');
+    BT_writeMAInputs();   // 回滚输入框：避免"框里全空了、图上还有线"的错觉
+    BT_saveState();
     return;
   }
-  BT_maPeriods = newPeriods;
+  BT_maPeriods = r.periods;
+  BT_maSlots = r.slots;
   if (BT_klineData) BT_renderMAOnly();   // 不重画 K 线 → 保留窗口位置
   // 右栏 MA 行也要跟着改：用户改了 ma1=7，右栏立刻显示 MA7 而不是 MA5
   BT_renderMaList('curMa', 'cur');
@@ -1443,28 +1512,17 @@ function BT_updateMAPeriods() {
   BT_saveState();
 }
 
-// 只更新 MA 系列，不重画 xAxis / dataZoom / grid（窗口位置不动）
-// 关键：series 数组必须以 K线占位开头（不传 data / itemStyle），与旧 K线 series merge 时保留其所有属性
+// 只更新主图 series（K线 + 均线 + 成交量），不动 xAxis / dataZoom / grid → 窗口位置保持不变
+// ★ 关键：必须用 replaceMerge: ['series'] 整体替换。
+//   默认 merge 只会更新"这次传入的 series"，少传的那条（被删掉的均线）会原样留在图上 ——
+//   这是"删除均线没有效果"的直接原因。replaceMerge 会把 series 列表整体换掉，
+//   少了的自然消失，顺序也不再依赖下标的巧合。
 function BT_renderMAOnly() {
   if (!BT_chart || !BT_klineData) return;
-  var ohlc = BT_klineData.ohlc;
-  var allSeries = [
-    { name: 'K线', type: 'candlestick' }   // 占位：与旧 K线 series 按 index 合并，保留 data/itemStyle/markPoint
-  ];
-  for (var i = 0; i < BT_maPeriods.length; i++) {
-    allSeries.push({
-      name: 'MA' + BT_maPeriods[i],
-      type: 'line',
-      data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
-      smooth: true,
-      lineStyle: { width: 1.5, color: BT_maColors()[i] },
-      showSymbol: false,
-      z: 5
-    });
-  }
-  // 按 series index 合并（merge 模式默认），不重置 K线/量/MACD
-  BT_chart.setOption({ series: allSeries });
-  // ★ 同时刷新指数图：MA 周期变化时指数图也要按新周期重画
+  BT_chart.setOption({ series: BT_buildMainSeries(BT_klineData) }, { replaceMerge: ['series'] });
+  // 整体替换后 K线 是新 series 实例，买卖标记需要重新挂一次
+  if (typeof BT_refreshChartMarkers === 'function') BT_refreshChartMarkers();
+  // ★ 同时刷新指数图：MA 周期变化时指数图也要按新周期重画（那边同样是 replaceMerge）
   if (typeof BT_indexData === 'undefined' || !BT_indexData) return;
   if (BT_indexChart && typeof BT_renderIndexChart === 'function') {
     BT_renderIndexChart(BT_indexData, document.getElementById('indexTitle') ? document.getElementById('indexTitle').textContent.replace(/^📈\s*/, '') : '');
@@ -1667,13 +1725,13 @@ function BT_updateCursorDisplay() {
   }
   set('curPct', pct || '--');
   var volVal = vols[idx] || 0;
-  set('curVol', volVal ? volVal.toLocaleString() : '--');
+  set('curVol', volVal ? Math.round(volVal).toLocaleString('zh-CN') + ' 手' : '--');
   // VOL5（成交量 5 日均线，包含当日，与 tooltip 一致）
   var volMa5El = document.getElementById('curVolMa5');
   if (volMa5El) {
     var volMa5Arr = BT_klineData._volMA5;
     var v5 = volMa5Arr ? volMa5Arr[idx] : null;
-    volMa5El.textContent = v5 != null ? v5.toLocaleString() : '--';
+    volMa5El.textContent = v5 != null ? Math.round(v5).toLocaleString('zh-CN') + ' 手' : '--';
   }
   // 量比 = 当日成交量 / 前 5 日均量（不含当日），idx >= 5 时计算
   var ratioEl = document.getElementById('curRatio');
@@ -1733,11 +1791,11 @@ function BT_updateIndexInfo(forceIdx) {
   }
   set('idxPct', pct || '--');
 
-  // 成交额（指数图后端 volumes 字段实际是 amount 万元）
+  // 成交量（指数图后端 volumes 字段 = 成交量，单位「手」）
   var amountVal = (BT_indexData.volumes && BT_indexData.volumes[idx]) || 0;
   var volEl = document.getElementById('idxVol');
   if (volEl) {
-    volEl.innerHTML = BT_formatAmount(amountVal);
+    volEl.innerHTML = BT_formatVolume(amountVal, false);   // 指数：只给手数，不挂"股"
   }
 
   // MA（动态：跟图表 MA 周期对齐，不再写死 5/10/20/60）
@@ -1971,7 +2029,8 @@ function BT_renderIndexChart(data, indexName) {
       data: BT_computeMAFromCloses(ohlc, BT_maPeriods[i]),
       smooth: true,
       showSymbol: false,
-      lineStyle: { width: 1.5, color: BT_maColors()[i] },
+      id: BT_maSeriesId(i, 'bt-idx-ma-'),
+      lineStyle: { width: 1.5, color: BT_maColors()[BT_maSlotAt(i)] },
       z: 5
     });
   }
@@ -2009,10 +2068,12 @@ function BT_renderIndexChart(data, indexName) {
   seriesArr.push({ name: '成交', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volData, z: 1 });
   // MACD 已移除（用户要求）：指数图只保留 K线 + MA + 成交量
 
+  // ★ replaceMerge: ['series'] —— 均线删掉一条时，旧 series 必须真正被整体替换掉，
+  //   否则默认 merge 会把它留在图上（与主图同一个坑）
   BT_indexChart.setOption({
     xAxis: [{ data: dates }, { data: dates }, { data: dates }, { data: dates }],
     series: seriesArr
-  });
+  }, { replaceMerge: ['series'] });
 
   // 顶部标题
   var title = document.getElementById('indexTitle');
