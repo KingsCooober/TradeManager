@@ -520,16 +520,9 @@ export function SettingsDrawer({ config, open, initialSection, onClose, onSaved 
 						<AgentSettingsPanel config={config} open={open} />
 
 						<SettingsSection title="大模型和运行时配置" description="对话、个股研究、复盘与持仓检查使用同一个引擎选择，模型、Skills 和 MCP 共用一套设置。" icon={<Bot size={18} />}>
-							<div className="runtime-selector">
-								<span className="runtime-selector-label">运行引擎</span>
-								<div className="runtime-selector-buttons" role="group" aria-label="运行引擎">
-									<button type="button" aria-pressed={agentRuntime === 'hermes'} onClick={() => setAgentRuntime('hermes')}>Hermes</button>
-									<button type="button" aria-pressed={agentRuntime === 'codex'} onClick={() => setAgentRuntime('codex')}>Codex<span className="runtime-beta-badge">Beta</span></button>
-								</div>
-								<small>保存后新对话轮次和新任务使用所选引擎；进行中的任务继续完成。</small>
-							</div>
-                            {agentRuntime === 'codex' && !['auto', 'responses', 'codex_responses'].includes(apiMode) && <p className="model-list-message error">保存时会检测此连接是否支持 Responses；检测通过后统一使用 Responses，不支持时无法启用 Codex。</p>}
-                            {Object.entries(settings?.runtimes || {}).map(([id, status]) => <div key={id} className={`llm-connection-test ${status.available && status.configured ? 'success' : ''}`}><div><Bot size={17} /><span><strong>{id === 'codex' ? 'Codex' : 'Hermes'} {status.version || ''} · {status.available ? '已安装' : '不可用'}</strong><small>{status.message || (status.configured ? '共享模型配置已就绪' : '请配置模型连接')}</small></span></div></div>)}
+							{/* 运行引擎只剩 Hermes：Codex 已从本项目移除（本机未安装、也不再提供入口）。
+							    agentRuntime 仍参与保存（默认值见初始化处的 || 'hermes'）。 */}
+                            {Object.entries(settings?.runtimes || {}).filter(([id]) => id !== 'codex').map(([id, status]) => <div key={id} className={`llm-connection-test ${status.available && status.configured ? 'success' : ''}`}><div><Bot size={17} /><span><strong>{id === 'codex' ? 'Codex' : 'Hermes'} {status.version || ''} · {status.available ? '已安装' : '不可用'}</strong><small>{status.message || (status.configured ? '共享模型配置已就绪' : '请配置模型连接')}</small></span></div></div>)}
                             <div className="llm-profile-toolbar">
 								<label><span>模型配置</span><select value={activeLLMProfileID} onChange={(event) => selectLLMProfile(event.target.value)}>{llmProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name} · {profile.model || llmProviderDefinition(profile.provider).label}</option>)}</select></label>
 								<button type="button" onClick={addLLMProfile}><Plus size={14} />新增配置</button>

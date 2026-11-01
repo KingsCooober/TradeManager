@@ -22,11 +22,18 @@ function sqlQuery(sql) {
 (async () => {
   console.log('\n===== cron-fill 启动 ' + new Date().toISOString() + ' =====');
 
-  // 1) 真实交易日历（来自行情模块：Baostock → 腾讯兜底）
-  const mq = require('./market-quote');
-  const k = await mq.fetchKLine('sh000001', SCAN_DAYS);
-  const tradeDates = k.map(x => x.date);
-  if (!tradeDates.length) throw new Error('拿不到交易日历（K 线为空）');
+  // 1) 真实交易日历
+  //
+  // ★ 刻意不用 market-quote.fetchKLine：它会 require kline-store → require sqlite3，
+  //   而 crontab 的 PATH 里 /usr/bin/node (v18) 加载该原生模块会**段错误**，
+  //   整个补数任务会无声死掉（2026-10-15 就是这么漏掉一整天的）。
+  //   这里改用 index-amount（纯 curl + python3 子进程，零 sqlite3 依赖），
+  //   顺便拿到权威成交额（东财 push2his → Baostock），K 线日期即真实交易日。
+  const indexAmount = require('./index-amount');
+  const amtRes = await indexAmount.fetchMarketAmountByDate(SCAN_DAYS);
+  const amtMap = amtRes.map;
+  const tradeDates = Object.keys(amtMap).sort();
+  if (!tradeDates.length) throw new Error('拿不到交易日历（成交额源为空）');
   console.log('交易日历（近 ' + tradeDates.length + ' 个交易日）: ' +
     tradeDates[0] + ' ~ ' + tradeDates[tradeDates.length - 1]);
 

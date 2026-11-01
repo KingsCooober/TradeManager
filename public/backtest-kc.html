@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>回测练习（Klinecharts 版） - Trade Manager</title>
+<link rel="stylesheet" href="css/main.css?v=22">
+<style>
+/* 回测练习（Klinecharts 版）专用样式：独立内联，避免污染 main.css */
+.btk-page { padding: 16px; max-width: 1700px; margin: 0 auto; }
+
+.btk-intro {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px;
+  padding: 7px 14px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #555);
+}
+.btk-intro b { color: var(--text-primary, #222); }
+.btk-intro a { color: #4361ee; text-decoration: none; margin-left: 6px; }
+.btk-intro a:hover { text-decoration: underline; }
+
+.btk-error {
+  background: #fff1f0; border: 1px solid #ffa39e; color: #a8071a;
+  border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 13px;
+}
+
+.btk-warn {
+  background: #fffbe6; border: 1px solid #ffe58f; color: #874d00;
+  border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; font-size: 13px;
+  line-height: 1.6;
+}
+.btk-warn b { color: #ad4e00; }
+.btk-warn .btk-warn-act {
+  margin-left: 8px; padding: 2px 10px; border-radius: 4px; cursor: pointer;
+  border: 1px solid #d4a017; background: #fff7db; color: #874d00; font-size: 12px;
+}
+.btk-warn .btk-warn-act:hover { background: #ffefb8; }
+
+.btk-controlbar {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+}
+.btk-controlbar label { font-size: 13px; color: var(--text-secondary, #555); margin-right: 3px; }
+.btk-controlbar input[type="text"],
+.btk-controlbar input[type="number"],
+.btk-controlbar select {
+  padding: 5px 8px; border: 1px solid var(--border-color, #d0d4dc); border-radius: 4px;
+  background: var(--bg-input, #f5f7fa); color: var(--text-primary, #222); font-size: 13px;
+}
+.btk-controlbar input[type="text"] { width: 130px; }
+.btk-controlbar input[type="number"] { width: 84px; }
+.btk-check { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-secondary, #555); }
+
+/* ===== 均线设置（最多 6 根：色块 + 周期）=====
+   色块用原生 input[type=color] 直接当方块显示 —— 省掉「色块 + 隐藏 input」两层 DOM，
+   点一下就弹系统取色器。要把它压成 14px 小方块，必须清掉默认的 padding/border-inner。 */
+.btk-ma-group { display: flex; align-items: center; gap: 5px; }
+.btk-ma-item { display: inline-flex; align-items: center; gap: 2px; }
+.btk-ma-color {
+  width: 15px; height: 15px; padding: 0; flex: none;
+  border: 1px solid var(--border-color, #d0d4dc); border-radius: 3px;
+  background: none; cursor: pointer;
+}
+.btk-ma-color::-webkit-color-swatch-wrapper { padding: 0; }
+.btk-ma-color::-webkit-color-swatch { border: none; border-radius: 2px; }
+.btk-ma-color::-moz-color-swatch { border: none; border-radius: 2px; }
+/* 周期框很窄，浏览器自带的上下箭头会把数字挤没，去掉（键盘/滚轮照样能改） */
+.btk-controlbar input.btk-ma-len {
+  width: 34px; padding: 4px 3px; text-align: center; font-size: 12px;
+  -moz-appearance: textfield;
+}
+.btk-controlbar input.btk-ma-len::-webkit-outer-spin-button,
+.btk-controlbar input.btk-ma-len::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.btk-sym-wrap { position: relative; }
+/* 练习轮次进度（随机按钮右边的小字） */
+.btk-universe-hint {
+  font-size: 12px; color: var(--text-secondary, #8a90a0);
+  white-space: nowrap; cursor: help; user-select: none;
+}
+.btk-universe-hint:empty { display: none; }
+/* 累计战绩卡片标题上的版本标签 */
+.btk-career-tag {
+  font-style: normal; font-size: 10px; font-weight: normal;
+  padding: 1px 5px; margin-left: 5px; border-radius: 3px;
+  background: rgba(43, 92, 255, .13); color: #4b7bff;
+  vertical-align: 1px;
+}
+.btk-sym-list {
+  position: absolute; top: 100%; left: 0; z-index: 40; width: 260px; max-height: 280px; overflow-y: auto;
+  background: var(--bg-card, #fff); border: 1px solid var(--border-color, #d0d4dc);
+  border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.12); display: none;
+}
+.btk-sym-item { padding: 6px 10px; font-size: 13px; cursor: pointer; display: flex; gap: 8px; }
+.btk-sym-item:hover { background: var(--bg-input, #f0f3f8); }
+.btk-sym-item b { color: #4361ee; font-weight: 600; }
+.btk-sym-item span { color: var(--text-secondary, #666); }
+.btk-sym-hint { padding: 8px 10px; font-size: 12px; color: var(--text-secondary, #888); }
+
+.btk-main { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.btk-chart-col { flex: 1 1 720px; min-width: 520px; }
+.btk-side { flex: 0 0 330px; display: flex; flex-direction: column; gap: 10px; }
+
+.btk-card {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px; padding: 10px 12px;
+}
+.btk-card-title {
+  font-size: 13px; font-weight: 700; color: var(--text-primary, #222);
+  margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border-divider, #eef0f4);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.btk-card-title .btk-mini-btn {
+  font-size: 11px; padding: 1px 6px; border: 1px solid var(--border-color, #d0d4dc);
+  background: transparent; border-radius: 4px; cursor: pointer; color: var(--text-secondary, #666);
+}
+
+/* 顶部当前 K 线信息条 */
+/* gap 收窄到 9px：字段（涨跌幅/振幅/量/量比/起点）比原来多了两个，
+   12px 间距在「横排带侧栏」的中等宽度下（图表列约 1000px）会把行挤换行 */
+.btk-head {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 8px 12px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px;
+  font-size: 13px; color: var(--text-primary, #222);
+}
+.btk-head .btk-name { font-weight: 700; font-size: 14px; }
+.btk-head .btk-code { color: #4361ee; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.btk-head .btk-date { color: var(--text-secondary, #666); font-variant-numeric: tabular-nums; }
+.btk-head .btk-muted { color: var(--text-secondary, #888); font-size: 12px; }
+.btk-head .btk-small { font-size: 11px; }
+.btk-head .btk-pct { font-weight: 700; padding: 1px 6px; border-radius: 4px; }
+.btk-head .btk-pct.btk-up { background: rgba(239,71,111,.12); }
+.btk-head .btk-pct.btk-down { background: rgba(45,159,127,.12); }
+/* 数据窗口提示：靠右，弱化，避免和行情数字抢注意力 */
+.btk-head .btk-range-tip {
+  margin-left: auto;
+  color: var(--text-secondary, #999);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-subtle, #f6f7fa);
+  border: 1px solid var(--border-color, #e8eaf0);
+  border-radius: 4px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+/* 本局起点徽章：与图上那条橙色虚线同色呼应 */
+.btk-head .btk-start-badge {
+  color: #874d00;
+  background: #faeeda;
+  border: 1px solid #ef9f27;
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btk-pane-wrap {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 0 0 8px 8px;
+  padding: 4px;
+}
+/* 图表容器高度：主图 320 + 3 个副图 ×100 = 620（全开时刚好填满） */
+.btk-pane { width: 100%; height: 620px; }
+
+/* hover 浮层：跟随光标显示当日涨跌幅 / 量比。pointer-events:none 保证不挡住图表本身的鼠标事件 */
+.btk-pane-wrap { position: relative; }
+.btk-hover-tip {
+  position: absolute; left: 0; top: 0; display: none; z-index: 20;
+  min-width: 128px; padding: 6px 9px; border-radius: 6px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid var(--border-color, #e3e6ed);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.10);
+  font-size: 12px; line-height: 1.6;
+  color: var(--text-primary, #222);
+  pointer-events: none;
+}
+.btk-hover-tip .btk-ht-row { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.btk-hover-tip .btk-ht-k { color: var(--text-secondary, #888); font-size: 11px; }
+.btk-hover-tip b { font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* 指标开关 */
+.btk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.btk-chip {
+  font-size: 12px; padding: 3px 10px; border-radius: 12px;
+  border: 1px solid var(--border-color, #d0d4dc);
+  background: var(--bg-card, #fff); color: var(--text-secondary, #666); cursor: pointer;
+}
+.btk-chip:hover { border-color: #4361ee; color: #4361ee; }
+.btk-chip-on { background: #4361ee; border-color: #4361ee; color: #fff; }
+
+/* 操作区 */
+.btk-actions {
+  margin-top: 8px; padding: 10px 12px;
+  background: var(--bg-card, #fff); border: 1px solid var(--border-color, #e3e6ed);
+  border-radius: 8px; display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center;
+}
+.btk-act-group { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary, #555); }
+.btk-act-group input { width: 62px; padding: 4px 6px; border: 1px solid var(--border-color, #d0d4dc); border-radius: 4px; background: var(--bg-input, #f5f7fa); font-size: 13px; }
+.btk-btn {
+  padding: 6px 14px; font-size: 13px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border-color, #d0d4dc);
+  background: var(--bg-card, #fff); color: var(--text-primary, #222);
+}
+.btk-btn:hover:not(:disabled) { border-color: #4361ee; color: #4361ee; }
+.btk-btn:disabled { opacity: .45; cursor: not-allowed; }
+/* 自动播放中的按钮态：换成描边高亮，一眼能看出「正在放」 */
+.btk-btn.is-playing {
+  background: var(--bg-input, #eef2ff); border-color: #4361ee; color: #4361ee;
+  box-shadow: 0 0 0 2px rgba(67, 97, 238, .15);
+}
+.btk-btn-primary { background: #4361ee; border-color: #4361ee; color: #fff; }
+.btk-btn-primary:hover:not(:disabled) { background: #3352d6; color: #fff; }
+.btk-btn-buy { background: #ef476f; border-color: #ef476f; color: #fff; }
+.btk-btn-buy:hover:not(:disabled) { background: #d93a60; color: #fff; }
+.btk-btn-close { background: #2d9f7f; border-color: #2d9f7f; color: #fff; }
+.btk-btn-close:hover:not(:disabled) { background: #25896d; color: #fff; }
+.btk-kbd {
+  font-size: 10px; padding: 0 4px; border-radius: 3px; margin-left: 4px;
+  background: rgba(0,0,0,.08); color: var(--text-secondary, #666);
+}
+
+/* 进度 */
+.btk-progress { margin-top: 8px; height: 6px; background: var(--bg-input, #eef1f5); border-radius: 3px; overflow: hidden; }
+.btk-progress > div { height: 100%; width: 0; background: linear-gradient(90deg, #4361ee, #6f8bff); transition: width .18s; }
+.btk-progress-text { margin-top: 4px; font-size: 12px; color: var(--text-secondary, #666); }
+
+/* 持仓 / 统计 */
+.btk-pos-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
+.btk-pos-row > span:first-child { flex: 0 0 104px; color: var(--text-secondary, #666); }
+.btk-pos-strong b { font-size: 14px; }
+.btk-empty { font-size: 13px; color: var(--text-secondary, #999); padding: 6px 0; }
+.btk-small { font-size: 11px; }
+
+.btk-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.btk-stat { display: flex; flex-direction: column; font-size: 12px; }
+.btk-stat > span:first-child { color: var(--text-secondary, #666); }
+.btk-stat b { font-size: 14px; font-variant-numeric: tabular-nums; }
+
+.btk-trades { max-height: 250px; overflow-y: auto; }
+.btk-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.btk-table th, .btk-table td { padding: 4px 5px; text-align: right; border-bottom: 1px solid var(--border-divider, #f0f2f5); white-space: nowrap; }
+.btk-table th { color: var(--text-secondary, #666); font-weight: 600; position: sticky; top: 0; background: var(--bg-card, #fff); }
+.btk-table td:nth-child(1), .btk-table th:nth-child(1) { text-align: center; }
+.btk-table td:nth-child(2), .btk-table td:nth-child(4), .btk-table td:last-child { text-align: left; }
+
+.btk-log { max-height: 150px; overflow-y: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.55; }
+.btk-log > div { color: var(--text-secondary, #666); }
+.btk-log-ok { color: #2d9f7f !important; }
+.btk-log-err { color: #ef476f !important; }
+.btk-log-warn { color: #e6a23c !important; }
+
+/* 结算面板 */
+.btk-settle {
+  margin-top: 10px; padding: 12px 14px; border-radius: 8px;
+  border: 1px solid #4361ee; background: rgba(67,97,238,.06);
+}
+.btk-settle-title { font-size: 14px; font-weight: 700; margin-bottom: 8px; color: var(--text-primary, #222); }
+.btk-settle-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 8px; }
+.btk-settle-grid > div { display: flex; flex-direction: column; font-size: 12px; }
+.btk-settle-grid span { color: var(--text-secondary, #666); }
+.btk-settle-grid b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.btk-settle-hint { font-size: 13px; color: var(--text-secondary, #555); margin-bottom: 10px; }
+.btk-settle-actions { display: flex; gap: 8px; }
+
+.btk-up { color: #ef476f; }
+.btk-down { color: #2d9f7f; }
+.btk-muted { color: var(--text-secondary, #888); }
+
+@media (max-width: 1100px) {
+  .btk-main { flex-direction: column; }
+  .btk-chart-col, .btk-side { flex: 1 1 auto; width: 100%; min-width: 0; }
+  .btk-settle-grid { grid-template-columns: repeat(3, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<!-- 顶部导航：必须是 header.app-header —— 样式（flex 布局 / sticky 吸顶 / 背景毛玻璃 / padding）
+     全挂在 .app-header 上，只写 <div id="appHeader"> 会让 header 退化成块级堆叠、并失去吸顶与背景 -->
+<header class="app-header" id="appHeader"></header>
+
+<div class="btk-page">
+
+  <div class="btk-intro">
+    <b>🎯 回测练习</b> —— 取真实历史日 K，随机截一段当盘口：只看起点之前，之后逐根点
+    <b>「下一根」</b>，当场决定买 / 平，最后按 <b>R 值</b>结算。
+    <a href="backtest.html">← ECharts 版</a>
+  </div>
+
+  <div class="btk-error" id="btkLibError" style="display:none">
+    ⚠️ klinecharts 未加载成功（vendor/klinecharts.min.js）。检查文件是否部署，或浏览器控制台的加载错误。
+  </div>
+
+  <div class="btk-warn" id="btkDataWarn" style="display:none"></div>
+
+  <div class="btk-controlbar">
+    <div class="btk-sym-wrap">
+      <label>标的</label>
+      <input type="text" id="btkSymbol" placeholder="sh600519 或 600519" autocomplete="off">
+      <div class="btk-sym-list" id="btkSymList"></div>
+    </div>
+    <!-- 随机标的：从后端标的池（按总市值排序的前 3500 只）随机取一只并**直接开局**。
+         抽中时会顺带补全该标的最近缺失的交易日（后端 ensure=1）。 -->
+    <button type="button" class="btk-btn" id="btkRandomSymBtn"
+            title="从标的池（沪深 A 股市值前 3500 只）随机取一只并直接开始练习；抽中时会自动补全最近缺失的交易日">🔀 随机标的</button>
+    <!-- 练习轮次进度：已练 X / 池子总量，未练过的标的抽完之前不会重复抽到 -->
+    <span class="btk-universe-hint" id="btkUniverseHint"></span>
+    <div>
+      <label>历史范围</label>
+      <select id="btkYears" title="练习可用的历史数据长度。后端本地库统一保存 2016-01-04 起至今约 2600 根日 K，在此范围内任意裁剪">
+        <option value="1">近 1 年</option>
+        <option value="2">近 2 年</option>
+        <option value="3">近 3 年</option>
+        <option value="5">近 5 年</option>
+        <option value="7">近 7 年</option>
+        <option value="8">近 8 年</option>
+        <option value="10" selected>近 10 年</option>
+      </select>
+    </div>
+    <div>
+      <label>复权</label>
+      <select id="btkAdjust" title="默认前复权（价格贴近真实交易价）。⚠️ 前复权以最新价为基准向前缩放，在多年窗口下会把早期价格压到 0 以下（负价会让止损/R 值失真）——页面检测到负价会弹告警并提供一键切换。长周期练习建议改用「后复权」">
+        <option value="qfq" selected>前复权</option>
+        <option value="hfq">后复权</option>
+        <option value="raw">不复权</option>
+      </select>
+    </div>
+    <!-- 均线设置：最多 6 根，留空 = 该根不显示；色块可点开改色（默认色按要求预设） -->
+    <div class="btk-ma-group" id="btkMaGroup"
+         title="最多 6 根均线。数字＝周期，留空表示不显示该根；点色块可以改线色。默认色：黑 / 黄 / 浅灰 / 深灰 / 浅黄 / 深黄（暗色主题下过暗的颜色会自动提亮，否则深背景上看不见）">
+      <label>均线</label>
+      <span class="btk-ma-item"><input type="color" class="btk-ma-color" id="btkMaColor0" value="#000000" title="第 1 根均线颜色"><input type="number" class="btk-ma-len" id="btkMaP0" min="1" max="500" step="1" value="5" title="第 1 根均线周期"></span>
+      <span class="btk-ma-item"><input type="color" class="btk-ma-color" id="btkMaColor1" value="#ffd400" title="第 2 根均线颜色"><input type="number" class="btk-ma-len" id="btkMaP1" min="1" max="500" step="1" value="10" title="第 2 根均线周期"></span>
+      <span class="btk-ma-item"><input type="color" class="btk-ma-color" id="btkMaColor2" value="#c0c0c0" title="第 3 根均线颜色"><input type="number" class="btk-ma-len" id="btkMaP2" min="1" max="500" step="1" value="20" title="第 3 根均线周期"></span>
+      <span class="btk-ma-item"><input type="color" class="btk-ma-color" id="btkMaColor3" value="#666666" title="第 4 根均线颜色"><input type="number" class="btk-ma-len" id="btkMaP3" min="1" max="500" step="1" placeholder="—" title="第 4 根均线周期（留空不显示）"></span>
+      <span class="btk-ma-item"><input type="color" class="btk-ma-color" id="btkMaColor4" value="#ffe9a3" title="第 5 根均线颜色"><input type="number" class="btk-ma-len" id="btkMaP4" min="1" max="500" step="1" placeholder="—" title="第 5 根均线周期（留空不显示）"></span>
+      <span class="btk-ma-item"><input type="color" class="btk-ma-color" id="btkMaColor5" value="#c99700" title="第 6 根均线颜色"><input type="number" class="btk-ma-len" id="btkMaP5" min="1" max="500" step="1" placeholder="—" title="第 6 根均线周期（留空不显示）"></span>
+    </div>
+    <div>
+      <label>预热根数</label>
+      <select id="btkWarmup" title="起点之前保留多少根历史（供你看走势 + 让 MA/MACD/KDJ 在起点就有值）。注意它和「揭示根数」之和不能超过所选「历史范围」的根数">
+        <option value="60">60</option>
+        <option value="90">90</option>
+        <option value="120">120</option>
+      </select>
+    </div>
+    <div>
+      <label>揭示根数</label>
+      <select id="btkFuture" title="本局要一根一根推进的根数，也就是点「下一根」能点的次数上限（＝练习长度）。走满即结算；「全部揭示」也只到这条线。选「全部剩余」则从第 N 根（N=预热根数）一直练到数据末尾，起点固定、不随机">
+        <option value="60" selected>60</option>
+        <option value="90">90</option>
+        <option value="120">120</option>
+        <option value="200">200</option>
+        <option value="all">全部剩余</option>
+      </select>
+    </div>
+    <div>
+      <label>每笔金额</label>
+      <input type="number" id="btkAmount" step="10000" min="10000" value="200000">
+    </div>
+    <label class="btk-check">
+      <input type="checkbox" id="btkRandom" checked> 随机起点
+    </label>
+    <button type="button" class="btk-btn btk-btn-primary" id="btkStartBtn">🎲 开始 / 重开练习</button>
+  </div>
+
+  <div class="btk-main">
+    <div class="btk-chart-col">
+      <div class="btk-head" id="btkHead"></div>
+      <div class="btk-pane-wrap">
+        <div class="btk-pane" id="btkPane"></div>
+        <!-- hover 浮层：显示当日涨跌幅 / 量比（klinecharts 内置 tooltip 内容无法定制） -->
+        <div class="btk-hover-tip" id="btkHoverTip"></div>
+      </div>
+
+      <div class="btk-chips" id="btkChips"></div>
+
+      <div class="btk-actions">
+        <div class="btk-act-group">
+          <label>止损</label><input type="number" id="btkStopPct" step="0.5" min="0.5">%
+          <label style="margin-left:8px">止盈</label><input type="number" id="btkTargetR" step="0.5" min="0.5">R
+        </div>
+        <button type="button" class="btk-btn btk-btn-buy" id="btkBuyBtn">买入<span class="btk-kbd">B</span></button>
+        <button type="button" class="btk-btn btk-btn-close" id="btkCloseBtn">平仓<span class="btk-kbd">C</span></button>
+        <button type="button" class="btk-btn btk-btn-primary" id="btkNextBtn">下一根 ▶<span class="btk-kbd">空格</span></button>
+        <!-- 自动播放：每 0.2 秒自动点一次「下一根」，再点一下暂停。
+             手动单步 / 买入平仓 / 全部揭示 / 重开一局时会自动停，避免定时器跑到别的局上 -->
+        <button type="button" class="btk-btn" id="btkAutoBtn"
+                title="自动播放：每 0.2 秒推进一根，再点一下暂停（点「下一根」也会暂停）">▶ 自动</button>
+        <button type="button" class="btk-btn" id="btkFinishBtn">结束并结算</button>
+        <button type="button" class="btk-btn" id="btkAllBtn" title="练习中：一键揭示到本局上限（不会越过「揭示根数」，防偷看未来）；结算后：再看完整走势做复盘">全部揭示</button>
+      </div>
+
+      <div class="btk-progress"><div id="btkProgressBar"></div></div>
+      <div class="btk-progress-text" id="btkProgressText">未开始</div>
+
+      <div class="btk-settle" id="btkSettle" style="display:none"></div>
+    </div>
+
+    <aside class="btk-side">
+      <div class="btk-card">
+        <div class="btk-card-title">💼 当前持仓</div>
+        <div id="btkPosition"></div>
+      </div>
+      <div class="btk-card">
+        <div class="btk-card-title">📈 本局统计（按 R 计）</div>
+        <div id="btkStats" class="btk-stat-grid"></div>
+      </div>
+      <div class="btk-card">
+        <!-- 累计战绩：只统计本版（klinecharts）的局。两版共用同一份 backtest_history，
+             但玩法差异太大（逐根揭示 + R 计法 vs 全量回测看收益），混在一起平均没意义。
+             聚合口径在 utils.js 的 btHistoryAggregate(list, engine) -->
+        <div class="btk-card-title">
+          <span>🏆 累计战绩<em class="btk-career-tag"
+                title="只统计本版（klinecharts）的局。两版共用一份历史记录，但累计战绩分开算，互不混入">Klinecharts 版</em></span>
+          <button type="button" class="btk-mini-btn" onclick="btkRenderCareer()"
+                  title="从回测历史重新统计（只算本版的局）">刷新</button>
+        </div>
+        <div id="btkCareer" class="btk-stat-grid"><div class="btk-muted" style="grid-column:1/-1">统计中…</div></div>
+      </div>
+      <div class="btk-card">
+        <div class="btk-card-title">📋 交易记录</div>
+        <div id="btkTrades" class="btk-trades"></div>
+      </div>
+      <div class="btk-card">
+        <div class="btk-card-title">
+          <span>🔧 诊断日志</span>
+          <button type="button" class="btk-mini-btn" onclick="var el=document.getElementById('btkLog'); if(el) el.innerHTML='';">清空</button>
+        </div>
+        <div class="btk-log" id="btkLog"></div>
+      </div>
+    </aside>
+  </div>
+
+</div>
+
+<!-- klinecharts v10：本地 vendor（锁死 10.0.2，避免 CDN 给到缺少 setDataLoader 的版本） -->
+<script src="vendor/klinecharts.min.js"></script>
+<script src="js/utils.js?v=12"></script>
+<script src="js/header.js?v=19"></script>
+<script>renderAppHeader('backtest');</script>
+<script src="js/sync.js?v=12"></script>
+<script src="js/store.js?v=2"></script>
+<script src="js/ui.js?v=5"></script>
+<script src="js/backtest-kc.js?v=38"></script>
+
+<script>
+// 主题初始化（与 backtest.html / diary2.html 一致）
+(function() {
+  var saved = localStorage.getItem('app_theme');
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+</script>
+
+</body>
+</html>

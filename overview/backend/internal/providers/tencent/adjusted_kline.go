@@ -23,12 +23,17 @@ func (c *Client) AdjustedKLine(ctx context.Context, symbol string, limit int) ([
 		Code int `json:"code"`
 		Data map[string]struct {
 			QFQDay [][]any `json:"qfqday"`
+			// newfqkline 这个端点即使带 qfq 参数，返回的 key 也是 day
+			Day [][]any `json:"day"`
 		} `json:"data"`
 	}
 	if err := c.getJSON(ctx, requestURL, &payload); err != nil {
 		return nil, err
 	}
 	rows := payload.Data[normalized.Sina].QFQDay
+	if len(rows) == 0 {
+		rows = payload.Data[normalized.Sina].Day
+	}
 	if payload.Code != 0 || len(rows) == 0 {
 		return nil, fmt.Errorf("tencent adjusted history unavailable")
 	}

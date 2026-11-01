@@ -12,6 +12,7 @@
     "@fontsource/inter": "^5.3.0",
     "@vitejs/plugin-react": "^5.0.4",
     "html2canvas": "^1.4.1",
+    "klinecharts": "^10.0.2",
     "lucide-react": "^0.545.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

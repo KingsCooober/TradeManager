@@ -103,6 +103,7 @@ type Server struct {
 	startupError             error
 	logger                   *log.Logger
 	tokenUsage               *tokenUsageStore
+	localReportsDB           string
 }
 
 func NewServer(config any) *Server {
@@ -339,6 +340,7 @@ func NewServer(config any) *Server {
 		etfDirectionMarket: cfg.ETFDirectionMarket, etfExecution: cfg.ETFExecution, etfProvider: cfg.ETF, etfKLinePrimary: cfg.ETFKLinePrimary, etfKLineFallback: cfg.ETFKLineFallback,
 		mux:                      http.NewServeMux(),
 		token:                    cfg.Token,
+		localReportsDB:           resolveLocalReportsDBPath(cfg.LocalReportsDBPath),
 		realtimeProvider:         cfg.Realtime,
 		kLinePrimary:             cfg.KLinePrimary,
 		kLineFallback:            cfg.KLineFallback,
@@ -617,6 +619,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/research/institution-reports", s.marketInstitutionReportsHandler)
 	s.mux.HandleFunc("GET /api/v1/research/industries", s.marketIndustryResearchHandler)
 	s.mux.HandleFunc("GET /api/v1/research/report-content", s.marketReportContentHandler)
+	// 本地研报库（research-hub 的 research.db）：研报库界面下线后，正文检索并入本应用
+	s.mux.HandleFunc("GET /api/v1/research/local-reports", s.localReportsHandler)
+	s.mux.HandleFunc("GET /api/v1/research/local-report", s.localReportContentHandler)
+	s.mux.HandleFunc("GET /api/v1/research/local-report-industries", s.localReportIndustriesHandler)
 	s.mux.HandleFunc("GET /api/v1/research/announcement-content", s.marketAnnouncementContentHandler)
 	s.mux.HandleFunc("GET /api/v1/themes/overview", s.themeOverviewHandler)
 	s.mux.HandleFunc("GET /api/v1/themes/index", s.themeIndexHandler)

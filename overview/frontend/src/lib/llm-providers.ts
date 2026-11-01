@@ -25,6 +25,10 @@ export const llmProviders: LLMProviderDefinition[] = [
 	},
 	{ id: 'qwen', label: '通义千问（百炼）', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', defaultModel: 'qwen-plus', apiMode: 'codex_responses' },
 	{ id: 'siliconflow', label: '硅基流动', baseURL: 'https://api.siliconflow.cn/v1', defaultModel: '', apiMode: 'codex_responses' },
+	// 小米 MiMo：官方主站 api.xiaomimimo.com 走按量付费（sk- key）；
+	// Token Plan 用户实际用的是 token-plan-cn.xiaomimimo.com（tp- key），
+	// 后者不是这里的默认地址，切换协议时会被原样保留（见 llmBaseURLForAPIMode）。
+	{ id: 'xiaomi', label: '小米 MiMo', baseURL: 'https://api.xiaomimimo.com/v1', defaultModel: 'mimo-v2.6-flash', apiMode: 'codex_responses' },
 	{ id: 'anthropic', label: 'Anthropic', baseURL: 'https://api.anthropic.com', defaultModel: 'claude-3-5-haiku-latest', apiMode: 'anthropic_messages' },
 	{ id: 'custom', label: 'OpenAI 兼容接口', baseURL: '', defaultModel: '', apiMode: 'codex_responses' },
 ];

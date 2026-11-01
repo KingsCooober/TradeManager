@@ -37,6 +37,8 @@ type Props = {
 	refreshKey: number;
 	initialPrompt?: string;
 	initialAnalysisID?: string;
+	/** 外部入口（行情页「交给 AI 解读」、心法、个股分析）每次带 prompt 进来时，另起一个新对话 */
+	forceNewConversation?: boolean;
 	onInitialPromptConsumed?: () => void;
 	onOpenSettings: () => void;
 };
@@ -66,7 +68,7 @@ const starterPrompts = [
 	'帮我设计今天的复盘清单，区分事实、预期与明日验证条件。',
 ];
 
-export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnalysisID, onInitialPromptConsumed, onOpenSettings }: Props) {
+export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnalysisID, forceNewConversation, onInitialPromptConsumed, onOpenSettings }: Props) {
 	const [conversations, setConversations] = useState<ChatConversation[]>(() => {
 		try {
 			return loadStoredConversations();
@@ -126,15 +128,25 @@ export function AIChatWorkspace({ config, refreshKey, initialPrompt, initialAnal
 	useEffect(() => {
 		const prompt = initialPrompt?.trim();
 		if (!prompt) return;
+		// 2026-10-20：从行情页 / 心法 / 个股分析带 prompt 过来时，一律新开一个对话。
+		// 否则「解读 A 研报」「解读 B 研报」会串在同一个 session 里，
+		// 上一轮上下文污染这一轮，而且越滚越长，token 全花在历史里。
 		if (initialAnalysisID) {
+			// 绑定分析报告：必须先建会话，把 analysis_id 存进去
 			abortRef.current?.abort();
 			const conversation = { ...createChatConversation(), analysis_id: initialAnalysisID };
-			setConversations((current) => [conversation, ...current]); setActiveID(conversation.id);
+			setConversations((current) => [conversation, ...current]);
+			setActiveID(conversation.id);
+		} else if (forceNewConversation) {
+			// 普通提问：只清空当前会话指针，等用户点发送时再真正建会话。
+			// 这样点了几次没发出去也不会留一堆空会话。
+			abortRef.current?.abort();
+			setActiveID('');
 		}
 		setDraft(prompt);
 		window.setTimeout(() => textareaRef.current?.focus(), 0);
 		onInitialPromptConsumed?.();
-	}, [initialPrompt, initialAnalysisID, onInitialPromptConsumed]);
+	}, [initialPrompt, initialAnalysisID, forceNewConversation, onInitialPromptConsumed]);
 
 	useEffect(() => {
 		const textarea = textareaRef.current;

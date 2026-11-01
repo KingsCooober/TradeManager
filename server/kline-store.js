@@ -98,6 +98,52 @@ function initStore() {
     if (!cols.some(c => c.name === 'adjust')) {
       await dbRun("ALTER TABLE stock_meta ADD COLUMN adjust TEXT DEFAULT 'qfq'");
     }
+    // ★ qfq_bad：该标的的**前复权**数据被判定为不可用（有负价或假跳空），
+    //   库内实际存的是后复权。
+    //   为什么要单列标记：前端默认请求 qfq，若只靠 adjust 列判断"口径不匹配"，
+    //   这类标的每次访问都会回源重拉（实测 550~1900ms），预灌的库等于白建。
+    //   有了这个标记，qfq 请求可以直接命中库内 hfq 数据并如实告知前端"实际用的是后复权"。
+    if (!cols.some(c => c.name === 'qfq_bad')) {
+      await dbRun("ALTER TABLE stock_meta ADD COLUMN qfq_bad INTEGER DEFAULT 0");
+      // 存量回填：本次迁移前落库的 hfq 都是 auto 择优的结果（即 qfq 有瑕疵）
+      await dbRun("UPDATE stock_meta SET qfq_bad = 1 WHERE adjust = 'hfq'");
+    }
+    // 一致性：qfq_bad 只在"库内是 hfq"时有意义。
+    // 数据源重新拉取后 qfq 可能恢复正常（本次就出现过：工行整只覆盖成 qfq 后标记还留着 1），
+    // 这种矛盾状态会让 qfqFallback 判断混乱 —— 每次启动清一次，幂等且开销可忽略。
+    await dbRun("UPDATE stock_meta SET qfq_bad = 0 WHERE adjust <> 'hfq' AND qfq_bad <> 0");
+
+    // ★ 回测标的池（2026-10 新增）：
+    //   按**建池当时的**总市值排名固定下来的前 N 只 A 股。
+    //   为什么不直接用 stock_meta.mcap_yi 排序？
+    //     1) 市值每次刷新都在变，名单跟着抖，"前 3500 只"不是一个稳定集合，
+    //        今天灌满的数据明天可能就有一批掉出名单、白白占几个 GB；
+    //     2) 预热脚本要能断点续跑，名单必须可枚举、可比较进度；
+    //     3) 随机按钮要的是"这个池子里的票"，而不是"此刻市值最大的票"。
+    //   所以单独一张表，只在显式重建（build-universe.js）时整体替换。
+    await dbRun(`CREATE TABLE IF NOT EXISTS bt_universe (
+      symbol      TEXT PRIMARY KEY,
+      rank        INTEGER NOT NULL,     -- 建池时的市值排名（1 = 最大）
+      name        TEXT,
+      mcap_yi     REAL DEFAULT 0,       -- 建池时的总市值（亿元）
+      built_at    TEXT,                 -- 本次建池时间（ISO）
+      drawn_count INTEGER DEFAULT 0,    -- ★ 已练次数（练习轮次标记）
+      drawn_at    TEXT                  -- ★ 最近一次真正开局的时间（ISO）
+    )`);
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_bt_universe_rank ON bt_universe(rank)');
+    // ★ 迁移：老库的 bt_universe 没有 drawn_count/drawn_at。
+    //   语义见 randomUniverseSymbol 的注释：drawn_count 是"这只标的被练过几次"，
+    //   随机抽取永远优先挑 drawn_count 最小的那一档，
+    //   于是整个池子会被一轮一轮地过完，而不是反复抽到同一批。
+    const ucols = await dbAll('PRAGMA table_info(bt_universe)');
+    if (!ucols.some(c => c.name === 'drawn_count')) {
+      await dbRun('ALTER TABLE bt_universe ADD COLUMN drawn_count INTEGER DEFAULT 0');
+      await dbRun('UPDATE bt_universe SET drawn_count = 0');
+    }
+    if (!ucols.some(c => c.name === 'drawn_at')) {
+      await dbRun('ALTER TABLE bt_universe ADD COLUMN drawn_at TEXT');
+    }
+    await dbRun('CREATE INDEX IF NOT EXISTS idx_bt_universe_drawn ON bt_universe(drawn_count)');
     return true;
   })().catch(function (e) {
     console.error('[kline-store] 建表失败:', e.message);
@@ -133,8 +179,21 @@ async function loadKLine(symbol, count, fromDate) {
   return {
     dates:   rows.map(r => r.date),
     ohlc:    rows.map(r => [r.open, r.close, r.low, r.high]),
-    volumes: rows.map(r => Math.round(r.amount || 0)),
+    // ★ 成交量：volumes / volumesRaw 都返回「手」（实际手数，整数），与 market-quote
+    //   buildKLineSnapshot 的出口口径完全一致。「万手」这个单位已经从数据层彻底移除 ——
+    //   只要数据层还给万手，展示层迟早会再掉一次精度（先 2 位小数再 toFixed(0)）。
+    //   库内 volume 列是手（真值）；早期落库的行 volume 是 NULL，
+    //   用 amount（万手）× 10000 兜底还原成手。
+    volumes:    rows.map(_rowVolumeHand),
+    volumesRaw: rows.map(_rowVolumeHand),
   };
+}
+
+/** 单行成交量 → 手（整数）。兼容 volume 为 NULL 的老数据。 */
+function _rowVolumeHand(r) {
+  if (r.volume != null && Number(r.volume) > 0) return Math.round(Number(r.volume));
+  if (r.amount != null && Number(r.amount) > 0) return Math.round(Number(r.amount) * 10000);
+  return 0;
 }
 
 /** 读元信息 */
@@ -194,12 +253,13 @@ async function replaceKLine(symbol, data, meta) {
   const dates = (data && data.dates) || [];
   const ohlc  = (data && data.ohlc) || [];
   const vols  = (data && data.volumes) || [];
+  const volsRaw = (data && data.volumesRaw) || [];   // 成交量原始值（手），用于落 volume 字段
   if (!dates.length) return { inserted: 0 };
 
   await withTransaction(async function () {
     await _runInTransaction(async function () {
       await dbRun('DELETE FROM stock_kline WHERE symbol = ?', [symbol]);
-      await _bulkInsert(symbol, dates, ohlc, vols);
+      await _bulkInsert(symbol, dates, ohlc, vols, volsRaw);
     });
   });
 
@@ -225,6 +285,7 @@ async function appendKLine(symbol, data, meta) {
   const dates = (data && data.dates) || [];
   const ohlc  = (data && data.ohlc) || [];
   const vols  = (data && data.volumes) || [];
+  const volsRaw = (data && data.volumesRaw) || [];   // 成交量原始值（手），用于落 volume 字段
   if (!dates.length) return { inserted: 0 };
 
   const lastRow = await dbGet('SELECT MAX(date) AS d FROM stock_kline WHERE symbol = ?', [symbol]);
@@ -235,10 +296,11 @@ async function appendKLine(symbol, data, meta) {
   if (!nDates.length) return { inserted: 0 };
   const nOhlc = ohlc.slice(idx);
   const nVols = vols.slice(idx);
+  const nVolsRaw = volsRaw.slice(idx);
 
   await withTransaction(async function () {
     await _runInTransaction(async function () {
-      await _bulkInsert(symbol, nDates, nOhlc, nVols);
+      await _bulkInsert(symbol, nDates, nOhlc, nVols, nVolsRaw);
     });
   });
 
@@ -256,7 +318,7 @@ async function appendKLine(symbol, data, meta) {
 }
 
 /** 内部：批量插入（单条 SQL 多 VALUES，比逐条快一个数量级） */
-async function _bulkInsert(symbol, dates, ohlc, vols) {
+async function _bulkInsert(symbol, dates, ohlc, vols, volsRaw) {
   const CHUNK = 200;   // 分批，避免 SQL 语句过长
   for (let i = 0; i < dates.length; i += CHUNK) {
     const vals = [];
@@ -264,14 +326,23 @@ async function _bulkInsert(symbol, dates, ohlc, vols) {
     const end = Math.min(i + CHUNK, dates.length);
     for (let k = i; k < end; k++) {
       const o = ohlc[k] || [];
+      // ★ 上游（buildKLineSnapshot）现在给的 vols / volsRaw **都是「手」**。
+      //   库内两列的分工：
+      //     volume = 实际手数（整数，唯一真值，前端与统计都用它）
+      //     amount = 手数 / 10000（万手，2 位小数）—— 仅为了兼容历史 SQL 与 repair 脚本的
+      //              阈值判断（amount > 100000 之类），列名是历史遗留，其实不是成交额
+      //   早先两列一个是万手一个是手，调用方经常拿错，这里显式派生一次，不再靠上游传两个单位。
+      const vHand = (volsRaw && Number(volsRaw[k]) > 0)
+        ? Math.round(Number(volsRaw[k]))
+        : (vols[k] != null ? Math.round(Number(vols[k]) || 0) : 0);
       vals.push('(?,?,?,?,?,?,?,?)');
       params.push(symbol, dates[k],
         o[0] != null ? o[0] : null,   // open
         o[1] != null ? o[1] : null,   // close
         o[2] != null ? o[2] : null,   // low
         o[3] != null ? o[3] : null,   // high
-        null,                          // volume（上游 amount 已够用，volume 字段留空）
-        vols[k] != null ? vols[k] : 0  // amount
+        vHand > 0 ? vHand : null,                 // volume（手）
+        vHand > 0 ? Math.round(vHand / 100) / 100 : 0   // amount（万手，兼容列）
       );
     }
     await dbRun(
@@ -287,7 +358,7 @@ async function _upsertMeta(symbol, f) {
   if (exist) {
     const sets = [];
     const params = [];
-    ['name', 'bar_count', 'first_date', 'last_date', 'last_sync', 'last_full_sync', 'adjust'].forEach(function (k) {
+    ['name', 'bar_count', 'first_date', 'last_date', 'last_sync', 'last_full_sync', 'adjust', 'qfq_bad'].forEach(function (k) {
       if (f[k] !== undefined) { sets.push(k + ' = ?'); params.push(f[k]); }
     });
     if (!sets.length) return;
@@ -295,11 +366,11 @@ async function _upsertMeta(symbol, f) {
     await dbRun('UPDATE stock_meta SET ' + sets.join(', ') + ' WHERE symbol = ?', params);
   } else {
     await dbRun(
-      'INSERT INTO stock_meta (symbol,name,mcap_yi,bar_count,first_date,last_date,last_sync,last_full_sync,adjust) VALUES (?,?,?,?,?,?,?,?,?)',
+      'INSERT INTO stock_meta (symbol,name,mcap_yi,bar_count,first_date,last_date,last_sync,last_full_sync,adjust,qfq_bad) VALUES (?,?,?,?,?,?,?,?,?,?)',
       [symbol, f.name || null, f.mcap_yi || 0, f.bar_count || 0,
        f.first_date || null, f.last_date || null,
        f.last_sync || null, f.last_full_sync || null,
-       f.adjust || 'qfq']
+       f.adjust || 'qfq', f.qfq_bad ? 1 : 0]
     );
   }
 }
@@ -418,6 +489,268 @@ async function getWarmupCandidates(minMcapYi, limit) {
   return await dbAll(sql, lim > 0 ? [threshold, lim] : [threshold]);
 }
 
+// ---------- 回测标的池（bt_universe） ----------
+
+/**
+ * 整体替换标的池（先清空再写入，单事务）。
+ * @param {Array<{symbol,rank,name,mcap_yi}>} list
+ * @returns {Promise<number>} 写入条数
+ */
+async function saveUniverse(list) {
+  await initStore();
+  if (!Array.isArray(list) || !list.length) throw new Error('标的池为空，拒绝覆盖');
+  const builtAt = new Date().toISOString();
+  // ★ 重建池子必须保住"已练次数"标记。
+  //   saveUniverse 是 DELETE + INSERT，如果不显式抢救，
+  //   每次重跑 build-universe.js 都会把练习进度清零、
+  //   已经练过的票全部重新回到"未练"档 —— 用户会以为标记功能坏了。
+  const prev = await dbAll(
+    'SELECT symbol, drawn_count, drawn_at FROM bt_universe WHERE COALESCE(drawn_count,0) > 0');
+  const keep = new Map();
+  prev.forEach(function (r) { keep.set(r.symbol, r); });
+  await withTransaction(async function () {
+    await _runInTransaction(async function () {
+      await dbRun('DELETE FROM bt_universe');
+      // 逐条 INSERT：3500 条在单事务内约 100~200ms，不必拼多值语句
+      for (const it of list) {
+        await dbRun(
+          'INSERT OR REPLACE INTO bt_universe (symbol, rank, name, mcap_yi, built_at, drawn_count, drawn_at) VALUES (?,?,?,?,?,?,?)',
+          [it.symbol, it.rank || 0, it.name || null, it.mcap_yi || 0, builtAt,
+           it.drawn_count || 0, it.drawn_at || null]
+        );
+      }
+      // 池子里仍在的标的，把旧标记回填进去
+      // （只遍历 keep：掉出名单的标的自然就丢掉标记了，不必逐条试）
+      let restored = 0;
+      for (const [sym, old] of keep) {
+        const r = await dbRun('UPDATE bt_universe SET drawn_count = ?, drawn_at = ? WHERE symbol = ?',
+          [old.drawn_count || 0, old.drawn_at || null, sym]);
+        if (r && r.changes) restored++;
+      }
+      if (restored) console.log('[kline-store] 重建标的池时保留了 ' + restored + ' 只的练习标记');
+    });
+  });
+  return list.length;
+}
+
+/**
+ * 按排名取池子（LEFT JOIN stock_meta 带出入库状态，供预热脚本判断跳过）
+ * @param {number} limit 0/空 = 全部
+ */
+async function getUniverse(limit) {
+  await initStore();
+  const lim = limit == null ? 0 : Number(limit);
+  const sql = `SELECT u.symbol, u.rank, u.name, u.mcap_yi,
+                      COALESCE(u.drawn_count,0) AS drawn_count, u.drawn_at,
+                      m.bar_count, m.first_date, m.last_date, m.adjust,
+                      m.last_sync, m.last_full_sync
+               FROM bt_universe u
+               LEFT JOIN stock_meta m ON m.symbol = u.symbol
+               ORDER BY u.rank ASC` + (lim > 0 ? ' LIMIT ?' : '');
+  return await dbAll(sql, lim > 0 ? [lim] : []);
+}
+
+/**
+ * 从池子里随机抽一只。
+ *
+ * ★ 为什么要 minBars 而不是纯 RANDOM()：
+ *   池子按市值排名，里面既有茅台这种 2600 根的老股，也有上个月刚上市的
+ *   大盘新股（只有 20 根）。抽到新股回测页直接报"数据不够"，
+ *   随机按钮就成了"随机报错"。
+ *   所以先只在「已入库且根数够」的子集里抽；子集为空才放宽到全池子。
+ *
+ * ★ 为什么还要「数据新鲜」这一条（maxStaleDays）：
+ *   池子里有停牌股/退市整理股（last_date 停在几个月前）。抽到它们时，
+ *   上游根本拉不到新数据，同步补数会一路重试到超时（实测 8s+），
+ *   表现就是"点了随机按钮，转圈十秒没反应"。
+ *   随机练习本来就不该拿停牌股练 —— 直接排除，比"抽到了再去补"体验好得多。
+ *   （手动输入代码的场景不受影响，那条路走 kline-stock 的惰性同步）
+ *
+ * @param {object} o
+ * @param {string[]} o.exclude 排除的 symbol（避免连点两次抽到同一只）
+ * @param {number} o.minBars   最少根数（默认 0 = 不限）
+ * @param {number} o.maxStaleDays 数据最旧容忍天数（默认 4，覆盖周末）
+ * @returns {Promise<object|null>}
+ */
+async function randomUniverseSymbol(o) {
+  await initStore();
+  o = o || {};
+  const exclude = Array.isArray(o.exclude)
+    ? o.exclude.map(s => String(s).toLowerCase()).filter(s => /^(sh|sz|bj)\d{6}$/.test(s)).slice(0, 50)
+    : [];
+  const minBars = Math.max(0, Number(o.minBars) || 0);
+  const staleDays = (o.maxStaleDays == null) ? 4 : Math.max(0, Number(o.maxStaleDays));
+  const exSql = exclude.length ? ' AND u.symbol NOT IN (' + exclude.map(() => '?').join(',') + ')' : '';
+  // 新鲜度条件写成 SQL 片段，三轮逐级放宽
+  const freshSql = staleDays > 0
+    ? " AND m.last_date >= date('now','localtime','-" + staleDays + " day')"
+    : '';
+  const base = `SELECT u.symbol, u.rank, u.name, u.mcap_yi,
+                       COALESCE(m.bar_count,0) AS bar_count, m.first_date, m.last_date, m.adjust,
+                       COALESCE(u.drawn_count,0) AS drawn_count, u.drawn_at
+                FROM bt_universe u
+                LEFT JOIN stock_meta m ON m.symbol = u.symbol
+                WHERE 1=1` + exSql;
+
+  // ★ ORDER BY 的顺序就是"练习轮次"的全部实现：
+  //   drawn_count 升序 → 永远先抽没练过的（=0），0 档抽空了自然落到 1 档，
+  //   1 档抽空落到 2 档……「所有标的都被标记才允许重复」不需要额外判断。
+  //   RANDOM() 作为第二排序键：同一档内部仍是随机的。
+  //   注意不能在 SQL 里先 ORDER BY RANDOM() 再挑，那样会退化成纯随机。
+  const orderSql = ' ORDER BY COALESCE(u.drawn_count,0) ASC, RANDOM() LIMIT 1';
+
+  // 第一轮：根数够 + 数据新鲜
+  if (minBars > 0 || freshSql) {
+    let row = await dbGet(base + ' AND COALESCE(m.bar_count,0) >= ?' + freshSql + orderSql,
+      exclude.concat([minBars]));
+    if (row) return row;
+  }
+  // 第二轮：放宽根数，仍要求新鲜（新股/短历史也可以练短局）
+  if (freshSql) {
+    const row2 = await dbGet(base + freshSql + ' AND COALESCE(m.bar_count,0) > 0' + orderSql, exclude);
+    if (row2) return row2;
+  }
+  // 第三轮：彻底放宽（池子刚建、还没灌数据时就是这种状态）
+  const row3 = await dbGet(base + orderSql, exclude);
+  return row3 || null;
+}
+
+/**
+ * 给一只标的打"已练"标记（drawn_count + 1）。
+ *
+ * ★ drawn_count 的语义不是"练了几次"，而是"这只票被练到了第几轮"。
+ *   所以只有处在**最低档**的标的才允许 +1：
+ *
+ *     min = 池内最小 drawn_count
+ *     若 该标的 drawn_count <= min  →  +1
+ *     否则不动（它已经领先于当前轮次了）
+ *
+ *   这条规则顺带解决了两件事：
+ *   ① 页面刷新 / 反复加载同一只票不会把它的标记顶到天上
+ *      （第一次 0→1，第二次因为 1 > min 0 就不再加）；
+ *   ② 「所有标的都被标记才允许重复」自动成立 ——
+ *      只要池里还有 0 档的票，min 就是 0，1 档的票怎么练都不涨。
+ *
+ * ★ 什么时候调用：
+ *   在**前端真正开局成功之后**调（K 线加载完成），不是抽中那一刻。
+ *   抽中但加载失败（停牌/接口抖动）不该消耗掉这只票 ——
+ *   否则池子里的票会被"抽掉"却没真正练过。
+ *
+ * @param {string} symbol
+ * @returns {Promise<{symbol:string, drawnCount:number, bumped:boolean}|null>}
+ */
+async function markUniverseDrawn(symbol) {
+  await initStore();
+  const sym = String(symbol || '').trim().toLowerCase();
+  if (!/^(sh|sz|bj)\d{6}$/.test(sym)) return null;
+  const row = await dbGet(
+    `SELECT COALESCE(drawn_count,0) AS c,
+            (SELECT MIN(COALESCE(drawn_count,0)) FROM bt_universe) AS m
+     FROM bt_universe WHERE symbol = ?`, [sym]);
+  if (!row) return null;                       // 不在池内（手动输入的池外标的）
+  const cur = row.c || 0;
+  const min = row.m || 0;
+  if (cur > min) {
+    // 已经领先当前轮次 → 只刷新时间，不涨次数
+    await dbRun('UPDATE bt_universe SET drawn_at = ? WHERE symbol = ?', [new Date().toISOString(), sym]);
+    return { symbol: sym, drawnCount: cur, bumped: false };
+  }
+  await dbRun(
+    'UPDATE bt_universe SET drawn_count = COALESCE(drawn_count,0) + 1, drawn_at = ? WHERE symbol = ?',
+    [new Date().toISOString(), sym]);
+  return { symbol: sym, drawnCount: cur + 1, bumped: true };
+}
+
+/**
+ * 批量回填"已练"标记（把历史回测记录里出现过的标的补上标记）。
+ *
+ * ★ 回填只保证"至少 1"（历史记录分不清当时是第几轮），
+ *   用 MAX(drawn_count,1) 而不是累加 —— 累加会让一只练过 5 次的票
+ *   直接跳到第 6 档，把整个池子的轮次顺序打乱。
+ *
+ * @param {string[]} symbols
+ * @returns {Promise<{scanned:number, marked:number}>}
+ */
+async function markUniverseDrawnBatch(symbols) {
+  await initStore();
+  const list = (Array.isArray(symbols) ? symbols : [])
+    .map(s => String(s || '').trim().toLowerCase())
+    .filter(s => /^(sh|sz|bj)\d{6}$/.test(s));
+  if (!list.length) return { scanned: 0, marked: 0 };
+  const uniq = Array.from(new Set(list));
+  let marked = 0;
+  const now = new Date().toISOString();
+  for (const sym of uniq) {
+    const r = await dbRun(
+      'UPDATE bt_universe SET drawn_count = MAX(COALESCE(drawn_count,0), 1), drawn_at = COALESCE(drawn_at, ?) WHERE symbol = ?',
+      [now, sym]);
+    if (r && r.changes) marked++;
+  }
+  return { scanned: uniq.length, marked: marked };
+}
+
+/**
+ * 池子覆盖率统计（给运维/前端展示用）
+ */
+async function getUniverseStats() {
+  await initStore();
+  const u = await dbGet(`SELECT COUNT(*) AS total, MIN(rank) AS min_rank, MAX(rank) AS max_rank,
+                                MAX(built_at) AS built_at,
+                                SUM(CASE WHEN COALESCE(drawn_count,0) > 0 THEN 1 ELSE 0 END) AS drawn,
+                                MAX(COALESCE(drawn_count,0)) AS max_drawn,
+                                MIN(COALESCE(drawn_count,0)) AS min_drawn,
+                                SUM(COALESCE(drawn_count,0)) AS drawn_total,
+                                (SELECT COUNT(*) FROM bt_universe b
+                                  WHERE COALESCE(b.drawn_count,0) =
+                                        (SELECT MIN(COALESCE(drawn_count,0)) FROM bt_universe)) AS remaining
+                         FROM bt_universe`);
+  if (!u || !u.total) {
+    return { total: 0, loaded: 0, full: 0, fresh: 0, builtAt: null, latestDate: null, bars: 0,
+             drawn: 0, untouched: 0, drawnTotal: 0, round: 1, remaining: 0 };
+  }
+  // ★ "完整"的口径不能只看 bar_count >= 2500：
+  //   2016 之后上市的股票（如宁德时代 2018-06 上市只有 2029 根）永远达不到 2500，
+  //   会被误判成"没灌满"，进度条永远到不了 100%。
+  //   正确口径 = 覆盖窗口起点(2016-01-04) 且最新日期新鲜；
+  //   或 上市晚于窗口起点、但根数与该股上市以来应有的交易日数相当（0.6 倍宽松阈值，
+  //   容忍长期停牌股）。julianday 差值 × 0.6 ≈ 每年 219 根，正常股 243 根/年必然通过。
+  const c = await dbGet(`
+    SELECT SUM(CASE WHEN COALESCE(m.bar_count,0) > 0    THEN 1 ELSE 0 END) AS loaded,
+           SUM(CASE WHEN COALESCE(m.bar_count,0) >= 150 THEN 1 ELSE 0 END) AS usable,
+           SUM(COALESCE(m.bar_count,0)) AS bars,
+           SUM(CASE WHEN m.first_date IS NOT NULL
+                     AND m.last_date >= date('now','localtime','-4 day')
+                     AND (m.first_date <= '2016-01-04'
+                          OR m.bar_count >= (julianday('now','localtime') - julianday(m.first_date)) * 0.6)
+               THEN 1 ELSE 0 END) AS full
+    FROM bt_universe u LEFT JOIN stock_meta m ON m.symbol = u.symbol`);
+  // 池内最新数据日期：拿 stock_kline 里池内标的的最大日期
+  const d = await dbGet(`
+    SELECT MAX(k.date) AS latest
+    FROM stock_kline k
+    WHERE k.symbol IN (SELECT symbol FROM bt_universe)`);
+  return {
+    total: u.total || 0,
+    loaded: (c && c.loaded) || 0,
+    full: (c && c.full) || 0,        // 覆盖 2016-01-04 且最新（含 2016 后上市但上市起完整）
+    usable: (c && c.usable) || 0,    // ≥150 根，够开一局
+    bars: (c && c.bars) || 0,
+    builtAt: u.built_at || null,
+    latestDate: (d && d.latest) || null,
+    // ---- 练习轮次（drawn_count 标记）----
+    drawn: (u && u.drawn) || 0,               // 池内已被练过的只数
+    untouched: ((u && u.total) || 0) - ((u && u.drawn) || 0),  // 还没练过的只数
+    drawnTotal: (u && u.drawn_total) || 0,    // 累计练习次数
+    // ★ 「当前第几轮」要用 MIN 而不是 MAX：
+    //   MIN = 池子里练得最少的那一档，也就是**正在抽的那一轮**。
+    //   用 MAX 会错得离谱 —— 刚开始练了 20 只（都是 1）时，max=1 会显示"第 2 轮"，
+    //   实际才第 1 轮（还有 3480 只没练过）。
+    round: ((u && u.min_drawn) || 0) + 1,
+    remaining: (u && u.remaining) || 0,       // 当前这一轮还剩多少只没练过
+  };
+}
+
+
 /**
  * 判断本地库该标的是否覆盖了目标历史窗口。
  * 对老股票要求至少 targetBars 根；上市较晚的股票以首根上市日期判断，
@@ -457,6 +790,12 @@ module.exports = {
   appendKLine,
   upsertMetaBatch,
   getWarmupCandidates,
+  saveUniverse,
+  getUniverse,
+  randomUniverseSymbol,
+  markUniverseDrawn,
+  markUniverseDrawnBatch,
+  getUniverseStats,
   isFresh,
   isUpToDate,
   isCoverageEnough,

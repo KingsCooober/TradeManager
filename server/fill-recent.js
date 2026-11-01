@@ -43,40 +43,19 @@ async function curlGet(url, retries = 3) {
   throw lastErr || new Error('curl 失败');
 }
 
-// 成交额数据源：优先复用本项目已验证的行情模块（Baostock → 腾讯兜底），
-// 东财 push2his 作为备份（该接口对服务器 IP 会限流返回空响应）
-async function fetchAmountByDate(days) {
-  // 1) 东财（快，但会被限流）
-  try {
-    const sh = await fetchEMKLine('1.000001', days);
-    const sz = await fetchEMKLine('0.399001', days);
-    if (Object.keys(sh).length && Object.keys(sz).length) return { sh: sh, sz: sz, src: 'eastmoney' };
-  } catch (e) {
-    console.log('  (东财成交额不可用: ' + e.message + '，改用行情模块)');
-  }
-  // 2) 本项目行情模块（Baostock → 腾讯）
-  const mq = require('./market-quote');
-  const shK = await mq.fetchKLine('sh000001', days);
-  const szK = await mq.fetchKLine('sz399001', days);
-  const sh = {}, sz = {};
-  shK.forEach(k => { sh[k.date] = k.amount / 1e8; });   // 元 → 亿元
-  szK.forEach(k => { sz[k.date] = k.amount / 1e8; });
-  return { sh: sh, sz: sz, src: 'market-quote(Baostock/腾讯)' };
-}
+// 成交额数据源：index-amount 模块（东财 push2his 优先 → Baostock 兜底）
+//
+// ★ 不要用 market-quote.fetchKLine 的 k.amount 算指数成交额：
+//   腾讯 day 数组是 [日期,开,收,高,低,成交量(手)]，**没有成交额字段**，
+//   k.amount 实际是「成交量(手)」，除以 1e8 会写出 4~10 亿这种差 1000 倍的脏数据
+//   （2026-10-08 / 10-14 就是这么被写坏的）。
+const indexAmount = require('./index-amount');
 
-async function fetchEMKLine(secid, count) {
-  const url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get' +
-    '?secid=' + secid + '&fields1=f1,f2,f3,f4,f5' +
-    '&fields2=f51,f52,f53,f54,f55,f56,f57,f58' +
-    '&klt=101&fqt=0&end=20991231&lmt=' + count;
-  const json = JSON.parse(await curlGet(url));
-  if (!json.data || !Array.isArray(json.data.klines)) throw new Error('K线无数据 secid=' + secid);
-  const out = {};
-  json.data.klines.forEach(line => {
-    const f = line.split(',');
-    out[f[0]] = (parseFloat(f[6]) || 0) / 1e8;   // 元 → 亿元
-  });
-  return out;
+async function fetchAmountByDate(days) {
+  const r = await indexAmount.fetchMarketAmountByDate(days);
+  const sh = {}, sz = {};
+  Object.keys(r.map).forEach(d => { sh[d] = r.map[d].sh; sz[d] = r.map[d].sz; });
+  return { sh: sh, sz: sz, src: r.src };
 }
 
 async function fetchMargin(days) {
@@ -128,6 +107,12 @@ async function fetchMargin(days) {
     const sets = [];
     if (needAmount) {
       const sh = shAmount[d], sz = szAmount[d];
+      // ★ 量级守卫：单位错误的脏数据（如把成交量当成交额）一律拒绝写入
+      if (!indexAmount.isSaneAmount(sh, sz)) {
+        console.log('  ⚠️ [成交额] ' + d + ' 数值异常（沪=' + sh.toFixed(2) + '亿 深=' + sz.toFixed(2) +
+          '亿），疑似单位错误，已跳过');
+        continue;
+      }
       sets.push('amount_sh_yi=' + sh.toFixed(4), 'amount_sz_yi=' + sz.toFixed(4), 'amount_total_yi=' + (sh + sz).toFixed(4));
       console.log('  [成交额] ' + d + '  沪=' + sh.toFixed(1) + '亿 深=' + sz.toFixed(1) + '亿 合计=' + (sh + sz).toFixed(1) + '亿');
     }

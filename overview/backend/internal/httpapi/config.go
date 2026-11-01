@@ -190,6 +190,9 @@ type Config struct {
 	ReviewDBPath             string
 	PortfolioDBPath          string
 	StockResearchDBPath      string
+	// LocalReportsDBPath 指研报库（research-hub）的 research.db。
+	// easy-stock 的「行业研报」页读它来展示本地沉淀的机构研报全文。
+	LocalReportsDBPath       string
 	StockResearchStore       *stockanalysis.ResearchStore
 	MarketEmotionDBPath      string
 	ThemeRadarDBPath         string

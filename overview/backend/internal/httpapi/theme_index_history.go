@@ -26,8 +26,11 @@ func (h *themeIndexHistory) load(ctx context.Context, symbol string, limit int) 
 	tryPrimary := !time.Now().Before(h.retryAfter)
 	h.mu.Unlock()
 	if tryPrimary {
-		primaryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		// 单只 K 线正常耗时 0.8s 左右，128 只并发拉的时候经常被撑到 2s 以上。
+		// 原来给 2s 会让「慢」被当成「挂」，三只就把熔断器打开，整批转去备用源。
+		primaryCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 		lines, err := h.primary.AdjustedKLine(primaryCtx, symbol, limit)
+		timedOut := primaryCtx.Err() != nil
 		cancel()
 		lines = themeindex.CleanBars(lines, time.Now())
 		h.mu.Lock()
@@ -37,15 +40,17 @@ func (h *themeIndexHistory) load(ctx context.Context, symbol string, limit int) 
 			h.mu.Unlock()
 			return lines, nil
 		}
-		if ctx.Err() == nil {
+		// 超时只是慢，不代表数据源不可用，不能拿去累计熔断；
+		// 连续 5 次「真失败」才认为主源挂了。
+		if ctx.Err() == nil && !timedOut {
 			h.failures++
-			if h.failures >= 3 {
-				h.retryAfter = time.Now().Add(30 * time.Second)
+			if h.failures >= 5 {
+				h.retryAfter = time.Now().Add(60 * time.Second)
 			}
 		}
 		h.mu.Unlock()
 	}
-	fallbackCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	fallbackCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	return h.fallback.AdjustedKLine(fallbackCtx, symbol, limit)
 }

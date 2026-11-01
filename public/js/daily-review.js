@@ -1287,10 +1287,12 @@ function drawDRMarginChart(echarts, displayData, fullData) {
         symbol: ['none', 'none'],
         data: [
           // 当前值水平参考线（横跨整个 X 轴）
-          { xAxis: 0, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
-            label: { show: false } },
-          { xAxis: 'max', yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
-            label: { show: false } },
+          // ★ 必须「两点嵌套成一个数组」，写成两个平铺单点会被 ECharts 当成
+          //   {xAxis:0} / {xAxis:'max'} 两条**竖线**（表现为图表左右边缘各一条直线）
+          [{ xAxis: 0, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
+             label: { show: false } },
+           { xAxis: 'max', yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
+             label: { show: false } }],
           // 昨日位置垂直参考线
           ...(prevVal != null ? [{ xAxis: prevIdx, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 },
             label: { show: true, position: 'insideStartTop', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []),
@@ -1429,10 +1431,11 @@ function drawDRAmountChart(echarts, displayData, fullData) {
           symbol: ['none', 'none'],
           data: [
             // 当前值水平参考线（横跨整个 X 轴）
-            { xAxis: 0, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
-              label: { show: false } },
-            { xAxis: 'max', yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
-              label: { show: false } },
+            // ★ 必须「两点嵌套成一个数组」，平铺两个单点会被当成两条竖线（左右边缘各一条）
+            [{ xAxis: 0, yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
+               label: { show: false } },
+             { xAxis: 'max', yAxis: currentVal, lineStyle: { color: pColor, width: 1.5, type: 'dashed', opacity: 0.8 },
+               label: { show: false } }],
             // 昨日位置垂直参考线
             ...(prevVal != null ? [{ xAxis: prevIdx, lineStyle: { color: '#94a3b8', width: 1, type: 'dotted', opacity: 0.6 },
               label: { show: true, position: 'insideStartTop', formatter: '昨日 ' + prevDate, color: '#94a3b8', fontSize: 9, fontWeight: 600, backgroundColor: 'rgba(148,163,184,0.15)', padding: [2, 4], borderRadius: 3 } }] : []),
@@ -3264,8 +3267,13 @@ function drawDRKlineChart(echarts, idx, key, data) {
              (pct == null ? '—' : sign(pct) + fmt(pct) + '%') + '</td></tr>';
         h += '<tr><td style="' + LBL + '">振幅</td><td style="' + VAL + '">' +
              (amp == null ? '—' : fmt(amp) + '%') + '</td>' +
-             '<td style="' + LBL + GAP + '">成交额</td><td style="' + VAL + '">' +
-             fmt(((data.volumes || [])[i] || 0) / 10000, 1) + ' 亿</td></tr>';
+             '<td style="' + LBL + GAP + '">成交量</td><td style="' + VAL + '">' +
+             (function () {
+               // ★ 后端 volumes 已是「手」（实际手数），不再 /10000 转亿手
+               //   （旧代码把它当成交额除以 1e4 显示成"亿"，口径本来就是错的）
+               var v = Math.round(((data.volumes || [])[i]) || 0);
+               return v > 0 ? v.toLocaleString('zh-CN') + ' 手' : '—';
+             })() + '</td></tr>';
         h += '</table></div>';
 
         // MA / DIF / DEA / MACD —— 跟随图例开关：只显示当前可见的指标

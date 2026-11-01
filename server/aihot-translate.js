@@ -8,12 +8,7 @@
 
 const http = require('http');
 const https = require('https');
-const path = require('path');
-const sqlite3 = require('sqlite3');
-
-// 研报库的设置库（与 research-hub 共用同一份 AI 配置，用户只需填一次）
-const SETTINGS_DB = path.join(__dirname, '..', 'research-hub', 'data', 'research.db');
-const SETTINGS_TTL_MS = 60 * 1000;
+const aiConfig = require('./ai-config');
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 2000;
@@ -36,7 +31,6 @@ const MAX_TOTAL_CHARS = 60000;
 const QUICK_MAX_CHARS = 600;
 
 const cache = new Map();
-let settingsCache = { at: 0, value: null };
 
 function trimCache() {
   while (cache.size > CACHE_MAX_ENTRIES) {
@@ -49,33 +43,20 @@ function delay(ms) {
 }
 
 // ---------------------------------------------------------------- 配置读取
+//
+// 2026-10-20 改造：AI 配置从「研报库 research.db」搬到 server/ai-config.json，
+// 翻译因此不再依赖研报库子项目。返回的键名沿用旧约定，下游代码无需改动。
 
 function loadAiSettings() {
-  return new Promise((resolve) => {
-    let db;
-    try {
-      db = new sqlite3.Database(SETTINGS_DB, sqlite3.OPEN_READONLY, (err) => {
-        if (err) return resolve({});
-        db.all('SELECT key, value FROM settings', (queryErr, rows) => {
-          db.close();
-          if (queryErr || !rows) return resolve({});
-          const map = {};
-          for (const row of rows) map[row.key] = row.value;
-          resolve(map);
-        });
-      });
-    } catch (e) {
-      resolve({});
-    }
-  });
+  try {
+    return aiConfig.load();
+  } catch (e) {
+    return {};
+  }
 }
 
 async function getAiSettings() {
-  const now = Date.now();
-  if (settingsCache.value && now - settingsCache.at < SETTINGS_TTL_MS) return settingsCache.value;
-  const value = await loadAiSettings();
-  settingsCache = { at: now, value };
-  return value;
+  return loadAiSettings();
 }
 
 async function resolveEngine() {

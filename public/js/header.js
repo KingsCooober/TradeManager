@@ -47,14 +47,17 @@ function renderAppHeader(page) {
         '<a href="daily-review.html" class="header-tab' + (page === 'daily' ? ' active' : '') + '" data-page="daily" title="每日盘后总结：纪律 / 大盘 / 心态 / 复盘笔记">📋 每日复盘</a>' +
         '<a href="diary2.html" class="header-tab' + (page === 'diary' ? ' active' : '') + '" data-page="diary" title="历史交易深度复盘：筛选 / 排序 / 单笔分析">📖 复盘总结</a>' +
         '<a href="backtest.html" class="header-tab' + (page === 'backtest' ? ' active' : '') + '" data-page="backtest" title="看着历史 K 线手动模拟买卖的练习工具">🎯 回测练习</a>' +
-        '<a href="research.html" class="header-tab' + (page === 'research' ? ' active' : '') + '" data-page="research" title="研报库：订阅式抓取公开研报、AI 摘要要点、划词高亮与批注、按行业标签归档">📑 研报库</a>' +
+        // 研报库界面已于 2026-10-20 下线：研报抓取与全文检索并入行情总览（easy-stock）的 AI 助手，
+        // 数据仍在 research-hub/data/research.db，通过 MCP 工具检索。这里不再提供导航入口。
         '<a href="aihot.html" class="header-tab' + (page === 'aihot' ? ' active' : '') + '" data-page="aihot" title="AIHOT：精选资讯、全部动态、热点榜与 AI 日报">🤖 AIHOT</a>' +
         // 行情总览是挂载进来的 easy-stock 整站（/overview/），不属于本站内页：
-        // 放在标签组最后一位，用 header-tab-external 样式区分，并在新标签页打开
-        '<a href="/overview/" target="_blank" rel="noopener"' +
+        // 放在标签组最后一位，用 header-tab-external 样式区分，并在新标签页打开。
+        // ★ 该站代理层用 Cookie 鉴权，新标签导航带不了 Authorization 头 →
+        //   onclick 里先用本地 token 换 Cookie 再跳（见 openOverviewTab）。
+        '<a href="/overview/" target="_blank" rel="noopener" onclick="return openOverviewTab(event)"' +
           ' class="header-tab header-tab-external' + (page === 'market' ? ' active' : '') + '"' +
           ' data-page="market"' +
-          ' title="行情总览（easy-stock 整站）：核心指数、行业趋势强度、资金流向、两融余额、龙虎榜、公告研报 —— 点击在新标签页打开">🌐 行情总览</a>' +
+          ' title="Easy Stock（easy-stock 整站）：核心指数、行业趋势强度、资金流向、两融余额、龙虎榜、公告研报 —— 点击在新标签页打开">🌐 Easy Stock</a>' +
       '</nav>' +
     '</div>' +
     '<div class="header-right">' +
@@ -196,8 +199,8 @@ if (typeof window.escapeHtml !== 'function') {
 }
 
 // ===== 全局设置弹窗（AI 大模型配置 + 账号安全） =====
-// 6 个页面共用。配置本体存在研报库，通过主站带鉴权的 /api/ai/settings 读写，
-// 研报摘要与 AIHOT 英文翻译共用同一份配置。
+// 6 个页面共用。配置本体存在 server/ai-config.json，通过主站带鉴权的 /api/ai/settings 读写
+//（2026-10-20 起不再依赖研报库），AIHOT 英文翻译 / TTS 共用同一份配置。
 
 function appSettingsToken() {
   try {
@@ -533,3 +536,33 @@ function closeAppSettings() {
 
 window.openAppSettings = openAppSettings;
 window.closeAppSettings = closeAppSettings;
+
+/**
+ * 打开「行情总览」（/overview/，easy-stock 整站，代理挂载）。
+ *
+ * 该站在 overview-proxy 里用 httpOnly Cookie 鉴权 —— 而新标签页导航**带不了
+ * Authorization 头**，所以只有 localStorage.sync_token 是进不去的（会拿到 401 JSON，
+ * 页面看起来就是"没内容"）。这里先用本地 token 调 /api/auth/session 换一个 Cookie，
+ * 再跳转；Cookie 落地后，以后直接刷新 /overview/ 也没问题。
+ *
+ * 没有 token 就正常跳转 —— 会看到代理返回的「需要登录」引导页，比停在空白强。
+ */
+function openOverviewTab(e) {
+  var tk = null;
+  try { tk = localStorage.getItem('sync_token'); } catch (err) {}
+  if (!tk) return true;                       // 无 token：走默认跳转
+  if (e && e.preventDefault) e.preventDefault();
+  // ★ 必须同步开窗：异步之后 window.open 会被浏览器当弹窗拦掉
+  var w = window.open('', '_blank');
+  function go() {
+    if (w && !w.closed) w.location.href = '/overview/';
+    else window.open('/overview/', '_blank', 'noopener');
+  }
+  try {
+    fetch('/api/auth/session', { method: 'POST', headers: { Authorization: 'Bearer ' + tk } })
+      .then(go, go);
+  } catch (err) { go(); }
+  return false;
+}
+
+window.openOverviewTab = openOverviewTab;

@@ -98,6 +98,7 @@ func main() {
 		ReviewDBPath:         reviewDBPath,
 		PortfolioDBPath:      portfolioDBPath,
 		StockResearchDBPath:  stockResearchDBPath,
+		LocalReportsDBPath:   os.Getenv("A_STOCK_LOCAL_REPORTS_DB"),
 		RemoteDailyReviewURL: os.Getenv("A_STOCK_DAILY_REVIEW_BASE_URL"),
 		MarketEmotionDBPath:  marketEmotionDBPath,
 		ThemeRadarDBPath:     themeRadarDBPath,

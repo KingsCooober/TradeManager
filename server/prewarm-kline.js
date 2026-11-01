@@ -8,6 +8,8 @@
 //
 // 用法：
 //   node server/prewarm-kline.js                     # 默认 >50 亿、10 年、4 并发
+//   node server/prewarm-kline.js --universe           # ★ 按 bt_universe 池子灌（前 N 只）
+//   node server/prewarm-kline.js --universe --limit 400   # 本次只跑 400 只（分片跑用）
 //   node server/prewarm-kline.js --years 5           # 只要 5 年
 //   node server/prewarm-kline.js --concurrency 6     # 提高并发（注意上游限流）
 //   node server/prewarm-kline.js --mcap 100          # 只预热 >100 亿
@@ -21,6 +23,9 @@
 //   脚本自身无状态，但**每次启动都先查库**：本地已有足够根数且 last_date 新鲜的
 //   标的直接跳过。所以中断后重新执行同一条命令即可从断点继续，不需要额外的进度文件。
 //   失败清单会写到 server/cache/prewarm-failed.json，可用 --retry-failed 单独重试。
+//   ★ --universe --limit N 的语义是「从**还没补齐的**标的里取前 N 只」，
+//     不是「名单前 N 只」—— 这样重复执行同一条命令就能一片一片往前推，
+//     不会每次都在前 N 只已完成的地方原地打转。
 //
 // 上游限流（实测教训）：
 //   东财 push2 全系域名在连续批量请求后会被 WAF 封禁（socket hang up 且长时间不恢复）。
@@ -37,6 +42,8 @@ function parseArgs(argv) {
   const o = {
     mcap: 50, years: 10, concurrency: 4, gapMs: 120, limit: 0,
     force: false, dry: false, retryFailed: false, symbols: null,
+    universe: false,
+    staleDays: 4,        // last_date 落后多少天算"需要补"（默认 4，覆盖周末+节假日）
     from: '2016-01-04',  // 全局数据窗口：所有标的从 2016 首个交易日拉至今
   };
   for (let i = 2; i < argv.length; i++) {
@@ -47,8 +54,10 @@ function parseArgs(argv) {
     else if (a === '--concurrency') o.concurrency = Math.max(1, Number(next()));
     else if (a === '--gap') o.gapMs = Math.max(0, Number(next()));
     else if (a === '--limit') o.limit = Number(next());
+    else if (a === '--stale-days') o.staleDays = Math.max(0, Number(next()));
     else if (a === '--force') o.force = true;
     else if (a === '--dry') o.dry = true;
+    else if (a === '--universe') o.universe = true;
     else if (a === '--retry-failed') o.retryFailed = true;
     else if (a === '--from') o.from = String(next());
     else if (a === '--symbols') o.symbols = String(next()).split(',').map(s => s.trim()).filter(Boolean);
@@ -88,14 +97,44 @@ function withTimeout(promise, ms, label) {
   ]);
 }
 
+/**
+ * 判断某标的是否还需要回源灌数据。
+ *
+ * 旧实现是 `covered = meta.first_date <= from || meta.first_date > from` —— 恒真，
+ * 等于只校验"最新日期够不够新"。于是凡是"库里只有近几年、但昨天刚同步过"的标的
+ * 都会被判定为已完成，历史永远补不上（本项目的目标恰恰是**每只都从 2016-01-04 起**）。
+ * 这里按三条规则逐层判断：
+ *   1) 从未入库 / 元信息缺失           → 必须拉
+ *   2) last_date 落后于 4 天阈值       → 必须补（补最新缺口）
+ *   3) first_date 晚于窗口起点         → 二义：2016 后上市（首根=上市日，天然完整）
+ *                                       或早年按短窗口落库的残档。用"从首根至今
+ *                                       应有根数"比对，明显偏少才算残档。
+ *   4) 7 天内整只重拉过                → 接受现状（长期停牌股根数天然偏少，
+ *                                       否则每轮都会把同一批票重拉一遍）
+ */
+function needFill(meta, from, staleCutoffStr) {
+  if (!meta || !meta.bar_count || !meta.first_date || !meta.last_date) return true;
+  if (meta.last_date < staleCutoffStr) return true;
+  if (meta.first_date <= from) return false;
+  if (meta.last_full_sync) {
+    const age = Date.now() - Date.parse(meta.last_full_sync);
+    if (age >= 0 && age < 7 * 86400000) return false;
+  }
+  const spanDays = Math.max(1, Math.round(
+    (Date.now() - new Date(meta.first_date + 'T00:00:00Z').getTime()) / 86400000));
+  const expected = Math.max(20, Math.ceil(spanDays * 243 / 365));
+  return meta.bar_count < expected * 0.8;
+}
+
 // ---------- 主流程 ----------
 async function main() {
   await klineStore.initStore();
 
   if (ARGS.dry) console.log('[预热] dry-run，只列计划不拉数据');
-  console.log(`[预热] 参数: 市值>${ARGS.mcap}亿  ` +
+  console.log(`[预热] 参数: ${ARGS.universe ? '标的池 bt_universe' : '市值>' + ARGS.mcap + '亿'}  ` +
     `从 ${ARGS.from} 至今(目标${TARGET_BARS}根)` +
-    `  并发${ARGS.concurrency}  间隔${ARGS.gapMs}ms${ARGS.force ? '  --force' : ''}`);
+    `  并发${ARGS.concurrency}  间隔${ARGS.gapMs}ms${ARGS.force ? '  --force' : ''}` +
+    `${ARGS.limit ? '  --limit ' + ARGS.limit : ''}`);
 
   // 1) 决定要跑哪些标的
   let list;
@@ -109,6 +148,17 @@ async function main() {
     const prev = JSON.parse(fs.readFileSync(FAILED_FILE, 'utf8'));
     list = (prev.failed || []).map(x => ({ symbol: x.symbol, name: x.name || '' }));
     console.log(`[预热] 从失败清单载入 ${list.length} 只`);
+  } else if (ARGS.universe) {
+    // ★ 池子模式：名单就是 bt_universe（按市值排名固定的前 N 只）。
+    //   limit 不在这里截断 —— 必须先过滤掉已补齐的，再截取，
+    //   否则重复执行同一条命令每次都只检查同一批已完成的标的，进度永远不动。
+    list = await klineStore.getUniverse(0);
+    if (!list.length) {
+      console.log('[预热] 标的池为空，先跑 node server/build-universe.js'); return;
+    }
+    const u = await klineStore.getUniverseStats();
+    console.log(`[预热] 池子载入 ${list.length} 只（${u.builtAt || '-'} 建池）` +
+      `  已入库 ${u.loaded} / 完整 ${u.full}`);
   } else {
     list = await klineStore.getWarmupCandidates(ARGS.mcap, ARGS.limit);
     console.log(`[预热] 名单载入 ${list.length} 只（市值>${ARGS.mcap}亿）`);
@@ -116,34 +166,32 @@ async function main() {
   if (!list.length) { console.log('[预热] 名单为空，先跑 refresh-stock-list.js'); return; }
 
   // 2) 过滤掉已经够新够全的
-  // --from 模式：覆盖判断 = first_date ≤ from 且 last_date 在 4 天内
-  // （根数判断不适用：新股/长期停牌股根数天然少于目标，但只要覆盖了起点就算够）
+  // 判断规则见 needFill()：覆盖窗口起点 + 最新日期在 4 天内 + 根数无明显缺口
   const todo = [];
   const skip = { fresh: 0 };
-  const staleCutoff = new Date(Date.now() - 4 * 86400000);
+  // ★ --stale-days 0 = 要求 last_date 就是今天（收盘后手动补最新一根用）
+  //   默认 4 天：覆盖周末 + 小节假，适合日常跑
+  const staleCutoff = new Date(Date.now() - ARGS.staleDays * 86400000);
   const staleCutoffStr = staleCutoff.getFullYear() + '-' +
     String(staleCutoff.getMonth() + 1).padStart(2, '0') + '-' +
     String(staleCutoff.getDate()).padStart(2, '0');
   for (const it of list) {
     if (ARGS.force) { todo.push(it); continue; }
     const meta = await klineStore.getMeta(it.symbol);
-    // 覆盖判断（--from 模式）：
-    //   - 老股：first_date ≤ from（即 2016-01-04 起）
-    //   - 新股：first_date > from（2016 后上市，首根=上市日即已完整）
-    //   两者都要求 last_date 在 4 天内（数据新鲜）
-    const covered = meta && meta.first_date && (
-      meta.first_date <= ARGS.from || meta.first_date > ARGS.from
-    );
-    if (covered && meta.last_date && meta.last_date >= staleCutoffStr) { skip.fresh++; continue; }
+    if (!needFill(meta, ARGS.from, staleCutoffStr)) { skip.fresh++; continue; }
     it._meta = meta;
     todo.push(it);
   }
-  console.log(`[预热] 需拉取 ${todo.length} 只，跳过 ${skip.fresh} 只（本地已足够新）`);
+  // universe 模式：从"还没补齐的"里取前 limit 只（分片跑用）
+  const pendingTotal = todo.length;
+  const batch = (ARGS.limit > 0 && todo.length > ARGS.limit) ? todo.slice(0, ARGS.limit) : todo;
+  console.log(`[预热] 需拉取 ${pendingTotal} 只，跳过 ${skip.fresh} 只（本地已足够新）` +
+    (batch.length !== pendingTotal ? `  → 本次只跑前 ${batch.length} 只` : ''));
 
-  if (!todo.length) { console.log('[预热] 全部已就绪，无需拉取'); return; }
+  if (!batch.length) { console.log('[预热] 全部已就绪，无需拉取'); return; }
   if (ARGS.dry) {
-    todo.slice(0, 10).forEach((x, i) => console.log(`   ${i + 1}. ${x.symbol} ${x.name || ''}`));
-    if (todo.length > 10) console.log(`   ... 还有 ${todo.length - 10} 只`);
+    batch.slice(0, 10).forEach((x, i) => console.log(`   ${i + 1}. ${x.symbol} ${x.name || ''}`));
+    if (batch.length > 10) console.log(`   ... 还有 ${batch.length - 10} 只`);
     return;
   }
 
@@ -176,15 +224,15 @@ async function main() {
         recent.push(true);
         done++;
         const rate = (done / ((Date.now() - t0) / 1000)).toFixed(1);
-        console.log(`[${done}/${todo.length}] ✓ ${it.symbol} ${(it.name || data.name || '').padEnd(8)} ` +
+        console.log(`[${done}/${batch.length}] ✓ ${it.symbol} ${(it.name || data.name || '').padEnd(8)} ` +
           `${String(bars).padStart(5)}根 ${String(Date.now() - t).padStart(5)}ms  ` +
-          `(${rate}只/s 剩~${fmtDur((todo.length - done) / Math.max(0.1, rate) * 1000)})`);
+          `(${rate}只/s 剩~${fmtDur((batch.length - done) / Math.max(0.1, rate) * 1000)})`);
       } catch (e) {
         failCount++;
         recent.push(false);
         done++;
         failed.push({ symbol: it.symbol, name: it.name, error: e.message });
-        console.log(`[${done}/${todo.length}] ✗ ${it.symbol} ${it.name || ''}  ${e.message}`);
+        console.log(`[${done}/${batch.length}] ✗ ${it.symbol} ${it.name || ''}  ${e.message}`);
       }
       if (recent.length > 20) recent.shift();
 
@@ -198,7 +246,7 @@ async function main() {
     }
   }
 
-  const queue = todo.slice();
+  const queue = batch.slice();
   await Promise.all(Array.from({ length: ARGS.concurrency }, () => worker(queue)));
 
   // 4) 汇总 + 失败清单
@@ -209,6 +257,15 @@ async function main() {
   console.log(`  成功 / 失败  ${okCount} / ${failCount}`);
   console.log(`  本次新增根数 ${barsTotal}`);
   console.log(`  库内合计     ${stats.symbols} 只 / ${stats.bars} 行 / 名单 ${stats.metas} 条`);
+  if (ARGS.universe) {
+    const u = await klineStore.getUniverseStats();
+    const pct = u.total ? (u.full / u.total * 100).toFixed(1) : '0.0';
+    console.log(`  池子覆盖     ${u.full}/${u.total} 只达 2016 起完整（${pct}%）` +
+      `，可用(≥150根) ${u.usable} 只，池内最新 ${u.latestDate || '-'}`);
+    if (pendingTotal > batch.length) {
+      console.log(`  ★ 池内还有 ${pendingTotal - batch.length} 只待补，直接再跑一次同样命令即可（自动跳过已完成的）`);
+    }
+  }
 
   if (failed.length) {
     fs.mkdirSync(path.dirname(FAILED_FILE), { recursive: true });
@@ -229,7 +286,7 @@ async function main() {
   // 5) 抽样校验：随机挑 3 只核对根数与日期跨度
   if (okCount > 0) {
     console.log('\n---- 抽样校验 ----');
-    const sample = todo.slice(0, 3);
+    const sample = batch.slice(0, 3);
     for (const s of sample) {
       const meta = await klineStore.getMeta(s.symbol);
       if (!meta) continue;

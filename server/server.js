@@ -44,7 +44,8 @@ try {
 // 行情总览：/overview/* 反向代理到 easy-stock 后端 + 它的前端构建产物（见 overview-proxy.js）
 // ★ 同样必须挂在 express.json() 之前（原因同上）。
 try {
-  require('./overview-proxy').mount(app, { auth: auth });
+  // autostart 传 require.main === module：被测试 require 时不会误启子进程（同 research-proxy）
+  require('./overview-proxy').mount(app, { auth: auth, autostart: require.main === module });
 } catch (e) {
   console.warn('  行情总览代理未加载（不影响主站）：', e.message);
 }
@@ -316,6 +317,17 @@ app.post('/api/register', (req, res) => {
       res.json({ userId, username, role, token, message: '注册成功' });
     }
   );
+});
+
+// 用 Bearer token 换一个 httpOnly 会话 Cookie。
+// ★ 为什么需要：/overview/（easy-stock 整站）在代理层用 Cookie 鉴权，
+//   而顶层导航 / 新标签页**带不了 Authorization 头** —— 光有 localStorage 里的 token
+//   进不去（返回 401 JSON，页面看起来"没有内容"）。
+//   前端点「行情总览」时先调本接口种 Cookie 再打开新标签，token 就不必出现在 URL 里。
+app.post('/api/auth/session', auth.authMiddleware, (req, res) => {
+  const tk = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  if (tk) auth.setSessionCookie(res, tk);
+  res.json({ ok: true, userId: (req.user && req.user.userId) || null });
 });
 
 // 用户登录
@@ -1175,6 +1187,155 @@ app.get('/api/market/kline-stock/:symbol', auth.authMiddleware, async (req, res)
   }
 });
 
+// ============================================================
+// 回测标的池（bt_universe）：随机标的 + 池子覆盖率
+//
+// 池子由 server/build-universe.js 按建池时的总市值排名固定（默认前 3500 只），
+// K 线由 server/prewarm-kline.js --universe 从 2016-01-04 灌满。
+// 这两个接口只读，不写库。
+// ============================================================
+
+/** N 天前的 YYYY-MM-DD（本地时区，用于判断"数据是否落后"） */
+function isoDaysAgo(n) {
+  const d = new Date(Date.now() - n * 86400000);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
+// 随机取一只回测标的
+//   ?exclude=sh600519,sz000001   排除（前端传「近期已抽过的」，避免连点重复）
+//   ?minBars=250                 候选最少根数（默认 150，够一局练习）
+//   ?ensure=1                    抽中后同步补到最新（默认 1；0 = 只抽不补）
+// 出参：{ symbol, name, rank, mcap_yi, bars, firstDate, lastDate, filled, stale, total }
+app.get('/api/backtest/universe/random', auth.authMiddleware, async (req, res) => {
+  try {
+    const exclude = String(req.query.exclude || '').split(',').map(s => s.trim()).filter(Boolean);
+    const minBars = Math.min(3000, Math.max(0, parseInt(req.query.minBars, 10) || 150));
+    const ensure = String(req.query.ensure || '1') !== '0';
+
+    // 最多抽 3 次：抽到的新股（上市不足一局）在补数后仍不够长就换一只
+    let row = null, filled = false, stale = false, bars = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      row = await klineStore.randomUniverseSymbol({ exclude: exclude, minBars: minBars, maxStaleDays: 4 });
+      if (!row) break;
+
+      // ★ 「获取时自动补全最近缺失的数据」：
+      //   prewarm 是批量灌历史，这里补的是**建池之后才产生的新交易日**。
+      //   回源会走 getKLineSnapshotForSymbol 的惰性同步（尾部比对 + append），
+      //   顺带处理除权导致的前复权整体重算。
+      //   ⚠️ 只在"明显落后"时才补：库里只差 1~3 天是常态（当天还没收盘同步），
+      //      为它同步等一次回源要 1~2s，而下面的 kline-stock 请求本身还会再补一次，
+      //      等于白等两遍。随机按钮要的是"立刻开局"。
+      if (ensure) {
+        const needSync = !row.last_date || row.last_date < isoDaysAgo(10);
+        if (needSync) {
+          try {
+            await Promise.race([
+              market.getKLineSnapshotForSymbol(row.symbol, 3500,
+                { adjust: 'auto', startDate: '2016-01-04', noCache: true }),
+              new Promise((_, rej) => setTimeout(() => rej(new Error('补数超时')), 5000)),
+            ]);
+            filled = true;
+          } catch (e) {
+            stale = true;
+            console.warn('[universe] ' + row.symbol + ' 补数失败: ' + e.message);
+          }
+        }
+      }
+
+      const meta = await klineStore.getMeta(row.symbol);
+      bars = (meta && meta.bar_count) || 0;
+      row.last_date = (meta && meta.last_date) || row.last_date;
+      row.first_date = (meta && meta.first_date) || row.first_date;
+      if (bars >= minBars || attempt === 2) break;
+      // 数据仍不够 → 把它加进排除名单，换一只
+      exclude.push(row.symbol);
+    }
+
+    if (!row) {
+      return res.status(404).json({
+        error: '标的池为空，请先执行 node server/build-universe.js 建池',
+        hint: '池子为空时随机按钮无法工作',
+      });
+    }
+    const stats = await klineStore.getUniverseStats();
+    res.json({
+      symbol: row.symbol,
+      name: row.name || '',
+      rank: row.rank || 0,
+      mcap_yi: row.mcap_yi || 0,
+      bars: bars,
+      firstDate: row.first_date || null,
+      lastDate: row.last_date || null,
+      filled: filled,          // 本次是否真的触发过补数
+      stale: stale,            // 想补但补失败（前端可提示"数据可能落后"）
+      total: stats.total || 0,
+      // ★ 练习轮次标记：drawnCount = 这只票被练过几次（本次抽取**之前**的值）。
+      //   0 = 没练过；>0 = 池子里没练过的已经抽空了，这是第 drawnCount+1 次。
+      //   真正的 +1 由前端在"开局成功"后调 /api/backtest/universe/mark 完成，
+      //   所以抽中了但加载失败不会白白消耗掉这只票。
+      drawnCount: row.drawn_count || 0,
+      round: stats.round || 1,
+      drawn: stats.drawn || 0,
+      untouched: stats.untouched || 0,
+      remaining: stats.remaining || 0,
+    });
+  } catch (e) {
+    console.error('[universe] random 失败:', e.message);
+    res.status(500).json({ error: '随机标的失败: ' + e.message });
+  }
+});
+
+// ============================================================
+// 练习轮次标记：给标的打「已练」印记
+//
+// 随机抽取走 randomUniverseSymbol 的 ORDER BY drawn_count ASC，
+// 永远优先挑标记最小的那一档 —— 于是池子被一轮一轮地过完，
+// 只有整池都练过一遍后才会重复抽到同一只标的。
+//
+// ★ 为什么不由 /universe/random 自己计数：
+//   抽取 ≠ 练习。抽到了但数据加载失败（停牌、接口抖动）不该消耗这只票，
+//   所以 +1 交给前端在"开局成功"之后调这个接口。
+//   计数规则（只有最低档才 +1）在 kline-store 里，见 markUniverseDrawn 的注释。
+// ============================================================
+app.post('/api/backtest/universe/mark', auth.authMiddleware, async (req, res) => {
+  try {
+    const sym = String((req.body && req.body.symbol) || req.query.symbol || '').trim().toLowerCase();
+    if (!/^(sh|sz|bj)\d{6}$/.test(sym)) {
+      return res.status(400).json({ error: '标的代码格式不对: ' + sym });
+    }
+    const r = await klineStore.markUniverseDrawn(sym);
+    if (!r) {
+      // 不在标的池里（用户手动输入的池外标的）—— 正常情况，不用报错
+      return res.json({ ok: false, symbol: sym, inUniverse: false });
+    }
+    const stats = await klineStore.getUniverseStats();
+    res.json({
+      ok: true, symbol: r.symbol, inUniverse: true,
+      drawnCount: r.drawnCount,   // 该标的当前所处的轮次
+      bumped: r.bumped,           // 本次是否真的 +1（false = 已领先当前轮次）
+      drawn: stats.drawn || 0,
+      untouched: stats.untouched || 0,
+      total: stats.total || 0,
+      round: stats.round || 1,
+      remaining: stats.remaining || 0,   // 当前这一轮还剩多少只没练
+    });
+  } catch (e) {
+    console.error('[universe] mark 失败:', e.message);
+    res.status(500).json({ error: '标记失败: ' + e.message });
+  }
+});
+
+// 池子覆盖率：多少只已灌满 2016 起的历史
+app.get('/api/backtest/universe/stats', auth.authMiddleware, async (req, res) => {  try {
+    const s = await klineStore.getUniverseStats();
+    res.json(s);
+  } catch (e) {
+    console.error('[universe] stats 失败:', e.message);
+    res.status(500).json({ error: '统计失败: ' + e.message });
+  }
+});
+
 // 批量查股票名称（轻量接口，不返回 K 线）
 // 入参：?symbols=sh600000,sz000001   （最多 50 个，逗号分隔）
 // 出参：{ names: { 'sh600000': '浦发银行', 'sz000001': '平安银行' }, missing: [...] }
@@ -1371,7 +1532,12 @@ app.use((err, req, res, next) => {
 });
 
 // 启动服务器
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`服务器运行在 http://localhost:${PORT}`);
   console.log(`本地访问: http://localhost:${PORT}`);
 });
+
+// WebSocket 升级必须挂在真正的 http.Server 上 —— 只 mount 路由是不够的。
+// 漏了这一步，easy-stock 的 AI 对话（/overview/api/v1/ai/ws）和实时行情
+// （/overview/api/v1/ws/stream）握手无人处理，前端会等满 20s 报「连接 Agent 运行时超时」。
+require('./overview-proxy').attachUpgrade(httpServer);

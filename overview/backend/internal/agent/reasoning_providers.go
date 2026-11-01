@@ -40,6 +40,17 @@ func providerReasoningCapability(host, path, model, mode string) (ReasoningCapab
 			return makeCap("https://api-docs.deepseek.com/guides/thinking_mode", "支持关闭、低、高、最大；medium 和 xhigh 在服务端映射为 high。", "high", "none", "low", "high", "max")
 		}
 	}
+	// 小米 MiMo：官方 Codex 接入文档给出 model_reasoning_effort（如 "high"），
+	// 且 chat/completions（reasoning_effort）与 responses（reasoning.effort）实测都返回 200 并带 reasoning_tokens。
+	// token-plan-cn.xiaomimimo.com 是 Token Plan 专用入口，与 api.xiaomimimo.com 行为一致。
+	if (host == "api.xiaomimimo.com" || host == "token-plan-cn.xiaomimimo.com") && (chat || responses) {
+		switch model {
+		case "mimo-v2.6-pro", "mimo-v2.6-flash":
+			return makeCap("https://mimo.mi.com/docs/zh-CN/tokenplan/integration/codex-configuration",
+				"实测两种协议均接受推理强度参数（关闭/低/中/高）；推理摘要需在模型侧另行开启。",
+				"medium", "none", "low", "medium", "high")
+		}
+	}
 	if (host == "api.moonshot.cn" || host == "api.moonshot.ai") && path == "/v1" {
 		if model == "kimi-k3" && (chat || responses) {
 			return makeCap("https://platform.kimi.com/docs/guide/use-reasoning-effort", "Kimi K3 始终开启思考，支持低、高、最大，默认最大。", "max", "low", "high", "max")

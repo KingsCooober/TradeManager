@@ -296,6 +296,15 @@ function handle(req, res) {
   }
 
   const target = req.originalUrl.slice(PREFIX.length) || '/';
+
+  // 2026-10-20：研报库界面已下线（能力合并进 easy-stock）。
+  // 页面类请求统一 302 到行情总览，只保留 /research/api/* 给后台工具与脚本调用；
+  // 这样老书签 /research/ 、/research.html 不会 404，也不会再看到废弃的界面。
+  if (wantsHtml(req)) {
+    res.redirect(302, '/overview/');
+    return;
+  }
+
   const headers = Object.assign({}, req.headers);
   headers.host = `${UPSTREAM_HOST}:${UPSTREAM_PORT}`;
   // 让上游按自身能力返回内容类型

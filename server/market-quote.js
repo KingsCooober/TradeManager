@@ -368,7 +368,13 @@ function buildTencentKLineUrl(symbol, period, startDate, endDate, count, adjust)
   const adj = adjust == null ? 'qfq' : adjust;
   const param = [symbol, period, startDate || '', endDate || '', count].join(',') +
     (adj ? ',' + adj : '');
-  const pathPart = '/appstock/app/fqkline/get?param=' + encodeURIComponent(param);
+  // ★ 必须是 `newfqkline`，不能是 `fqkline`（2026-10-24 实测）：
+  //   旧路径 `fqkline/get` 在 ifzq.gtimg.cn 和 proxy 两个域名下都返回 **WAF 拦截页**
+  //   （<!DOCTYPE html>... 501），不是临时限流而是接口已下线。
+  //   同一时刻 `newfqkline/get` 两个域名都是 200 / 0.12s。
+  //   被拦时表现极隐蔽：请求"成功返回"但内容是 HTML，解析必然失败 →
+  //   全部降级到 Baostock（单只 3~8 秒），看起来像"腾讯变慢"，实际是整条腾讯链路全废。
+  const pathPart = '/appstock/app/newfqkline/get?param=' + encodeURIComponent(param);
   return 'https://' + TX_KLINE_HOSTS[_txHostIdx] + pathPart;
 }
 
@@ -403,7 +409,13 @@ async function httpsGetTencentKLine(symbol, period, startDate, endDate, count, a
 }
 
 // 腾讯 K线接口
-// day 数组字段：[日期, 开, 收, 高, 低, 成交额(元), 成交量(手), 涨跌幅%, ...]
+// ★ day/qfqday 数组的真实字段（2026-10-24 实测修正，旧注释整体标反了）：
+//   [0]日期 [1]开 [2]收 [3]高 [4]低 [5]成交量(手) [6]{}（空对象！）
+//   [7]换手率% [8]成交额(万元) [9]
+//   验证：2024-01-02 sz300404 → 量 45638 手 × 100 股 × 8.96 元 = 4089 万 ≈ [8]=4086.24 ✓
+//   旧注释把 [5] 写成"成交额(元)"、[6] 写成"成交量(手)"，于是 volume 走了
+//   `amount / close / 100` 这个毫无意义的反算（= 手/元/100），算出来是垃圾值。
+//   实际 [5] 本身就是手，直接当 volume 即可。
 // 通用腾讯 K线接口（支持 day/week/month 三种周期）
 async function fetchKLineFromTencentPeriod(symbol, count, period) {
   // period: 'day' | 'week' | 'month'
@@ -419,17 +431,18 @@ async function fetchKLineFromTencentPeriod(symbol, count, period) {
   if (!Array.isArray(arr) || arr.length === 0) throw new Error('腾讯K线无 ' + period + ' 数组');
   return arr.map(function(line) {
     var close = parseFloat(line[2]);
-    var amount = parseFloat(line[5]) || 0;
-    var rawVol = parseFloat(line[6]) || 0;
+    // line[5] = 成交量（手）。这里字段名叫 amount 是历史遗留（早期误当成成交额），
+    // 全项目（buildKLineSnapshot / kline-store 落库）都按"手"消费它，改名会牵一大片，先留着。
+    var volHand = parseFloat(line[5]) || 0;
     return {
       date:   line[0],
       open:   parseFloat(line[1]),
       close:  close,
       high:   parseFloat(line[3]),
       low:    parseFloat(line[4]),
-      amount: amount,
-      // 成交量（手）：腾讯接口 line[6] 经常返回空字符串导致 0，用 amount ÷ close ÷ 100 反算
-      volume: rawVol > 0 ? rawVol : (close > 0 ? +((amount / close / 100)).toFixed(2) : 0)
+      amount: volHand,
+      volume: volHand,        // 同一口径：都是手
+      amountYuan: (parseFloat(line[8]) || 0) * 10000   // 成交额（元），[8] 的单位是万元
     };
   });
 }
@@ -492,16 +505,18 @@ async function fetchKLineFromTencentRange(symbol, startDate, endDate, period, ad
   if (!Array.isArray(arr)) return [];
   return arr.map(function(line) {
     var close = parseFloat(line[2]);
-    var amount = parseFloat(line[5]) || 0;
-    var rawVol = parseFloat(line[6]) || 0;
+    // line[5] = 成交量（手）；line[6] 是空对象，line[8] 才是成交额（万元）。
+    // 与 fetchKLineFromTencentPeriod 保持同一口径，别再用 amount/close/100 那个错误反算。
+    var volHand = parseFloat(line[5]) || 0;
     return {
       date:   line[0],
       open:   parseFloat(line[1]),
       close:  close,
       high:   parseFloat(line[3]),
       low:    parseFloat(line[4]),
-      amount: amount,
-      volume: rawVol > 0 ? rawVol : (close > 0 ? +((amount / close / 100)).toFixed(2) : 0)
+      amount: volHand,
+      volume: volHand,
+      amountYuan: (parseFloat(line[8]) || 0) * 10000
     };
   }).filter(function(k) { return k.date && !isNaN(k.close); });
 }
@@ -898,17 +913,23 @@ async function fetchKLineFromBaostock(symbol, startDate, endDate, frequency, adj
     throw new Error('baostock helper 返回非数组: ' + JSON.stringify(rows).slice(0, 200));
   }
 
-  // 转成统一格式：volume = 手（÷ 100），amount = 元
+  // 转成统一格式：★ amount 与 volume 都必须是「手」，与腾讯路径对齐。
+  //    Baostock 原始字段是 volume（股）、amount（元）；旧代码只把 volume ÷100 成了手，
+  //    amount 却原样留着"元"—— 而 buildKLineSnapshot 拿 `k.amount` 当手用，
+  //    结果 76.7 亿元被当成 76.7 亿手（= 76 万「万手」），VOL 柱直接爆表。
+  //    2026-10-24 修：amount 也换算成手，成交额另存 amountYuan。
   return rows.map(function(r) {
     const volShares = parseFloat(r.volume) || 0;
+    const volHand = volShares > 0 ? volShares / 100 : 0;
     return {
       date:   r.date,
       open:   parseFloat(r.open),
       high:   parseFloat(r.high),
       low:    parseFloat(r.low),
       close:  parseFloat(r.close),
-      amount: parseFloat(r.amount) || 0,
-      volume: volShares > 0 ? +((volShares / 100)).toFixed(2) : 0
+      amount: volHand,
+      volume: volHand,
+      amountYuan: parseFloat(r.amount) || 0
     };
   });
 }
@@ -1203,8 +1224,15 @@ async function buildKLineSnapshot(symbol, name, count, opts) {
   const klines = opts && opts.startDate ? rawKlines : rawKlines.slice(-count);
   const dates = klines.map(k => k.date);
   const ohlc  = klines.map(k => [k.open, k.close, k.low, k.high]);
-  // 成交额：k.amount（腾讯返回的是元）→ 转为万元
-  const amounts = klines.map(k => Math.round((k.amount || 0) / 10000));
+  // 成交量：k.amount 是「手」（腾讯日线第 5 列），不是成交额。
+  //   ★ 旧代码 Math.round(k.amount / 10000) 把它压成**整数万手** —— 茅台日成交 2.6 万手会变成 3，
+  //     相对误差 15%，量比这类需要精度的指标会被彻底带歪。
+  //   ★ 2026-10-24 二次修正：中间的「万手 2 位小数」口径也一并取消。
+  //     只要还保留"万手"这个单位，任何人拿 volumes 直接显示都会再掉一层精度
+  //     （1.234 万手 → "1.23 万手" → 前端 toFixed(0) 变成 "1"）。
+  //     现在 volumes / volumesRaw / amounts **三者同值，单位一律是「手」（整数）**，
+  //     想显示成万手由展示层自己决定，数据层不再做任何换算和取整。
+  const volsHand = klines.map(k => Math.round(k.amount || 0));
 
   const out = {
     name:    finalName,
@@ -1212,7 +1240,8 @@ async function buildKLineSnapshot(symbol, name, count, opts) {
     count:   klines.length,
     dates:   dates,
     ohlc:    ohlc,
-    volumes: amounts,   // 兼容字段名（前端用 data.volumes）
+    volumes: volsHand,      // ★ 成交量（手）—— 不是万手，不要再用 /10000
+    volumesRaw: volsHand,   // 兼容旧字段名（同为「手」）
     // 复权口径：'qfq' 常规前复权 / 'hfq' 负价降级后复权（高分红股）
     adjust:  (rawKlines[0] && rawKlines[0].__adjust) || 'qfq',
     fetchedAt: new Date().toISOString()
@@ -1231,7 +1260,7 @@ async function buildKLineSnapshot(symbol, name, count, opts) {
       dea:  fullMACD.dea.slice(preLen),
       macd: fullMACD.macd.slice(preLen)
     };
-    out.amounts = amounts;   // 语义化字段名（万元）
+    out.amounts = volsHand;   // 与 volumes 同值（手）；字段名沿用历史，别当成交额用
   }
 
   return out;
@@ -1330,9 +1359,14 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
       //   必须回源拉对应口径 —— 否则切换口径永远不生效。
       //   'auto' 请求只接受库内口径为 qfq/hfq 的数据（raw 只会由显式请求产生）。
       const metaAdjust = (meta && meta.adjust) || 'qfq';
-      const adjustMatch = (reqAdjust === 'auto')
+      // ★ 口径回退：库内是后复权，但当时已判定该股前复权不可用（负价/假跳空）。
+      //   前端默认请求 qfq，若照直判定"口径不匹配"就回源，白搭预灌的库。
+      //   这里允许命中，并把实际口径（hfq）如实返回 —— 前端 head 显示的就是 adjust 字段，
+      //   用户看到的是"后复权"，不会被悄悄换口径。
+      const qfqFallback = (reqAdjust === 'qfq' && metaAdjust === 'hfq' && !!(meta && meta.qfq_bad));
+      const adjustMatch = qfqFallback ? true : ((reqAdjust === 'auto')
         ? (metaAdjust === 'qfq' || metaAdjust === 'hfq')
-        : (metaAdjust === reqAdjust);
+        : (metaAdjust === reqAdjust));
       // ★ 本地库命中条件（全局窗口 KLINE_STORE_START=2016-01-04 起整段保存）：
       //   - 库已覆盖窗口：first_date ≤ 2016-01-04，或 2016 后上市（首根=上市日）
       //   - 日期窗口模式另要求 last_date 在 4 天内；根数模式要求 bar_count ≥ count
@@ -1345,8 +1379,14 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
       //     简化处理：bar_count 明显小于 2016 至今应有根数（~2620）且 first_date
       //     晚于窗口起点 + 2 年时视为未覆盖回源（命中后走 replace 补齐）。
       const isLateListing = meta.first_date && meta.first_date > KLINE_STORE_START;
-      const shortLegacy = isLateListing && meta.first_date > '2018-01-01' &&
-        meta.bar_count < 2620 - 30;
+      // ★ 判断"库内历史是否真的短了"，必须按 first_date 推算应有根数，不能用固定阈值。
+      //   旧写法 `first_date > 2018-01-01 && bar_count < 2590` 把**2018~2024 上市的新股
+      //   全部误判成"短窗口落库"**（宁德时代 2018-06 上市、2030 根已是完整上市历史），
+      //   结果这 1275 只（占池子 36%）每次请求都回源，命中不了本地库。
+      //   现在按 A 股每年约 243 个交易日（0.666/天）折算：根数明显少于应有值才算缺失。
+      const _spanDays = (Date.parse(meta.last_date || meta.first_date) - Date.parse(meta.first_date)) / 86400000;
+      const _expectBars = _spanDays > 0 ? _spanDays * 243 / 365 : 0;
+      const shortLegacy = isLateListing && _expectBars > 60 && meta.bar_count < _expectBars * 0.85;
       const windowCovered = meta.first_date && ((meta.first_date <= KLINE_STORE_START || isLateListing) && !shortLegacy);
       let staleCutoff = null;
       if (reqStart) {
@@ -1366,11 +1406,14 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
             dates: local.dates,
             ohlc: local.ohlc,
             volumes: local.volumes,
+            volumesRaw: local.volumesRaw || [],
             key: null,
             cached: true,
             fromStore: true,
             // 告诉前端该标的用的是前复权还是后复权（高分红股会降级为 hfq）
             adjust: meta.adjust || 'qfq',
+            // true = 请求的是前复权，但该股前复权不可用，实际给的是后复权
+            adjustFallback: qfqFallback,
             fetchedAt: new Date().toISOString(),
           };
           setCache(cacheKey, out);
@@ -1387,19 +1430,31 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
     return (q[symbol] && q[symbol].name) || null;
   }).catch(function() { return null; });
 
+  // ★ 回源口径：请求 qfq、但库内已判定该股 qfq 不可用（负价/假跳空）时，
+  //   直接按 hfq 拉。两个理由——
+  //   1) 否则拉回来的 qfq 数据口径与库内 hfq 不同，落库判断会拒绝写入
+  //      （canPersist=false），于是**每次访问都要重新回源 2s 左右**，
+  //      预灌 3500 只的意义就没了；
+  //   2) qfq 那份数据本来就有负价，前端买入会被卡死。
+  //   实际口径仍如实回填到 data.adjust，前端 head 显示的是"后复权"。
+  const upAdjust = (storeEnabled && meta && meta.adjust === 'hfq' && meta.qfq_bad &&
+    reqAdjust === 'qfq') ? 'hfq' : reqAdjust;
+  const adjustFallbackUp = (upAdjust !== reqAdjust);
+
   const [name, klineData] = await Promise.all([
     namePromise,
     // ★ withIndicators 缺省 false：去掉 ma5/ma10/ma20/macd/amounts，
     //   传输量从 96.5KB 降到约 25KB（实测 641 根）
     // ★ 回源时一律按全局窗口 KLINE_STORE_START 拉全量（2016-01-04 至今），
     //   根数/count 只影响返回裁剪，不影响落库 —— 保证库内始终是完整历史
-    buildKLineSnapshot(symbol, null, effCount, { adjust: reqAdjust, startDate: KLINE_STORE_START })
+    buildKLineSnapshot(symbol, null, effCount, { adjust: upAdjust, startDate: KLINE_STORE_START })
   ]);
   klineData.name = name || klineData.name || null;
   klineData.key = null;
   // 该标的实际使用的复权口径：'qfq' 常规 / 'hfq' 负价降级
   const usedAdjust = klineData.adjust || 'qfq';
   klineData.adjust = usedAdjust;
+  klineData.adjustFallback = adjustFallbackUp;
   // 批量预热时上百只标的顺序写入内存缓存会把 Map 撑大且毫无意义
   // （预热进程结束即释放），因此允许调用方跳过。
   // （此处 setCache 的对象在下方裁剪为 out 后会被覆盖写入正确的裁剪版本）
@@ -1420,7 +1475,8 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
           name: klineData.name, symbol: klineData.symbol, count: klineData.count - i,
           dates: klineData.dates.slice(i), ohlc: klineData.ohlc.slice(i),
           volumes: klineData.volumes.slice(i),
-          adjust: klineData.adjust, key: null, cached: false,
+          volumesRaw: (klineData.volumesRaw || []).slice(i),
+          adjust: klineData.adjust, adjustFallback: adjustFallbackUp, key: null, cached: false,
         };
       }
     }
@@ -1430,7 +1486,8 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
       name: klineData.name, symbol: klineData.symbol, count: count,
       dates: klineData.dates.slice(c - count), ohlc: klineData.ohlc.slice(c - count),
       volumes: klineData.volumes.slice(c - count),
-      adjust: klineData.adjust, key: null, cached: false,
+      volumesRaw: (klineData.volumesRaw || []).slice(c - count),
+      adjust: klineData.adjust, adjustFallback: adjustFallbackUp, key: null, cached: false,
     };
   }
   // 用裁剪后的对象覆盖内存/磁盘缓存（键已含 count/reqStart）
@@ -1443,12 +1500,26 @@ async function getKLineSnapshotForSymbol(symbol, count = 1200, opts) {
   //   根数/窗口请求都从库里裁剪返回，不再单独回源短窗口。
   if (storeEnabled) {
     const metaAdjust0 = (meta && meta.adjust) || 'qfq';
-    const canPersist = (reqAdjust === 'auto') || (reqAdjust === usedAdjust && metaAdjust0 === usedAdjust);
+    // ★ 用 upAdjust（回源时真正用的口径）判断能否落库，而不是 reqAdjust：
+    //   qfq 请求被回退成 hfq 时，拉回来的就是 hfq，与库内一致，必须允许写入，
+    //   否则每次访问都重拉一遍。
+    //   首次入库（meta 为空）时允许写 —— 原来用 metaAdjust0 默认 'qfq' 去卡，
+    //   会把 auto 择优成 hfq 的新标的永远拒之门外，每次访问都回源。
+    const firstTime = !meta || !meta.bar_count;
+    const canPersist = (upAdjust === 'auto') ||
+      (upAdjust === usedAdjust && (firstTime || metaAdjust0 === usedAdjust));
     if (!canPersist) {
       console.log('[kline-store] ' + symbol + ' 请求口径 ' + reqAdjust +
         ' 与库内口径 ' + metaAdjust0 + ' 不同，本次数据只回前端不落库');
     } else {
     const metaOpt = { name: klineData.name, adjust: usedAdjust };
+    // ★ qfq_bad：标记「这只票的前复权不可用（负价/假跳空），库里存的是后复权」。
+    //   auto 请求择优到 hfq → 说明 qfq 被判定为坏数据，置 1；
+    //   用户显式指定 hfq（比如看到告警后主动切换）不代表 qfq 坏 → 沿用原标记。
+    //   有了它，前端默认的 qfq 请求才能直接命中库内 hfq 数据而不回源（见 getKLineSnapshotForSymbol）。
+    metaOpt.qfq_bad = (usedAdjust === 'hfq')
+      ? (reqAdjust === 'auto' ? 1 : ((meta && meta.qfq_bad) ? 1 : 0))
+      : 0;
     try {
       // ★ 复权口径变了（qfq→hfq）说明旧数据整段不可比，必须整只覆盖
       const adjustSwitched = meta && meta.adjust && meta.adjust !== usedAdjust;      if (adjustSwitched) {

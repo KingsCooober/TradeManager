@@ -377,7 +377,7 @@ func validateSettingsUpdate(request settingsUpdateRequest) error {
 func validateSingleLLM(request settingsUpdateRequest) error {
 	if request.LLM.Provider != nil {
 		provider := strings.TrimSpace(*request.LLM.Provider)
-		allowed := map[string]bool{"": true, "openai": true, "deepseek": true, "qwen": true, "moonshot": true, "minimax": true, "zhipu": true, "siliconflow": true, "anthropic": true, "custom": true}
+		allowed := map[string]bool{"": true, "openai": true, "deepseek": true, "qwen": true, "moonshot": true, "minimax": true, "zhipu": true, "siliconflow": true, "anthropic": true, "custom": true, "xiaomi": true}
 		if !allowed[provider] {
 			return fmt.Errorf("unsupported llm provider: %s", provider)
 		}

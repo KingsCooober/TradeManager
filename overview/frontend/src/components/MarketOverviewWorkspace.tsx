@@ -2,6 +2,7 @@ import {
 	Activity,
 	AlertTriangle,
 	BarChart3,
+	BookOpen,
 	Bot,
 	Building2,
 	ChartCandlestick,
@@ -49,6 +50,7 @@ import {
 	type MarketOverviewView,
 	buildMarketBillboardPrompt,
 	buildMarketModulePrompt,
+	buildResearchReportPrompt,
 	buildMarketPulsePrompt,
 	findMarketOverviewModule,
 	marketOverviewGroups,
@@ -66,6 +68,7 @@ import {
 	ModuleState,
 	ResearchView,
 } from './market/MarketDataViews';
+import { StockPeekProvider } from './market/StockKLineModal';
 
 type Props = {
 	config: BackendConfig | null;
@@ -87,7 +90,11 @@ const moduleIcons = {
 	announcements: Megaphone,
 	'institution-reports': FileSearch,
 	'industry-research': SearchCheck,
+	'local-reports': BookOpen,
 } satisfies Record<MarketOverviewView, typeof Newspaper>;
+
+// 本地研报库每页条数（要能一页页翻到底，不再只给前 80 篇）
+const localReportsPageSize = 50;
 
 export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) {
 	const [activeView, setActiveView] = useState<MarketOverviewView>(() => resolveMarketOverviewView(window.location.hash));
@@ -121,6 +128,12 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 	const [searchDraft, setSearchDraft] = useState('');
 	const [submittedQuery, setSubmittedQuery] = useState('');
 	const [announcementCategory, setAnnouncementCategory] = useState('all');
+	// 行业研报的行业标签（本地研报库按行业分组）；空字符串表示「全部」
+	const [localIndustry, setLocalIndustry] = useState('');
+	const [localIndustryTags, setLocalIndustryTags] = useState<{ name: string; count: number }[]>([]);
+	// 本地研报库分页：0 基页码 + 服务端返回的总数
+	const [localPage, setLocalPage] = useState(0);
+	const [localTotal, setLocalTotal] = useState(0);
 	const [aiPreparing, setAIPreparing] = useState(false);
 	const activeModule = useMemo(() => findMarketOverviewModule(activeView), [activeView]);
 
@@ -217,9 +230,19 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 				if (activeView === 'announcements') params.set('category', announcementCategory);
 				if (activeView === 'institution-reports') endpoint = '/api/v1/research/institution-reports';
 				if (activeView === 'industry-research') endpoint = '/api/v1/research/industries';
-				const payload = await requestJSON<{ data: MarketResearchItem[]; meta: SourceMeta }>(config, `${endpoint}?${params.toString()}`);
+				if (activeView === 'local-reports') {
+					endpoint = '/api/v1/research/local-reports';
+					// 本地研报库要能翻到底：按页取数，服务端同时返回 total
+					params.set('limit', String(localReportsPageSize));
+					params.set('offset', String(localPage * localReportsPageSize));
+					if (localIndustry) params.set('industry', localIndustry);
+				}
+				const payload = await requestJSON<{ data: MarketResearchItem[]; meta: SourceMeta; total?: number }>(config, `${endpoint}?${params.toString()}`);
 				setResearch(payload.data);
 				setModuleMeta(payload.meta);
+				if (activeView === 'local-reports') {
+					setLocalTotal(typeof payload.total === 'number' ? payload.total : payload.data.length);
+				}
 			}
 			setLastUpdated(new Date().toISOString());
 			setModuleState('ready');
@@ -227,7 +250,17 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 			setModuleError(errorMessage(error, `${activeModule.name}加载失败`));
 			setModuleState('error');
 		}
-	}, [activeModule.name, activeView, announcementCategory, config, futuresVariety, marginLimit, submittedQuery, tradeDate]);
+	}, [activeModule.name, activeView, announcementCategory, config, futuresVariety, localIndustry, localPage, marginLimit, submittedQuery, tradeDate]);
+
+	// 行业研报的标签云：进入页面或刷新时拉一次行业分布（数量已由后端算好）
+	useEffect(() => {
+		if (!config || activeView !== 'local-reports') return;
+		let cancelled = false;
+		void requestJSON<{ data: { name: string; count: number }[] }>(config, '/api/v1/research/local-report-industries')
+			.then(({ data }) => { if (!cancelled) setLocalIndustryTags(Array.isArray(data) ? data : []); })
+			.catch(() => { if (!cancelled) setLocalIndustryTags([]); });
+		return () => { cancelled = true; };
+	}, [activeView, config, refreshKey]);
 
 	const requestBillboardDetail = useCallback(async (item: MarketBillboardItem) => {
 		if (!config) throw new Error('后端尚未连接');
@@ -253,10 +286,13 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 		const key = `${item.kind}-${item.id}`;
 		setResearchDetails((current) => ({ ...current, [key]: { state: 'loading' } }));
 		const isAnnouncement = item.kind === 'announcement';
+		const isLocalReport = item.kind === 'local-report';
 		try {
 			const path = isAnnouncement
 				? `/api/v1/research/announcement-content?id=${encodeURIComponent(item.id)}`
-				: `/api/v1/research/report-content?kind=${item.kind === 'industry' ? 'industry' : 'stock'}&id=${encodeURIComponent(item.id)}`;
+				: isLocalReport
+					? `/api/v1/research/local-report?id=${encodeURIComponent(item.id)}`
+					: `/api/v1/research/report-content?kind=${item.kind === 'industry' ? 'industry' : 'stock'}&id=${encodeURIComponent(item.id)}`;
 			const payload = await requestJSON<{ data: MarketResearchDetail; meta: SourceMeta }>(config, path);
 			setResearchDetails((current) => ({ ...current, [key]: { state: 'ready', detail: payload.data } }));
 		} catch (error) {
@@ -274,7 +310,8 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 		if (!config || activeView !== 'core-indexes' || !selectedIndexID) return;
 		let cancelled = false;
 		setSeriesLoading(true);
-		requestJSON<{ data: MarketIndexSeries }>(config, `/api/v1/market/index-series?id=${encodeURIComponent(selectedIndexID)}&period=day&limit=120`)
+		// 固定取近一年（250 根 ≈ 243 个交易日）；更长/更短交给图上的缩放平移
+		requestJSON<{ data: MarketIndexSeries }>(config, `/api/v1/market/index-series?id=${encodeURIComponent(selectedIndexID)}&period=day&limit=250`)
 			.then((payload) => { if (!cancelled) setIndexSeries(payload.data); })
 			.catch((error) => { if (!cancelled) { setIndexSeries(null); setModuleError(errorMessage(error, '指数走势加载失败')); } })
 			.finally(() => { if (!cancelled) setSeriesLoading(false); });
@@ -294,6 +331,8 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 			setSearchDraft('');
 			setSubmittedQuery('');
 			setAnnouncementCategory('all');
+			setLocalIndustry('');
+			setLocalPage(0);
 		}
 		setActiveView(view);
 		setModuleError('');
@@ -361,11 +400,13 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 	const refresh = () => activeView === 'pulse' ? void loadPulse() : void loadModule();
 	const submitResearch = () => {
 		const next = searchDraft.trim();
+		setLocalPage(0);
 		if (next === submittedQuery) void loadModule();
 		else setSubmittedQuery(next);
 	};
 
-	return <section className="market-overview-workspace">
+	return <StockPeekProvider config={config}>
+	<section className="market-overview-workspace">
 		<aside className="market-overview-nav" aria-label="行情总览功能">
 			<header><BarChart3 size={18} /><div><span>MARKET OVERVIEW</span><strong>行情总览</strong></div></header>
 			{marketOverviewGroups.map((group) => <section key={group.id}><h2>{group.name}</h2><div>{group.modules.map((module) => {
@@ -389,10 +430,11 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 				{activeView === 'margin-balance' && <MarginBalanceView items={margins} limit={marginLimit} onLimit={setMarginLimit} meta={moduleMeta} />}
 				{activeView === 'futures-position' && <FuturesPositionView series={futuresPosition} members={futuresMembers} consensus={futuresConsensus} variety={futuresVariety} onVariety={setFuturesVariety} meta={moduleMeta} />}
 				{activeView === 'billboard' && <BillboardView items={billboard} tradeDate={tradeDate} onTradeDate={setTradeDate} meta={moduleMeta} details={billboardDetails} onLoadDetail={loadBillboardDetail} />}
-				{isResearchView(activeView) && <ResearchView kind={researchKind(activeView)} items={research} queryDraft={searchDraft} onQueryDraft={setSearchDraft} onSearch={submitResearch} category={announcementCategory} onCategory={setAnnouncementCategory} meta={moduleMeta} details={researchDetails} onLoadDetail={loadResearchDetail} />}
+				{isResearchView(activeView) && <ResearchView kind={researchKind(activeView)} items={research} queryDraft={searchDraft} onQueryDraft={setSearchDraft} onSearch={submitResearch} category={announcementCategory} onCategory={setAnnouncementCategory} meta={moduleMeta} details={researchDetails} onLoadDetail={loadResearchDetail} onAskReport={(item) => onAskAI(buildResearchReportPrompt(item))} industryTags={activeView === 'local-reports' ? localIndustryTags : undefined} activeIndustry={localIndustry} onIndustry={(name) => { setLocalIndustry(name); setLocalPage(0); }} pager={activeView === 'local-reports' ? { page: localPage, pageSize: localReportsPageSize, total: localTotal, onPage: setLocalPage } : undefined} />}
 			</ModuleState>}
 		</div>
-	</section>;
+	</section>
+	</StockPeekProvider>;
 }
 
 function billboardDetailKey(item: MarketBillboardItem) {
@@ -469,11 +511,13 @@ function flowDimension(view: 'industry-flow' | 'theme-flow' | 'stock-flow') {
 	return view === 'industry-flow' ? 'industry' : view === 'theme-flow' ? 'theme' : 'stock';
 }
 
-function isResearchView(view: MarketOverviewView): view is 'announcements' | 'institution-reports' | 'industry-research' {
-	return view === 'announcements' || view === 'institution-reports' || view === 'industry-research';
+function isResearchView(view: MarketOverviewView): view is 'announcements' | 'institution-reports' | 'industry-research' | 'local-reports' {
+	return view === 'announcements' || view === 'institution-reports' || view === 'industry-research' || view === 'local-reports';
 }
 
-function researchKind(view: 'announcements' | 'institution-reports' | 'industry-research') {
+function researchKind(view: 'announcements' | 'institution-reports' | 'industry-research' | 'local-reports') {
+	// local-reports 复用「行业研报」的展示样式（标签、图标），
+	// 区别只在正文来源：走本地 research.db，而不是东方财富。
 	return view === 'announcements' ? 'announcement' : view === 'institution-reports' ? 'stock' : 'industry';
 }
 

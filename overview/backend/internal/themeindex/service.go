@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -40,7 +41,7 @@ func New(config Config) *Service {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &Service{config: config, series: newCache[foundation.ThemeIndexSeries](32), bars: newCache[[]foundation.KLine](512), catalog: newCache[[]foundation.Board](1), workers: make(chan struct{}, 6)}
+	return &Service{config: config, series: newCache[foundation.ThemeIndexSeries](32), bars: newCache[[]foundation.KLine](512), catalog: newCache[[]foundation.Board](1), workers: make(chan struct{}, 10)}
 }
 func (s *Service) Series(ctx context.Context, theme, snapshot string, limit int) (foundation.ThemeIndexSeries, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -161,13 +162,14 @@ func (s *Service) build(ctx context.Context, theme, snapshot string) (foundation
 	}
 	paths := map[string][]foundation.KLine{}
 	sampled := 0
+	var batchFailures, lastFailures []string
 	for sampled < min(len(symbols), maxSample) {
 		batchSize := 32
 		if len(symbols) <= maxSample {
 			batchSize = len(symbols)
 		}
 		end := min(sampled+batchSize, len(symbols), maxSample)
-		s.loadBatch(ctx, symbols[sampled:end], paths)
+		batchFailures = s.loadBatch(ctx, symbols[sampled:end], paths)
 		sampled = end
 		lines, quality := Compose(theme, paths, len(symbols), now)
 		quality.Sampled = sampled
@@ -179,6 +181,9 @@ func (s *Service) build(ctx context.Context, theme, snapshot string) (foundation
 			quality.SamplingErrorPercent = 0
 		}
 		value.Lines, value.Quality = lines, quality
+		if len(batchFailures) > 0 {
+			lastFailures = batchFailures
+		}
 		if len(symbols) <= maxSample || (len(paths) >= 32 && quality.SamplingEstimateAvailable && quality.SkippedDays == 0 && quality.SamplingErrorPercent <= samplingTolerancePercent) || ctx.Err() != nil {
 			break
 		}
@@ -187,6 +192,17 @@ func (s *Service) build(ctx context.Context, theme, snapshot string) (foundation
 		return value, ctx.Err()
 	}
 	if len(value.Lines) < 2 || float64(len(paths))/float64(sampled) < .8 {
+		if len(lastFailures) == 0 {
+			lastFailures = batchFailures
+		}
+		if len(lastFailures) > 0 {
+			log.Printf("[theme-index] %s 覆盖 %d/%d，取样失败样例：%s", theme, len(paths), sampled, strings.Join(lastFailures, " | "))
+			sample := lastFailures
+			if len(sample) > 2 {
+				sample = sample[:2]
+			}
+			return value, fmt.Errorf("题材历史行情覆盖不足（%d/%d），请重试；失败样例：%s", len(paths), sampled, strings.Join(sample, " | "))
+		}
 		return value, fmt.Errorf("题材历史行情覆盖不足（%d/%d），请重试", len(paths), sampled)
 	}
 	value.Method = "equal-weight"
@@ -246,7 +262,7 @@ func MemberSymbols(theme string, members foundation.SectorMap) []string {
 	})
 	return symbols
 }
-func (s *Service) loadBatch(ctx context.Context, symbols []string, paths map[string][]foundation.KLine) {
+func (s *Service) loadBatch(ctx context.Context, symbols []string, paths map[string][]foundation.KLine) (failures []string) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	for _, symbol := range symbols {
@@ -277,8 +293,17 @@ func (s *Service) loadBatch(ctx context.Context, symbols []string, paths map[str
 				mu.Lock()
 				paths[symbol] = bars
 				mu.Unlock()
+				return
 			}
+			// 以前这里的失败是静默丢弃的：128 只里挂掉 37 只，只能看到一个 91/128 的数字，
+			// 完全不知道是限流、代码不对还是复权数据缺失。留几条样例方便排查。
+			mu.Lock()
+			if len(failures) < 5 {
+				failures = append(failures, fmt.Sprintf("%s: %v", symbol, err))
+			}
+			mu.Unlock()
 		}(symbol)
 	}
 	wg.Wait()
+	return failures
 }

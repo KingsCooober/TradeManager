@@ -1,10 +1,13 @@
 // 补齐「整行缺失」的交易日（fill-recent.js 只 UPDATE 已有行，不 INSERT 新行）
 //
 // 场景：某个交易日收盘后无人打开页面 → 后端没触发抓取 → market_history 完全没这行
-// 本脚本：拉「新浪情绪快照（涨跌家数/涨跌停，实时接口周六返回上周五收盘）」
-//       + 「行情模块成交额（Baostock → 腾讯兜底）」
+// 本脚本：拉「新浪情绪快照（涨跌家数/涨跌停，实时接口，**只能拿最新交易日**）」
+//       + 「指数成交额（index-amount：东财 push2his → Baostock，亿元）」
 //       + 「东财两融（T+1，未提供则留 NULL）」
 //       → INSERT OR REPLACE 写入
+//
+// 限制：TARGET 必须是最新交易日（新浪情绪接口无法回溯历史），
+//       补更早日期请用 bs-activity.py（Baostock 全市场重算）+ apply-activity.js。
 //
 // 注意：远程 node 的 sqlite3 原生模块 require 会 segfault → 统一走 sqlite3 CLI
 //
@@ -73,20 +76,40 @@ function esc(v) { return String(v).replace(/'/g, "''"); }
   console.log('\n   涨停=' + sm.zt + ' 跌停=' + sm.dt + ' 涨=' + sm.up +
     ' 跌=' + sm.down + ' 平=' + sm.flat + ' 样本=' + sampleSize);
 
-  // 2) 成交额（行情模块）
+  // 2) 成交额（index-amount 模块：东财 push2his → Baostock，单位亿元）
+  //
+  // ★ 不要用 market-quote.fetchKLine 的 k.amount：腾讯 day 数组没有成交额字段，
+  //   k.amount 实际是「成交量(手)」，直接 /1e8 会写出差 1000 倍的脏数据。
   console.log('[2/3] 拉取成交额…');
-  const mq = require('./market-quote');
-  const shK = await mq.fetchKLine('sh000001', 10);
-  const szK = await mq.fetchKLine('sz399001', 10);
-  const shMap = {}, szMap = {};
-  shK.forEach(k => { shMap[k.date] = k.amount / 1e8; });
-  szK.forEach(k => { szMap[k.date] = k.amount / 1e8; });
-  console.log('   沪最新=' + JSON.stringify(Object.keys(shMap).sort().slice(-3)) +
-    '  深最新=' + JSON.stringify(Object.keys(szMap).sort().slice(-3)));
+  const indexAmount = require('./index-amount');
+  const amtRes = await indexAmount.fetchMarketAmountByDate(15);
+  const amtMap = amtRes.map;
+  const amtDates = Object.keys(amtMap).sort();
+  console.log('   数据源=' + amtRes.src + '  最新 3 天=' + JSON.stringify(amtDates.slice(-3)));
 
-  if (!shMap[TARGET] || !szMap[TARGET]) {
-    console.error('❌ 行情模块没有 ' + TARGET + ' 的成交额（可能非交易日或数据源未更新）');
+  if (!amtMap[TARGET]) {
+    console.error('❌ 权威源没有 ' + TARGET + ' 的成交额（可能非交易日或数据源未更新）');
     process.exit(1);
+  }
+
+  // ★ 日期守卫：新浪情绪接口只有「实时」，非交易日返回最近交易日收盘。
+  //   所以只有当 TARGET 就是最新交易日时，快照才是 TARGET 当天的数据；
+  //   补更早的历史日期必须走 Baostock 全市场重算（bs-activity.py），否则会把
+  //   最新交易日的涨跌家数错配到 TARGET 上。
+  const latestTradeDate = amtDates[amtDates.length - 1];
+  if (TARGET !== latestTradeDate && !process.argv.includes('--force')) {
+    console.error('❌ ' + TARGET + ' 不是最新交易日（最新=' + latestTradeDate + '）');
+    console.error('   新浪情绪接口无法回溯历史，补历史日期请用：');
+    console.error('     python3 bs-activity.py ' + TARGET + '   （全市场重算，约 8.5 分钟）');
+    console.error('     node apply-activity.js bs-<MMDD>.log');
+    process.exit(2);
+  }
+
+  const sh = amtMap[TARGET].sh, sz = amtMap[TARGET].sz;
+  if (!indexAmount.isSaneAmount(sh, sz)) {
+    console.error('❌ ' + TARGET + ' 成交额数值异常：沪=' + sh.toFixed(2) + '亿 深=' + sz.toFixed(2) +
+      '亿（疑似单位错误），已中止');
+    process.exit(3);
   }
 
   // 3) 两融（东财 T+1）
@@ -121,7 +144,6 @@ function esc(v) { return String(v).replace(/'/g, "''"); }
     console.log('   (两融拉取失败: ' + e.message + '，留 NULL)');
   }
 
-  const sh = shMap[TARGET], sz = szMap[TARGET];
   const zt = sm.zt || 0, dt = sm.dt || 0;
 
   console.log('\n=== 将写入 ===');
@@ -144,7 +166,7 @@ function esc(v) { return String(v).replace(/'/g, "''"); }
     sh.toFixed(4) + ", " + sz.toFixed(4) + ", " + (sh + sz).toFixed(4) + ", " +
     zt + ", " + dt + ", " + (zt - dt) + ", " +
     (sm.up || 0) + ", " + (sm.down || 0) + ", " + (sm.flat || 0) + ", " + sampleSize + ", " +
-    "0, '" + new Date().toISOString() + "', 'sina+quote+em');";
+    "0, '" + new Date().toISOString() + "', 'sina+em');";
   sqlExec(sql);
 
   console.log('\n✅ 已写入');
