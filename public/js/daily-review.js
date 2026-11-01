@@ -1207,12 +1207,20 @@ function drawDRMarginChart(echarts, displayData, fullData) {
   var dates = displayData.map(function(d) { return d.date.slice(5); });
   // ★ 当前日期在图表中的索引（用于高亮标记线）—— 用 displayData 的索引
   var currentDateIdx = findDRDateIndex(displayData);
-  var hasValue = function(d) { return (d.rzye || 0) > 0 || (d.rzrqye || 0) > 0; };
-  var marginArr = displayData.map(function(d) { return hasValue(d) ? Math.round((d.rzrqye || 0) / 1e8) : null; });
+  // ★ 2026-11：合并展示「融资余额 + 融券余额」两条线
+  //   数据源 market_history 只存 rzye（融资余额）与 rzrqye（两融余额）两列，
+  //   融券余额 = 两融余额 - 融资余额（server.js 的 /api/market/fund 也是这么算的）。
+  //   两者量级差约 85:1（融资 ~2.4 万亿、融券 ~290 亿），必须双 Y 轴，
+  //   否则融券那条线会被压成贴着 X 轴的一条直线。
+  var hasValue = function(d) { return (d.rzye || 0) > 0 && (d.rzrqye || 0) > 0; };
+  var toYi = function(v) { return Math.round(v / 1e6) / 100; };   // 元 → 亿元（保留 2 位）
+  var rqyeOf = function(d) { return toYi((d.rzrqye || 0) - (d.rzye || 0)); };
+  var marginArr = displayData.map(function(d) { return hasValue(d) ? Math.round(d.rzye / 1e8) : null; });  // 融资余额（亿元，整数）
+  var rqyeArr   = displayData.map(function(d) { return hasValue(d) ? rqyeOf(d) : null; });                   // 融券余额（亿元，2 位小数）
   // ★ 用于标记点/Pxx 计算的有效数组（仅含真实有值的点）
   var validVals = marginArr.filter(function(v) { return v !== null; });
-  // 全量数据：百分位（仍用 fullData）
-  var fullMarginArr = (fullData || displayData).map(function(d) { return Math.round((d.rzrqye || 0) / 1e8); });
+  // 全量数据：百分位（仍用 fullData；口径为融资余额）
+  var fullMarginArr = (fullData || displayData).map(function(d) { return Math.round((d.rzye || 0) / 1e8); });
   // ★ currentVal 取最后一个有效值（最后一个非 null 的项）
   var lastIdx = -1;
   for (var _i = marginArr.length - 1; _i >= 0; _i--) { if (marginArr[_i] !== null) { lastIdx = _i; break; } }
@@ -1234,15 +1242,44 @@ function drawDRMarginChart(echarts, displayData, fullData) {
   // P95 / P98 历史分位参考值
   var p95Val = calcPercentileValue(fullMarginArr, 95);
   var p98Val = calcPercentileValue(fullMarginArr, 98);
+  // 融券余额（右轴）自适应范围：与融资不同轴，独立按自身数据缩放
+  var _validRq = rqyeArr.filter(function(v) { return v !== null; });
+  var rqMax = _validRq.length ? Math.max.apply(null, _validRq) : 0;
+  var rqMin = _validRq.length ? Math.min.apply(null, _validRq) : 0;
+  // 融券余额当前值 / 昨日值（tooltip 与 pin 用）
+  var lastRqVal = lastIdx >= 0 ? rqyeArr[lastIdx] : null;
+  var prevRqVal = prevIdx >= 0 ? rqyeArr[prevIdx] : null;
   var chart = echarts.init(el);
   chart.setOption({
     backgroundColor: 'transparent',
-    grid: { left: 50, right: 20, top: 20, bottom: 30 },
+    // top 由 20 提到 40：给顶部图例留位置（融资/融券两条）
+    grid: { left: 50, right: 52, top: 40, bottom: 30 },
+    legend: {
+      top: 4, left: 4, itemWidth: 14, itemHeight: 8, itemGap: 14,
+      textStyle: { color: ts.textColor, fontSize: 10 },
+      data: ['融资余额', '融券余额']
+    },
     tooltip: {
       trigger: 'axis',
       formatter: function(p) {
-        var v = p[0];
-        return v.axisValue + '<br/>' + v.marker + ' ' + v.seriesName + ': ' + v.value + ' 亿';
+        if (!p || !p.length) return '';
+        // p[0] 是视觉上最新的一条，不保证顺序 → 按系列名取，避免两轴顺序变化导致串行
+        var byName = {};
+        p.forEach(function(it) { byName[it.seriesName] = it; });
+        var lines = [p[0].axisValue];
+        var rz = byName['融资余额'], rq = byName['融券余额'];
+        if (rz && rz.value != null) {
+          lines.push(rz.marker + ' 融资余额: ' + Number(rz.value).toLocaleString('zh-CN') + ' 亿');
+        }
+        if (rq && rq.value != null) {
+          lines.push(rq.marker + ' 融券余额: ' + Number(rq.value).toFixed(2) + ' 亿');
+        }
+        if (rz && rz.value != null && rq && rq.value != null) {
+          var total = Number(rz.value) + Number(rq.value);
+          var ratio = total > 0 ? (Number(rq.value) / total * 100) : 0;
+          lines.push('<span style="opacity:.7">两融合计: ' + total.toFixed(2) + ' 亿 · 融券占比 ' + ratio.toFixed(2) + '%</span>');
+        }
+        return lines.join('<br/>');
       }
     },
     xAxis: {
@@ -1251,19 +1288,29 @@ function drawDRMarginChart(echarts, displayData, fullData) {
       axisLine:  { lineStyle: { color: ts.gridLine } },
       axisLabel: { color: ts.textColor, fontSize: 10, interval: Math.max(0, Math.floor(dates.length / 8) - 1) }
     },
-    yAxis: {
+    yAxis: [{
       type: 'value',
-      // ★ 两融余额：Y 轴起点 = 数据最小值 × 0.95（比最小值低 5%，与顶部对称）
+      // 轴名省去：顶部图例已标明"融资余额/融券余额"，靠刻度颜色区分左右轴，避免顶部重复拥挤
+      // ★ 融资余额（左轴）：起点 = 数据最小值 × 0.95（比最小值低 5%，与顶部对称）
       min: Math.floor(Math.max(0, minVal * 0.95)),
-      // ★ Y 轴最大值 = 数据/百分位线最大值 × 1.05（比历史数据最大值高 5%）
+      // ★ 最大值 = 数据/百分位线最大值 × 1.05（比历史数据最大值高 5%）
       max: Math.ceil(Math.max(maxVal, p90Val || 0, p95Val || 0, p98Val || 0) * 1.05),
       axisLine:  { lineStyle: { color: ts.gridLine } },
       axisLabel: { color: ts.textColor, fontSize: 10, formatter: function(v) { return v >= 10000 ? (v/10000).toFixed(2) + ' 万亿' : v + ' 亿'; } },
       splitLine: { lineStyle: { color: ts.gridLine, type: 'dashed' } }
-    },
+    }, {
+      // ★ 融券余额（右轴）：量级只有融资的 1/85，独立缩放，否则贴底成一条直线
+      type: 'value',
+      min: Math.floor(Math.max(0, (rqMin - (rqMax - rqMin) * 0.15))),
+      max: Math.ceil(Math.max(1, rqMax + (rqMax - rqMin) * 0.15 + 1)),
+      axisLine:  { lineStyle: { color: ts.gridLine } },
+      axisLabel: { color: '#bf5af2', fontSize: 10, formatter: function(v) { return v + ' 亿'; } },
+      splitLine: { show: false }
+    }],
     series: [{
-      name: '两融余额',
+      name: '融资余额',
       type: 'line',
+      yAxisIndex: 0,
       data: marginArr,
       smooth: true,
       symbol: 'circle',
@@ -1334,6 +1381,39 @@ function drawDRMarginChart(echarts, displayData, fullData) {
             symbol: 'circle', symbolSize: 10, itemStyle: { color: '#94a3b8' },
             label: { show: true, position: 'top', formatter: '昨 ' + prevVal + ' 亿', color: '#94a3b8', fontSize: 9, fontWeight: 600 } }] : [])
         ]
+      }
+    }, {
+      // ★ 融券余额（右轴）：只做趋势参考，不参与百分位/markLine，避免与融资的分位线混淆
+      name: '融券余额',
+      type: 'line',
+      yAxisIndex: 1,
+      data: rqyeArr,
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 3,
+      showSymbol: false,
+      lineStyle: { color: '#bf5af2', width: 1.6 },
+      itemStyle: { color: '#bf5af2' },
+      areaStyle: {
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: 'rgba(191,90,242,0.18)' },
+            { offset: 1, color: 'rgba(191,90,242,0.01)' }
+          ]
+        }
+      },
+      // 融券当前值：右轴上的一个小圆点 + 数值，方便和左轴的融资 pin 对照
+      markPoint: {
+        symbol: 'circle',
+        symbolSize: 8,
+        itemStyle: { color: '#bf5af2' },
+        label: {
+          show: true, position: 'left', offset: [-6, 0],
+          formatter: lastRqVal != null ? Number(lastRqVal).toFixed(2) + ' 亿' : '',
+          color: '#bf5af2', fontSize: 9, fontWeight: 700
+        },
+        data: (lastRqVal != null ? [{ name: '融券当前', value: lastRqVal, xAxis: lastIdx, yAxis: lastRqVal }] : [])
       }
     }]
   });
