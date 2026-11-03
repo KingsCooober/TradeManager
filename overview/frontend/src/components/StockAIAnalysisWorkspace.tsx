@@ -77,6 +77,7 @@ import { StockResearchHistory, StockResearchProgress, StockResearchReportView } 
 import { StockResearchSetupDialog, type ResearchSetupOptions } from './StockResearchSetupDialog';
 import { ETFAnalysisReport, etfSnapshotText } from './ETFAnalysisReport';
 import { StockResearchTradingLogic } from './StockResearchTradingLogic';
+import { StockAnalysisErrorBoundary } from './StockAnalysisErrorBoundary';
 
 export type StockAIWorkspaceMode = 'analysis' | 'expectation' | 'risk';
 
@@ -460,6 +461,7 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, onModeChang
 
 					{state !== 'loading' && !analysis && state !== 'error' && <StockAIEmpty onSelect={(symbol) => requestAnalysis(symbol)} />}
 					{state !== 'loading' && analysis && (
+						<StockAnalysisErrorBoundary key={JSON.stringify([analysis.analysis_id, analysis.symbol, analysis.generated_at, mode])}>
 						<div className="stock-ai-result">
 							<div className="stock-ai-export-sheet" ref={exportRef}>
 								<AnalysisExportHeader analysis={analysis} mode={mode} />
@@ -478,6 +480,7 @@ export function StockAIAnalysisWorkspace({ config, refreshKey, mode, onModeChang
 							</div>
 							{exportNotice && <div className={`stock-ai-export-notice ${exportNotice.includes('失败') ? 'error' : ''}`} role="status">{exportNotice}</div>}
 						</div>
+						</StockAnalysisErrorBoundary>
 					)}
 				</div>
 			</div>
@@ -543,7 +546,7 @@ function HotStockSidebar({ data, state, error, activeSymbol, collapsed, onToggle
 }
 
 function HotStockRow({ stock, index, active, onSelect }: { stock: HotStockRankEntry; index: number; active: boolean; onSelect: (symbol: string) => void }) {
-	return <button type="button" className={`${active ? 'active' : ''} ${index < 3 ? 'top' : ''}`.trim()} onClick={() => onSelect(stock.symbol)}>
+	return <button type="button" className={`${active ? 'active' : ''} ${index < 3 ? 'top' : ''}`.trim()} data-stock-row="hot" data-symbol={stock.symbol} data-name={stock.name} onClick={() => onSelect(stock.symbol)}>
 		<i>{String(index + 1).padStart(2, '0')}</i>
 		<span><strong>{stock.name}</strong><small>{stock.code} · {stockMarketLabel(stock.symbol)}</small></span>
 		<em>

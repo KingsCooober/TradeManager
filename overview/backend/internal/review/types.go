@@ -255,6 +255,13 @@ type DailySummary struct {
 	GenerationErrors      []string             `json:"generation_errors,omitempty"`
 }
 
+type DailySummaryHistoryItem struct {
+	TradeDate    string    `json:"trade_date"`
+	ArticleCount int       `json:"article_count"`
+	AuthorCount  int       `json:"author_count"`
+	GeneratedAt  time.Time `json:"generated_at"`
+}
+
 type DailySummaryJob struct {
 	ScheduledTargetDate  string    `json:"scheduled_target_date,omitempty"`
 	NotificationChannels []string  `json:"notification_channels,omitempty"`
@@ -493,4 +500,6 @@ type DailyValidationJob struct {
 	UpdatedAt        time.Time `json:"updated_at,omitempty"`
 	CompletedAt      time.Time `json:"completed_at,omitempty"`
 	ResultAvailable  bool      `json:"result_available"`
+	ReadyAt          time.Time `json:"ready_at,omitempty"`
+	CanStart         bool      `json:"can_start"`
 }

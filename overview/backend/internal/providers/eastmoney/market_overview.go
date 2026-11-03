@@ -28,8 +28,9 @@ type marketIndexDefinition struct {
 
 // 市场核心指数目录（/api/v1/market/indexes?scope=core 直接按本表顺序返回）。
 // ★ Core 语义：是否出现在「市场核心指数」页面的选择器里。用户要求覆盖全球主要市场，
-//   所以亚太（日经/韩国/台湾/新加坡/印度/澳洲）、美洲（美/加/巴西）、欧洲（英/德/法）全部标 Core。
-//   secid 全部实测过 ulist.np 快照与 stock/kline 日线两条链路（2026-11）。
+//
+//	所以亚太（日经/韩国/台湾/新加坡/印度/澳洲）、美洲（美/加/巴西）、欧洲（英/德/法）全部标 Core。
+//	secid 全部实测过 ulist.np 快照与 stock/kline 日线两条链路（2026-11）。
 var marketIndexCatalog = []marketIndexDefinition{
 	{ID: "sse", SecID: "1.000001", Name: "上证指数", Region: "中国", Market: "CN", Currency: "CNY", Core: true},
 	{ID: "szse", SecID: "0.399001", Name: "深证成指", Region: "中国", Market: "CN", Currency: "CNY", Core: true},
@@ -76,16 +77,16 @@ func (c *Client) MarketIndexes(ctx context.Context, scope string) ([]foundation.
 		}
 		definitions = append(definitions, item)
 	}
-	// ★ 分批拉取：把 20+ 个指数（含海外）一次性塞进 ulist.np 时，上游会偶发只回 A 股/港股、
-	//   把日经/韩国/欧洲那一段整段吞掉，页面看起来就是「全球指数时有时无」。
-	//   按批请求再合并：单批失败只丢那一批，整体全失败才报错。
-	const indexQuoteBatchSize = 8
 	definitionsBySecID := make(map[string]marketIndexDefinition, len(definitions))
 	for _, item := range definitions {
 		definitionsBySecID[item.SecID] = item
 	}
-	start := time.Now()
+
+	// 20+ 个指数一次性请求时，东财偶发只返回 A 股/港股。保留本地分批策略，
+	// 单批失败只影响该批；随后再对缺失 secid 补抓一次，吸收上游的完整性修复。
+	const indexQuoteBatchSize = 8
 	items := make([]foundation.MarketIndexSnapshot, 0, len(definitions))
+	got := make(map[string]bool, len(definitions))
 	var meta foundation.SourceMeta
 	var lastErr error
 	for begin := 0; begin < len(definitions); begin += indexQuoteBatchSize {
@@ -97,55 +98,50 @@ func (c *Client) MarketIndexes(ctx context.Context, scope string) ([]foundation.
 		for _, item := range definitions[begin:end] {
 			secids = append(secids, item.SecID)
 		}
-		params := url.Values{}
-		params.Set("fltt", "2")
-		params.Set("secids", strings.Join(secids, ","))
-		params.Set("fields", "f12,f13,f14,f2,f3,f4,f124")
-		var payload struct {
-			RC   int `json:"rc"`
-			Data struct {
-				Diff []map[string]any `json:"diff"`
-			} `json:"data"`
-		}
-		// 主域名偶发 EOF/限流时切到备用行情域名（与 board.go 的兜底策略一致）
-		var requestURL string
-		var batchErr error
-		for _, base := range append([]string{c.quoteBaseURL}, c.quoteFallbackURLs...) {
-			requestURL = base + "/api/qt/ulist.np/get?" + params.Encode()
-			payload.RC, payload.Data.Diff = 0, nil
-			if err := c.getJSONWithRetry(ctx, requestURL, &payload); err != nil {
-				batchErr = err
-				continue
-			}
-			if payload.RC != 0 {
-				batchErr = fmt.Errorf("eastmoney index rc=%d", payload.RC)
-				continue
-			}
-			batchErr = nil
-			break
-		}
-		if batchErr != nil {
-			lastErr = batchErr
+		batch, err := c.fetchIndexQuotes(ctx, secids, definitionsBySecID)
+		if err != nil {
+			lastErr = err
 			continue
 		}
 		if meta.Source == "" {
-			meta = foundation.SourceMeta{Source: "eastmoney:index", SourceURL: requestURL, FetchedAt: time.Now(), LatencyMS: time.Since(start).Milliseconds()}
+			meta = batch.meta
 		}
-		for _, raw := range payload.Data.Diff {
-			secid := fmt.Sprintf("%d.%s", int(asFloat(raw["f13"])), asString(raw["f12"]))
-			definition, ok := definitionsBySecID[secid]
-			if !ok {
+		for _, item := range batch.items {
+			if got[item.SecID] {
 				continue
 			}
-			tradeTime := time.Unix(int64(asFloat(raw["f124"])), 0)
-			items = append(items, foundation.MarketIndexSnapshot{
-				ID: definition.ID, SecID: definition.SecID, Code: asString(raw["f12"]), Name: firstString(asString(raw["f14"]), definition.Name),
-				Region: definition.Region, Market: definition.Market, Currency: definition.Currency,
-				Price: asFloat(raw["f2"]), ChangePercent: asFloat(raw["f3"]), Change: asFloat(raw["f4"]), TradeTime: tradeTime,
-				Status: indexStatus(tradeTime, time.Now()), Meta: meta,
-			})
+			items = append(items, item)
+			got[item.SecID] = true
 		}
 	}
+
+	if len(items) < len(definitions) {
+		missing := make([]string, 0, len(definitions)-len(items))
+		for _, item := range definitions {
+			if !got[item.SecID] {
+				missing = append(missing, item.SecID)
+			}
+		}
+		if len(missing) > 0 {
+			retry, retryErr := c.fetchIndexQuotes(ctx, missing, definitionsBySecID)
+			if retryErr != nil {
+				lastErr = retryErr
+			} else {
+				if meta.Source == "" {
+					meta = retry.meta
+				}
+				// 上游可能返回请求外的条目，按 SecID 去重且只保留目录内指数。
+				for _, item := range retry.items {
+					if got[item.SecID] {
+						continue
+					}
+					items = append(items, item)
+					got[item.SecID] = true
+				}
+			}
+		}
+	}
+
 	order := map[string]int{}
 	for index, item := range definitions {
 		order[item.ID] = index
@@ -158,6 +154,64 @@ func (c *Client) MarketIndexes(ctx context.Context, scope string) ([]foundation.
 		return nil, foundation.SourceMeta{}, fmt.Errorf("eastmoney returned no index snapshots")
 	}
 	return items, meta, nil
+}
+
+type indexQuoteBatch struct {
+	items []foundation.MarketIndexSnapshot
+	meta  foundation.SourceMeta
+}
+
+func (c *Client) fetchIndexQuotes(ctx context.Context, secids []string, definitionsBySecID map[string]marketIndexDefinition) (indexQuoteBatch, error) {
+	params := url.Values{}
+	params.Set("fltt", "2")
+	params.Set("secids", strings.Join(secids, ","))
+	params.Set("fields", "f12,f13,f14,f2,f3,f4,f124")
+	start := time.Now()
+	var payload struct {
+		RC   int `json:"rc"`
+		Data struct {
+			Diff []map[string]any `json:"diff"`
+		} `json:"data"`
+	}
+
+	// 主域名偶发 EOF/限流时切备用行情域名，保留本地海外指数容错。
+	var requestURL string
+	var lastErr error
+	for _, base := range append([]string{c.quoteBaseURL}, c.quoteFallbackURLs...) {
+		requestURL = base + "/api/qt/ulist.np/get?" + params.Encode()
+		payload.RC, payload.Data.Diff = 0, nil
+		if err := c.getJSONWithRetry(ctx, requestURL, &payload); err != nil {
+			lastErr = err
+			continue
+		}
+		if payload.RC != 0 {
+			lastErr = fmt.Errorf("eastmoney index rc=%d", payload.RC)
+			continue
+		}
+		lastErr = nil
+		break
+	}
+	if lastErr != nil {
+		return indexQuoteBatch{}, lastErr
+	}
+
+	meta := foundation.SourceMeta{Source: "eastmoney:index", SourceURL: requestURL, FetchedAt: time.Now(), LatencyMS: time.Since(start).Milliseconds()}
+	items := make([]foundation.MarketIndexSnapshot, 0, len(payload.Data.Diff))
+	for _, raw := range payload.Data.Diff {
+		secid := fmt.Sprintf("%d.%s", int(asFloat(raw["f13"])), asString(raw["f12"]))
+		definition, ok := definitionsBySecID[secid]
+		if !ok {
+			continue
+		}
+		tradeTime := time.Unix(int64(asFloat(raw["f124"])), 0)
+		items = append(items, foundation.MarketIndexSnapshot{
+			ID: definition.ID, SecID: definition.SecID, Code: asString(raw["f12"]), Name: firstString(asString(raw["f14"]), definition.Name),
+			Region: definition.Region, Market: definition.Market, Currency: definition.Currency,
+			Price: asFloat(raw["f2"]), ChangePercent: asFloat(raw["f3"]), Change: asFloat(raw["f4"]), TradeTime: tradeTime,
+			Status: indexStatus(tradeTime, time.Now()), Meta: meta,
+		})
+	}
+	return indexQuoteBatch{items: items, meta: meta}, nil
 }
 
 func (c *Client) MarketIndexSeries(ctx context.Context, id string, period string, limit int) (foundation.MarketIndexSeries, error) {
@@ -1041,12 +1095,25 @@ func standardListParams(limit int) url.Values {
 }
 
 func findMarketIndex(id string) (marketIndexDefinition, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(id))
 	for _, item := range marketIndexCatalog {
-		if item.ID == strings.ToLower(strings.TrimSpace(id)) {
+		if item.ID == normalized {
 			return item, true
 		}
 	}
+	// 异动口径的 A 股基准指数：主板用 A 股指数而不是上证指数/深证成指，
+	// 创业板用综指。只用于指数走势查询，不进 MarketIndexes 的列表。
+	if item, ok := benchmarkIndexAliases[normalized]; ok {
+		return item, true
+	}
 	return marketIndexDefinition{}, false
+}
+
+var benchmarkIndexAliases = map[string]marketIndexDefinition{
+	"sse_a":        {ID: "sse_a", SecID: "1.000003", Name: "上证A股指数", Region: "中国", Market: "CN", Currency: "CNY"},
+	"szse_a":       {ID: "szse_a", SecID: "0.399107", Name: "深证A股指数", Region: "中国", Market: "CN", Currency: "CNY"},
+	"chinext_comp": {ID: "chinext_comp", SecID: "0.399102", Name: "创业板综指", Region: "中国", Market: "CN", Currency: "CNY"},
+	"bse50":        {ID: "bse50", SecID: "0.899050", Name: "北证50", Region: "中国", Market: "CN", Currency: "CNY"},
 }
 
 func indexStatus(tradeTime, now time.Time) string {

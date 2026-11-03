@@ -15,9 +15,11 @@ import (
 
 	"easy-stock/backend/internal/agent"
 	"easy-stock/backend/internal/appsettings"
+	"easy-stock/backend/internal/cockpit"
 	"easy-stock/backend/internal/foundation"
 	"easy-stock/backend/internal/marketemotion"
 	"easy-stock/backend/internal/methodology"
+	"easy-stock/backend/internal/monitor"
 	"easy-stock/backend/internal/notification"
 	"easy-stock/backend/internal/portfolioinspection"
 	"easy-stock/backend/internal/portfoliooptimization"
@@ -33,12 +35,19 @@ import (
 	"easy-stock/backend/internal/review"
 	"easy-stock/backend/internal/runtimelog"
 	"easy-stock/backend/internal/sector"
+	"easy-stock/backend/internal/sectorflowsample"
 	"easy-stock/backend/internal/stockanalysis"
 	"easy-stock/backend/internal/strategy/inflection"
 	"easy-stock/backend/internal/themeindex"
+	"easy-stock/backend/internal/themelibrary"
 )
 
 type Server struct {
+	monitor                  *monitor.Engine
+	monitorStore             *monitor.Store
+	monitorPreferences       *monitor.PreferencesStore
+	monitorNotifications     *notification.Dispatcher
+	stockSuggest             SymbolSuggester
 	etfDirectionMarket       ETFDirectionMarketProvider
 	etfUnderlyingFinancials  StockFinancialSupplementProvider
 	etfUnderlyingValuation   StockValuationProvider
@@ -47,6 +56,8 @@ type Server struct {
 	etfKLinePrimary          RawKLineProvider
 	etfKLineFallback         RawKLineProvider
 	ladderThemeAI            *ladderThemeAI
+	cockpit                  *cockpit.Service
+	cockpitLive              cockpitLiveFacts
 	mux                      *http.ServeMux
 	token                    string
 	realtimeProvider         RealtimeProvider
@@ -68,6 +79,9 @@ type Server struct {
 	hotStockProvider         HotStockProvider
 	futuresPosition          FuturesPositionProvider
 	marketOverview           MarketOverviewProvider
+	// sectorFlowSamples 是板块资金流本地采样库：上游分时接口不可用时，曲线由它拼接。
+	sectorFlowSamples        *sectorflowsample.Store
+	sectorFlowSampleInterval time.Duration
 	inflection               InflectionEvaluator
 	themeSnapshots           *themeSnapshotCache
 	limitUpSnapshots         *limitUpLadderCache
@@ -99,11 +113,30 @@ type Server struct {
 	masteryLibrary           *methodology.Library
 	marketEmotionStore       *marketemotion.Store
 	themeRadarStore          *duanxianxia.Store
+	themeLibrary             *themelibrary.Store
+	themeLibraryRefreshAt    string
 	themeProgress            *themeProgressCache
 	startupError             error
 	logger                   *log.Logger
 	tokenUsage               *tokenUsageStore
 	localReportsDB           string
+	sourceHealth             *sourceHealthCache
+}
+
+// eastMoneyDesktopOptions 接入桌面端提供的东财能力：浏览器会话（nid18）与 push2 转发桥。
+//
+// 分时资金流（push2 fflow/kline）有会话门禁；此外 push2 整条报价链路会按客户端
+// 指纹拦截非浏览器请求（Go 直接被断连），所以桌面端把请求交给 Chromium 代发。
+// 网页版两项都拿不到，保持直连 + 无会话的降级行为。
+func eastMoneyDesktopOptions() []eastmoney.Option {
+	var options []eastmoney.Option
+	if provider := eastmoney.NewBrowserSessionProviderFromEnv(); provider != nil {
+		options = append(options, eastmoney.WithSessionProvider(provider))
+	}
+	if proxy := eastmoney.NewPush2ProxyFromEnv(); proxy != nil {
+		options = append(options, eastmoney.WithPush2Proxy(proxy))
+	}
+	return options
 }
 
 func NewServer(config any) *Server {
@@ -114,7 +147,7 @@ func NewServer(config any) *Server {
 	}
 	var startupErrors []error
 	sinaClient := sina.NewClient()
-	eastMoneyClient := eastmoney.NewClient()
+	eastMoneyClient := eastmoney.NewClient(eastMoneyDesktopOptions()...)
 	tencentClient := tencent.NewClient()
 	if cfg.ETF == nil {
 		cfg.ETF = fund.NewClient()
@@ -195,7 +228,8 @@ func NewServer(config any) *Server {
 		cfg.IndustryStocks = tencentClient
 	}
 	if cfg.MarketOverview == nil {
-		cfg.MarketOverview = marketoverviewprovider.New(eastMoneyClient, tencentClient, tencentClient, sinaClient)
+		cfg.MarketOverview = marketoverviewprovider.New(eastMoneyClient, tencentClient, tencentClient, sinaClient,
+			marketoverviewprovider.WithSecondaryIndexFallback(sinaClient))
 	}
 	if cfg.SectorMap == nil {
 		mapper := sector.NewMapper(
@@ -249,6 +283,23 @@ func NewServer(config any) *Server {
 			cfg.MarketEmotionStore, _ = marketemotion.OpenStore("")
 		} else {
 			cfg.MarketEmotionStore, _ = marketemotion.OpenStore("")
+		}
+	}
+	if cfg.SectorFlowSampleStore == nil && strings.TrimSpace(cfg.SectorFlowSampleDBPath) != "" {
+		store, err := sectorflowsample.OpenStore(cfg.SectorFlowSampleDBPath)
+		if err == nil {
+			cfg.SectorFlowSampleStore = store
+		} else {
+			// 采样库只用于降级，打不开就退回纯上游模式，不应阻塞启动。
+			cfg.Logger.Printf("level=warn event=startup feature=market-data task=sector_flow_sampler error=%q", runtimelog.Redact(err.Error()))
+		}
+	}
+	if cfg.ThemeLibraryStore == nil && strings.TrimSpace(cfg.ThemeLibraryDBPath) != "" {
+		store, err := themelibrary.Open(cfg.ThemeLibraryDBPath)
+		if err == nil {
+			cfg.ThemeLibraryStore = store
+		} else {
+			cfg.Logger.Printf("level=warn event=startup feature=market-data task=theme_library error=%q", runtimelog.Redact(err.Error()))
 		}
 	}
 	if cfg.PortfolioStore == nil {
@@ -336,6 +387,8 @@ func NewServer(config any) *Server {
 		})
 	}
 	s := &Server{
+		stockSuggest:            eastMoneyClient,
+		sourceHealth:            newSourceHealthCache(cfg.DuanxianxiaBaseURL, eastMoneyClient, sinaClient, tencentClient, clsClient),
 		etfUnderlyingFinancials: cfg.ETFUnderlyingFinancials, etfUnderlyingValuation: cfg.ETFUnderlyingValuation,
 		etfDirectionMarket: cfg.ETFDirectionMarket, etfExecution: cfg.ETFExecution, etfProvider: cfg.ETF, etfKLinePrimary: cfg.ETFKLinePrimary, etfKLineFallback: cfg.ETFKLineFallback,
 		mux:                      http.NewServeMux(),
@@ -359,6 +412,8 @@ func NewServer(config any) *Server {
 		hotStockProvider:         cfg.HotStocks,
 		futuresPosition:          cfg.FuturesPosition,
 		marketOverview:           cfg.MarketOverview,
+		sectorFlowSamples:        cfg.SectorFlowSampleStore,
+		sectorFlowSampleInterval: cfg.SectorFlowSampleInterval,
 		inflection:               cfg.Inflection,
 		themeSnapshots:           newThemeSnapshotCache(30 * time.Second),
 		themeProgress:            newThemeProgressCache(),
@@ -383,6 +438,8 @@ func NewServer(config any) *Server {
 		usageGateway:             usageGateway,
 		masteryLibrary:           cfg.MasteryLibrary,
 		marketEmotionStore:       cfg.MarketEmotionStore,
+		themeLibrary:             cfg.ThemeLibraryStore,
+		themeLibraryRefreshAt:    cfg.ThemeLibraryRefreshAt,
 		startupError:             errors.Join(startupErrors...),
 		logger:                   cfg.Logger,
 		tokenUsage:               tokenUsage,
@@ -422,6 +479,74 @@ func NewServer(config any) *Server {
 	s.notifications = notification.NewDispatcher(func(ctx context.Context, channel string, cfg appsettings.NotificationChannel, message notification.Message) error {
 		return s.notificationSender.Send(ctx, channel, cfg, message)
 	}, func() appsettings.Notifications { return s.settingsStore.Snapshot().Notifications }, cfg.Logger)
+	monitorStore := cfg.MonitorStore
+	var monitorStoreErr error
+	if monitorStore == nil {
+		monitorStore, monitorStoreErr = monitor.OpenStore(strings.TrimSpace(cfg.MonitorDBPath))
+	}
+	if monitorStoreErr != nil {
+		if cfg.StrictPersistence {
+			startupErrors = append(startupErrors, fmt.Errorf("open monitor database: %w", monitorStoreErr))
+		}
+		monitorStore, _ = monitor.OpenStore("")
+	}
+	s.monitorPreferences, monitorStoreErr = monitor.OpenPreferences(monitorStore)
+	s.monitorStore = monitorStore
+	if monitorStoreErr != nil {
+		startupErrors = append(startupErrors, fmt.Errorf("open monitor preferences: %w", monitorStoreErr))
+	}
+	s.monitorNotifications = notification.NewDispatcher(func(ctx context.Context, channel string, cfg appsettings.NotificationChannel, message notification.Message) error {
+		return s.notificationSender.Send(ctx, channel, cfg, message)
+	}, func() appsettings.Notifications {
+		values := s.settingsStore.Snapshot().Notifications
+		if s.monitorPreferences == nil || !s.monitorPreferences.Snapshot().NotifyEnabled {
+			values.Feishu.Enabled, values.Dingtalk.Enabled = false, false
+		}
+		return values
+	}, cfg.Logger)
+	notifier := func(ctx context.Context, event monitor.Event) (string, error) {
+		return s.NotifyMonitorAlert(ctx, event)
+	}
+	// 全市场快照按顺序取：东财 clist 为主，新浪全市场列表兜底。
+	// 单主源时 push2 一被网络拦掉，监控页就永久降级到持仓范围，
+	// 异动名单会一直空着——看起来像"数据逻辑有问题"，其实是没扫到市场。
+	snapshotProviders := make([]monitor.SnapshotProvider, 0, 2)
+	if cfg.MonitorSnapshot != nil {
+		snapshotProviders = append(snapshotProviders, cfg.MonitorSnapshot)
+	} else {
+		snapshotProviders = append(snapshotProviders, eastMoneyClient)
+	}
+	snapshotProviders = append(snapshotProviders, sinaClient)
+	cfg.MonitorSnapshot = newMonitorSnapshotChain(snapshotProviders...)
+	// 板块监控数据源：行情总览服务实现了完整板块能力时才注入，
+	// 自定义部署缺能力时对应维度安静沉默（engine 侧有 nil 防御）。
+	var sectorRank monitor.SectorRankProvider
+	if flow, ok := s.marketOverview.(SectorFlowProvider); ok {
+		sectorRank = flow
+	}
+	s.monitor = monitor.NewEngine(monitor.EngineConfig{
+		Store:              monitorStore,
+		Realtime:           cfg.Realtime,
+		Snapshot:           cfg.MonitorSnapshot,
+		KLine:              newKLineChain(cfg.KLinePrimary, cfg.KLineFallback),
+		Index:              cfg.MarketOverview,
+		Inspection:         monitorInspectionSource{server: s},
+		InspectionHoldings: monitorInspectionSource{server: s},
+		SectorRank:         sectorRank,
+		SectorIntraday:     monitorSectorIntradaySource{server: s},
+		SectorCatalog:      cfg.StockDirectory,
+		ThemeCatalog:       monitorThemeSource{server: s},
+		Settings: func() monitor.Settings {
+			if s.monitorPreferences == nil {
+				return monitor.DefaultSettings()
+			}
+			return s.monitorPreferences.Snapshot().Settings
+		},
+		Notify:    notifier,
+		CanNotify: s.monitorCanNotify,
+		Logger:    cfg.Logger,
+	})
+	s.startupError = errors.Join(startupErrors...)
 	s.stockResearch = stockanalysis.NewResearchServiceWithPreparation(cfg.StockResearchStore, s.runStockResearch, s.prepareStockResearch, s.notifyStockResearch)
 	s.portfolioInspection = portfolioinspection.NewService(cfg.PortfolioStore, usageGateway, s.analyzeStock, cfg.Logger, s.analyzeHoldingResearch)
 	s.portfolioInspection.ConfigureCompletion(s.notifyPortfolioInspection)
@@ -452,6 +577,7 @@ func NewServer(config any) *Server {
 			KLines:  history.load,
 		})
 	}
+	s.cockpit = s.newCockpitPatrolService(cfg.SettingsPath, cfg.Logger)
 	s.routes()
 	return s
 }
@@ -483,6 +609,12 @@ func (s *Server) Close() error {
 		s.portfolioScheduler.Close()
 	}
 	var closeErrors []error
+	if s.monitorNotifications != nil {
+		s.monitorNotifications.Close()
+	}
+	if s.monitorStore != nil {
+		closeErrors = append(closeErrors, s.monitorStore.Close())
+	}
 	if s.notifications != nil {
 		s.notifications.Close()
 	}
@@ -504,11 +636,17 @@ func (s *Server) Close() error {
 	if s.marketEmotionStore != nil {
 		closeErrors = append(closeErrors, s.marketEmotionStore.Close())
 	}
+	if s.sectorFlowSamples != nil {
+		closeErrors = append(closeErrors, s.sectorFlowSamples.Close())
+	}
 	if s.portfolioStore != nil {
 		closeErrors = append(closeErrors, s.portfolioStore.Close())
 	}
 	if s.themeRadarStore != nil {
 		closeErrors = append(closeErrors, s.themeRadarStore.Close())
+	}
+	if s.themeLibrary != nil {
+		closeErrors = append(closeErrors, s.themeLibrary.Close())
 	}
 	return errors.Join(closeErrors...)
 }
@@ -554,6 +692,24 @@ func (s *Server) RunMarketEmotionScheduler(ctx context.Context) {
 			s.marketEmotion.runScheduler(ctx, s.logger)
 		})
 	}
+}
+
+// RunSectorFlowSampler 常驻记录板块资金流快照，让分时资金/价格曲线在上游
+// 分钟序列接口不可用时仍能从本地采样拼接出来。
+func (s *Server) RunSectorFlowSampler(ctx context.Context) {
+	provider, ok := s.marketOverview.(SectorFlowProvider)
+	if !ok || s.sectorFlowSamples == nil {
+		return
+	}
+	interval := s.sectorFlowSampleInterval
+	if interval <= 0 {
+		interval = sectorflowsample.DefaultInterval
+	}
+	sampler := sectorflowsample.NewSampler(s.sectorFlowSamples, provider, sectorflowsample.SamplerConfig{
+		Interval: interval,
+		Logger:   s.logger,
+	})
+	sampler.Run(ctx)
 }
 
 func (s *Server) RunMasteryScheduler(ctx context.Context) {
@@ -609,6 +765,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/market/index-series", s.marketIndexSeriesHandler)
 	s.mux.HandleFunc("GET /api/v1/market/industries", s.marketIndustriesHandler)
 	s.mux.HandleFunc("GET /api/v1/market/flows", s.marketFlowsHandler)
+	s.mux.HandleFunc("GET /api/v1/market/sector-flows", s.marketSectorFlowsHandler)
+	s.mux.HandleFunc("GET /api/v1/market/sector-flow-intraday", s.marketSectorFlowIntradayHandler)
+	s.mux.HandleFunc("GET /api/v1/market/sector-price-intraday", s.marketSectorPriceIntradayHandler)
+	s.mux.HandleFunc("GET /api/v1/market/theme-library", s.themeLibraryListHandler)
+	s.mux.HandleFunc("GET /api/v1/market/theme-library/{id}", s.themeLibraryDetailHandler)
 	s.mux.HandleFunc("GET /api/v1/market/margin-balance", s.marketMarginBalanceHandler)
 	s.mux.HandleFunc("GET /api/v1/market/billboard", s.marketBillboardHandler)
 	s.mux.HandleFunc("GET /api/v1/market/billboard/detail", s.marketBillboardDetailHandler)
@@ -682,6 +843,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/reviews/daily-summary/schedule", s.reviewScheduleGet)
 	s.mux.HandleFunc("PUT /api/v1/reviews/daily-summary/schedule", s.reviewScheduleSave)
 	s.mux.HandleFunc("GET /api/v1/reviews/daily-summary", s.reviewDailySummaryGet)
+	s.mux.HandleFunc("GET /api/v1/reviews/daily-summary/history", s.reviewDailySummaryHistory)
 	s.mux.HandleFunc("POST /api/v1/reviews/daily-summary/anonymize", s.reviewDailySummaryAnonymize)
 	s.mux.HandleFunc("GET /api/v1/reviews/daily-summary/window", s.reviewDailySummaryWindow)
 	s.mux.HandleFunc("GET /api/v1/reviews/daily-summary/status", s.reviewDailySummaryStatus)
@@ -698,6 +860,39 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/reviews/posts/{id}/analyze", s.reviewAnalyzePost)
 	s.mux.HandleFunc("GET /api/v1/reviews/remote-daily/status", s.reviewRemoteDailyStatus)
 	s.mux.HandleFunc("POST /api/v1/reviews/remote-daily/sync", s.reviewRemoteDailySync)
+	s.mux.HandleFunc("GET /api/v1/monitor/overview", s.monitorOverview)
+	s.mux.HandleFunc("GET /api/v1/monitor/stream", s.monitorStreamHandler)
+	s.mux.HandleFunc("GET /api/v1/monitor/targets", s.monitorTargets)
+	s.mux.HandleFunc("PUT /api/v1/monitor/inspection-holdings", s.monitorSyncInspectionHoldings)
+	s.mux.HandleFunc("GET /api/v1/monitor/sectors", s.monitorSectors)
+	s.mux.HandleFunc("GET /api/v1/monitor/stock-suggest", s.monitorSuggest)
+	s.mux.HandleFunc("GET /api/v1/monitor/watchlist", s.monitorWatchlistList)
+	s.mux.HandleFunc("POST /api/v1/monitor/watchlist", s.monitorWatchlistAdd)
+	s.mux.HandleFunc("PATCH /api/v1/monitor/watchlist", s.monitorWatchlistUpdate)
+	s.mux.HandleFunc("DELETE /api/v1/monitor/watchlist", s.monitorWatchlistClear)
+	s.mux.HandleFunc("DELETE /api/v1/monitor/watchlist/{symbol}", s.monitorWatchlistRemove)
+	s.mux.HandleFunc("GET /api/v1/monitor/rules", s.monitorRulesList)
+	s.mux.HandleFunc("POST /api/v1/monitor/rules", s.monitorRuleCreate)
+	s.mux.HandleFunc("PUT /api/v1/monitor/rules/{id}", s.monitorRuleUpdate)
+	s.mux.HandleFunc("DELETE /api/v1/monitor/rules/{id}", s.monitorRuleDelete)
+	s.mux.HandleFunc("POST /api/v1/monitor/rules/{id}/toggle", s.monitorRuleToggle)
+	s.mux.HandleFunc("POST /api/v1/monitor/rules/test", s.monitorRuleTest)
+	s.mux.HandleFunc("POST /api/v1/monitor/rules/{id}/test", s.monitorRuleTest)
+	s.mux.HandleFunc("GET /api/v1/monitor/events", s.monitorEventsList)
+	s.mux.HandleFunc("DELETE /api/v1/monitor/events/{id}", s.monitorEventDelete)
+	s.mux.HandleFunc("DELETE /api/v1/monitor/events", s.monitorEventsClear)
+	s.mux.HandleFunc("GET /api/v1/monitor/abnormal", s.monitorAbnormal)
+	s.mux.HandleFunc("GET /api/v1/monitor/abnormal/calc", s.monitorAbnormalCalc)
+	s.mux.HandleFunc("GET /api/v1/monitor/radar", s.monitorRadar)
+	s.mux.HandleFunc("GET /api/v1/monitor/lots", s.monitorLotsList)
+	s.mux.HandleFunc("POST /api/v1/monitor/lots", s.monitorLotCreate)
+	s.mux.HandleFunc("PUT /api/v1/monitor/lots/{id}", s.monitorLotUpdate)
+	s.mux.HandleFunc("DELETE /api/v1/monitor/lots/{id}", s.monitorLotDelete)
+	s.mux.HandleFunc("POST /api/v1/monitor/lots/sync", s.monitorLotSync)
+	s.mux.HandleFunc("POST /api/v1/monitor/lots/{id}/detach", s.monitorLotDetach)
+	s.mux.HandleFunc("GET /api/v1/monitor/settings", s.monitorSettingsGet)
+	s.mux.HandleFunc("PUT /api/v1/monitor/settings", s.monitorSettingsUpdate)
+	s.mux.HandleFunc("GET /api/v1/monitor/runs", s.monitorRuns)
 	s.mux.HandleFunc("GET /api/v1/settings", s.settingsGet)
 	s.mux.HandleFunc("GET /api/v1/settings/token-usage", s.tokenUsageSummary)
 	s.mux.HandleFunc("GET /api/v1/settings/token-usage/calls", s.tokenUsageCalls)
@@ -719,6 +914,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/settings/notifications/test", s.settingsNotificationsTest)
 	s.mux.HandleFunc("GET /api/v1/ai/ws", s.aiChatWebSocket)
 	s.mux.HandleFunc("POST /api/v1/strategy/inflections/evaluate", s.inflectionEvaluate)
+	s.mux.HandleFunc("GET /api/v1/cockpit/status", s.cockpitStatus)
+	s.mux.HandleFunc("PUT /api/v1/cockpit/auto-patrol", s.cockpitAutoPatrolUpdate)
+	s.mux.HandleFunc("GET /api/v1/cockpit/facts", s.cockpitFacts)
+	s.mux.HandleFunc("GET /api/v1/cockpit/briefs", s.cockpitBriefs)
+	s.mux.HandleFunc("GET /api/v1/cockpit/briefs/{id}", s.cockpitBrief)
+	s.mux.HandleFunc("POST /api/v1/cockpit/briefs", s.cockpitRun)
 	s.mux.HandleFunc("GET /api/v1/ws/stream", s.stream)
 }
 
@@ -731,17 +932,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sources(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"sources": []foundation.SourceHealth{
-			{ID: "duanxianxia", Name: "短线侠 / 开盘啦", Category: "theme,leaders,limit-up,concept", OK: true, CheckedAt: time.Now()},
-			{ID: "eastmoney", Name: "东方财富", Category: "quote,kline,f10,report", OK: true, CheckedAt: time.Now()},
-			{ID: "sina", Name: "新浪财经", Category: "quote,kline,money-flow", OK: true, CheckedAt: time.Now()},
-			{ID: "tencent", Name: "腾讯财经", Category: "quote,index,hk", OK: true, CheckedAt: time.Now()},
-			{ID: "cls", Name: "财联社", Category: "news,calendar", OK: true, CheckedAt: time.Now()},
-			{ID: "tradingview", Name: "TradingView", Category: "news", OK: true, CheckedAt: time.Now()},
-			{ID: "tushare", Name: "Tushare", Category: "basic,daily,index", OK: false, Message: "requires token", CheckedAt: time.Now()},
-		},
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"sources": s.sourceHealth.load(r.Context())})
 }
 
 func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
@@ -1022,4 +1213,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s *Server) RunMonitorEngine(ctx context.Context) {
+	if s.monitor == nil {
+		return
+	}
+	s.logSchedulerLifecycle(ctx, "monitor", "engine", func() {
+		s.monitor.Run(ctx)
+	})
 }

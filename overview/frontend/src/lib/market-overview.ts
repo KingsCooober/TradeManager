@@ -19,6 +19,7 @@ import { formatFuturesOpeningHands } from './futures-position';
 export type MarketOverviewView =
 	| 'pulse'
 	| 'core-indexes'
+	| 'sector-flow'
 	| 'industry-momentum'
 	| 'industry-flow'
 	| 'theme-flow'
@@ -29,6 +30,7 @@ export type MarketOverviewView =
 	| 'announcements'
 	| 'institution-reports'
 	| 'industry-research'
+	| 'theme-library'
 	| 'local-reports';
 
 export type MarketOverviewModule = {
@@ -57,6 +59,7 @@ export const marketOverviewGroups: MarketOverviewGroup[] = [
 		id: 'flow',
 		name: '资金结构',
 		modules: [
+			{ id: 'sector-flow', name: '资金流向', description: '板块资金流向趋势研判', status: 'ready' },
 			{ id: 'industry-momentum', name: '行业趋势强度', description: '行业多周期趋势强弱与领涨结构', status: 'ready' },
 			{ id: 'industry-flow', name: '行业资金', description: '行业资金净流入与持续性', status: 'ready' },
 			{ id: 'theme-flow', name: '题材概念', description: '题材概念资金强度与领涨结构', status: 'ready' },
@@ -73,6 +76,7 @@ export const marketOverviewGroups: MarketOverviewGroup[] = [
 			{ id: 'announcements', name: '公告雷达', description: '重要公告分类与影响线索', status: 'ready' },
 			{ id: 'institution-reports', name: '机构观点', description: '评级、目标价与观点变化', status: 'ready' },
 			{ id: 'industry-research', name: '产业透视', description: '行业景气、产业链与研究证据', status: 'ready' },
+			{ id: 'theme-library', name: '题材库', description: '开盘啦题材、产业链与相关标的', status: 'ready' },
 			{ id: 'local-reports', name: '行业研报', description: '本地沉淀的机构研报全文检索', status: 'ready' },
 		],
 	},
@@ -81,6 +85,7 @@ export const marketOverviewGroups: MarketOverviewGroup[] = [
 export const defaultMarketOverviewView: MarketOverviewView = 'pulse';
 
 export function resolveMarketOverviewView(hash: string): MarketOverviewView {
+	if (/^#sector-flow(?:[?&]|$)/.test(hash)) return 'sector-flow';
 	const candidate = hash.replace(/^#market\/?/, '').split(/[?&]/)[0] as MarketOverviewView;
 	return marketOverviewGroups.some((group) => group.modules.some((module) => module.id === candidate))
 		? candidate

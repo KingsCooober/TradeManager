@@ -1,7 +1,8 @@
 """Bridge easy-stock to Hermes' provider registry and reasoning vocabulary.
 
-Uses Hermes extension hooks, never SDK monkey-patching. `describe` reads only
-supplied catalogs/local Hermes code; gateway mode installs the same adapter.
+Uses Hermes provider hooks and an unattended onboarding adapter, never SDK
+monkey-patching. `describe` reads only supplied catalogs/local Hermes code;
+gateway mode installs the same provider adapter.
 """
 import copy
 import json
@@ -60,6 +61,20 @@ def describe(config, metadata=None, supplement=None):
     # native profile translation whenever it already emits the right schema.
     if supplement and supplement.get("source") != "unknown":
         values = [o["value"] for o in supplement["options"]]
+        if mode == "codex_responses" and provider == "openai":
+            # Hermes 0.22 applies a route-specific clamp to official OpenAI
+            # Responses requests. Do not offer a level it would silently change.
+            try:
+                from hermes_cli import __version__ as hermes_version
+                from agent.transports.codex import _codex_efforts_for_route
+                version = tuple(int(part) for part in hermes_version.split(".")[:2])
+                if version >= (0, 22):
+                    supported = _codex_efforts_for_route(model, base, is_codex_backend=False)
+                    values = [value for value in values if value in supported]
+            except (ImportError, ValueError):
+                pass  # Compatibility with the previously bundled Hermes.
+            if not values:
+                return result
         if mode == "anthropic_messages":
             from agent.anthropic_adapter import _thinking_kwargs
             if supplement.get("wire") == "anthropic_budget":
@@ -180,7 +195,24 @@ def main():
         return
     policy = json.loads(os.environ["EASY_STOCK_REASONING_POLICY"])
     install_profile(policy["config"], policy["capability"])
+    install_unattended_policy()
     runpy.run_module("tui_gateway.entry", run_name="__main__")
+
+
+def install_unattended_policy():
+    # Every sandbox has a fresh session store. Hermes otherwise treats each
+    # structured background request as first contact and asks the model to
+    # append /help and profile-building offers, corrupting JSON responses.
+    # Scope the compatibility adapter to this unattended child process; the
+    # interactive gateway keeps its original first-contact behavior.
+    if os.environ.get("EASY_STOCK_UNATTENDED") != "1":
+        return
+    try:
+        from agent import onboarding
+    except ImportError:
+        return  # Older bundled Hermes versions do not have this sidecar.
+    if hasattr(onboarding, "first_contact_turn_note"):
+        onboarding.first_contact_turn_note = lambda *args, **kwargs: None
 
 
 if __name__ == "__main__":

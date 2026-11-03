@@ -91,7 +91,8 @@ func TestThemeIndexHistoryCircuitAvoidsRepeatedPrimaryTimeouts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if primary.calls != 3 || fallback.calls != 10 {
+	// 本地策略：连续 5 次真实失败才熔断，超时不计入失败次数。
+	if primary.calls != 5 || fallback.calls != 10 {
 		t.Fatalf("primary failure multiplied across basket: primary=%d fallback=%d", primary.calls, fallback.calls)
 	}
 }

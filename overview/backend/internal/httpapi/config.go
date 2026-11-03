@@ -11,11 +11,14 @@ import (
 	"easy-stock/backend/internal/foundation"
 	"easy-stock/backend/internal/marketemotion"
 	"easy-stock/backend/internal/methodology"
+	"easy-stock/backend/internal/monitor"
 	"easy-stock/backend/internal/portfolioinspection"
 	"easy-stock/backend/internal/review"
+	"easy-stock/backend/internal/sectorflowsample"
 	"easy-stock/backend/internal/stockanalysis"
 	"easy-stock/backend/internal/strategy/inflection"
 	"easy-stock/backend/internal/themeindex"
+	"easy-stock/backend/internal/themelibrary"
 )
 
 type RealtimeProvider interface {
@@ -144,6 +147,13 @@ type MarketOverviewProvider interface {
 	MarketReports(ctx context.Context, kind string, query string, symbol string, industry string, limit int) ([]foundation.MarketResearchItem, foundation.SourceMeta, error)
 }
 
+// SectorFlowProvider 是行情总览之上的可选举能力：板块（概念/行业）资金流榜单、分时资金与分时价格序列。
+type SectorFlowProvider interface {
+	SectorFlowRanking(ctx context.Context, dimension string, limit int) ([]foundation.SectorFlowRank, foundation.SourceMeta, error)
+	SectorFlowIntraday(ctx context.Context, codes []string) ([]foundation.SectorFlowSeries, foundation.SourceMeta, error)
+	SectorPriceIntraday(ctx context.Context, codes []string) ([]foundation.SectorPriceSeries, foundation.SourceMeta, error)
+}
+
 type InflectionEvaluator interface {
 	Evaluate(request inflection.EvaluationRequest) (inflection.Evaluation, error)
 }
@@ -158,6 +168,9 @@ type ETFDirectionMarketProvider interface {
 }
 
 type Config struct {
+	MonitorDBPath            string
+	MonitorStore             *monitor.Store
+	MonitorSnapshot          monitor.SnapshotProvider
 	ETFDirectionMarket       ETFDirectionMarketProvider
 	ETFUnderlyingFinancials  StockFinancialSupplementProvider
 	ETFUnderlyingValuation   StockValuationProvider
@@ -192,10 +205,19 @@ type Config struct {
 	StockResearchDBPath      string
 	// LocalReportsDBPath 指研报库（research-hub）的 research.db。
 	// easy-stock 的「行业研报」页读它来展示本地沉淀的机构研报全文。
-	LocalReportsDBPath       string
-	StockResearchStore       *stockanalysis.ResearchStore
-	MarketEmotionDBPath      string
-	ThemeRadarDBPath         string
+	LocalReportsDBPath  string
+	StockResearchStore  *stockanalysis.ResearchStore
+	MarketEmotionDBPath string
+	ThemeRadarDBPath    string
+	// ThemeLibraryDBPath 是独立的开盘啦题材库参考数据；服务器首次启动时用内嵌快照填充。
+	ThemeLibraryDBPath string
+	ThemeLibraryStore  *themelibrary.Store
+	// ThemeLibraryRefreshAt 是每日收盘后重拉上游题材库的本地时间 HH:mm；为空则关闭。
+	ThemeLibraryRefreshAt string
+	// SectorFlowSampleDBPath 是板块资金流本地采样库：分时曲线在上游不可用时由它拼接。
+	SectorFlowSampleDBPath   string
+	SectorFlowSampleStore    *sectorflowsample.Store
+	SectorFlowSampleInterval time.Duration
 	DuanxianxiaBaseURL       string
 	WeChatAPIURL             string
 	ReviewHTTP               *http.Client

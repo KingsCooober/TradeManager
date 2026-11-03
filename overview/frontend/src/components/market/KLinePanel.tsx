@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { dispose, init, type Chart, type KLineData } from 'klinecharts';
+import type { Chart, KLineData } from 'klinecharts';
 import type { KLine } from '../../lib/backend';
 
 type Props = {
@@ -165,6 +165,17 @@ function styleChart(chart: Chart, compact = false) {
 	});
 }
 
+function loadBars(chart: Chart, bars: KLineData[], version: number) {
+	if (!bars.length) return;
+	chart.setDataLoader({
+		getBars: ({ type, callback }) => {
+			callback(type === 'init' ? bars : [], { backward: false, forward: false });
+		},
+	});
+	chart.setSymbol({ ticker: `kline-${version}`, pricePrecision: 2, volumePrecision: 0 });
+	chart.setPeriod({ span: 1, type: 'day' });
+}
+
 /**
  * 通用 K 线面板：klinecharts 10 封装。
  * 内置十字光标、缩放、平移，主图挂 MA、下方挂 VOL，阴线空心。
@@ -172,6 +183,8 @@ function styleChart(chart: Chart, compact = false) {
 export function KLinePanel({ lines, height = 300, maPeriods = [10, 20], showVolume = true, compact = false }: Props) {
 	const holderRef = useRef<HTMLDivElement | null>(null);
 	const chartRef = useRef<Chart | null>(null);
+	const apiRef = useRef<typeof import('klinecharts') | null>(null);
+	const versionRef = useRef(0);
 
 	const bars = useMemo<KLineData[]>(() => [...lines]
 		.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
@@ -183,52 +196,53 @@ export function KLinePanel({ lines, height = 300, maPeriods = [10, 20], showVolu
 			close: line.close,
 			volume: line.volume,
 		})), [lines]);
+	const barsRef = useRef(bars);
+	barsRef.current = bars;
 
-	// 初始化：图只建一次，换数据靠 setDataLoader
+	// klinecharts 在模块加载时读取 window；延迟到浏览器 effect 中加载，避免 Node 测试/SSR 导入崩溃。
 	useEffect(() => {
 		const holder = holderRef.current;
 		if (!holder) return;
-		const chart = init(holder, { locale: 'zh-CN' });
-		if (!chart) return;
-		chartRef.current = chart;
-		styleChart(chart, compact);
-		if (maPeriods.length) {
-			chart.createIndicator({ name: 'MA', paneId: 'candle_pane', calcParams: maPeriods });
-		}
-		// calcParams 传空数组：VOL 的 figures 由 regenerateFigures(params) 生成，
-		// 空参数就只剩成交量柱，不会带出 MA5/MA10/MA20 三条量均线
-		if (showVolume) chart.createIndicator({ name: 'VOL', calcParams: [] });
-
-		const resizeObserver = new ResizeObserver(() => chart.resize());
-		resizeObserver.observe(holder);
-		// 切主题时重刷配色（data-theme 挂在 documentElement 上）
-		const themeObserver = new MutationObserver(() => styleChart(chart, compact));
-		themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+		let cancelled = false;
+		let resizeObserver: ResizeObserver | undefined;
+		let themeObserver: MutationObserver | undefined;
+		void import('klinecharts').then((api) => {
+			if (cancelled) return;
+			apiRef.current = api;
+			const chart = api.init(holder, { locale: 'zh-CN' });
+			if (!chart) return;
+			chartRef.current = chart;
+			styleChart(chart, compact);
+			if (maPeriods.length) chart.createIndicator({ name: 'MA', paneId: 'candle_pane', calcParams: maPeriods });
+			// 空参数只显示成交量柱，不带出 MA5/MA10/MA20 三条量均线。
+			if (showVolume) chart.createIndicator({ name: 'VOL', calcParams: [] });
+			resizeObserver = new ResizeObserver(() => chart.resize());
+			resizeObserver.observe(holder);
+			themeObserver = new MutationObserver(() => styleChart(chart, compact));
+			themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+			versionRef.current += 1;
+			loadBars(chart, barsRef.current, versionRef.current);
+		}).catch(() => {
+			// 与 init 失败保持一致：保留空画布，不影响页面其他模块。
+		});
 
 		return () => {
-			resizeObserver.disconnect();
-			themeObserver.disconnect();
-			dispose(holder);
+			cancelled = true;
+			resizeObserver?.disconnect();
+			themeObserver?.disconnect();
+			apiRef.current?.dispose(holder);
+			apiRef.current = null;
 			chartRef.current = null;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
-	// 数据变化：重新灌一次。
-	// v10 没有 applyNewData 了，必须靠 setDataLoader + setSymbol/setPeriod 触发加载；
-	// ticker 带上版本号，否则 setSymbol 发现没变会直接跳过，数据不会重载。
-	const versionRef = useRef(0);
+	// v10 用 setDataLoader + setSymbol/setPeriod 重载；ticker 版本号确保数据变化会触发刷新。
 	useEffect(() => {
 		const chart = chartRef.current;
-		if (!chart || !bars.length) return;
+		if (!chart) return;
 		versionRef.current += 1;
-		chart.setDataLoader({
-			getBars: ({ type, callback }) => {
-				callback(type === 'init' ? bars : [], { backward: false, forward: false });
-			},
-		});
-		chart.setSymbol({ ticker: `kline-${versionRef.current}`, pricePrecision: 2, volumePrecision: 0 });
-		chart.setPeriod({ span: 1, type: 'day' });
+		loadBars(chart, bars, versionRef.current);
 	}, [bars]);
 
 	return <div className="kline-panel" ref={holderRef} style={{ height: `${height}px` }} />;

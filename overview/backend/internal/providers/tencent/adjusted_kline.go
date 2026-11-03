@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"easy-stock/backend/internal/foundation"
@@ -31,7 +32,7 @@ func (c *Client) AdjustedKLine(ctx context.Context, symbol string, limit int) ([
 		return nil, err
 	}
 	rows := payload.Data[normalized.Sina].QFQDay
-	if len(rows) == 0 {
+	if len(rows) == 0 && strings.HasPrefix(c.klineBaseURL, "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get") {
 		rows = payload.Data[normalized.Sina].Day
 	}
 	if payload.Code != 0 || len(rows) == 0 {

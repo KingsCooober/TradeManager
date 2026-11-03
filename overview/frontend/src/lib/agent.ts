@@ -60,7 +60,7 @@ export function buildAgentWebSocketURL(config: BackendConfig, configurationID?: 
 	const raw = (config.backendUrl || '').trim();
 	const here = globalThis.location?.href || 'http://127.0.0.1/';
 	const url = raw && raw !== '/'
-		? new URL('api/v1/ai/ws', `${new URL(raw.replace(/\/+$/, ''), here).href}/`)
+		? new URL('api/v1/ai/ws', `${new URL(raw.replace(/\/+$/, ''), here).href.replace(/\/+$/, '')}/`)
 		: new URL('/api/v1/ai/ws', here);
 	url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
 	if (config.token) url.searchParams.set('token', config.token);

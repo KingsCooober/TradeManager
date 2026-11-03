@@ -4,6 +4,7 @@ import {
 	BarChart3,
 	BookOpen,
 	Bot,
+	BookMarked,
 	Building2,
 	ChartCandlestick,
 	ChartSpline,
@@ -23,6 +24,7 @@ import {
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { sourceHealthSummary } from '../lib/source-health';
 import type {
 	BackendConfig,
 	LimitUpLadderData,
@@ -68,6 +70,8 @@ import {
 	ModuleState,
 	ResearchView,
 } from './market/MarketDataViews';
+import { SectorFlowWorkspace } from './SectorFlowWorkspace';
+import { ThemeLibraryWorkspace } from './ThemeLibraryWorkspace';
 import { StockPeekProvider } from './market/StockKLineModal';
 
 type Props = {
@@ -80,6 +84,7 @@ type LoadState = 'idle' | 'loading' | 'ready' | 'error';
 const moduleIcons = {
 	pulse: Newspaper,
 	'core-indexes': ChartCandlestick,
+	'sector-flow': Activity,
 	'industry-momentum': TrendingUp,
 	'industry-flow': Building2,
 	'theme-flow': Sparkles,
@@ -90,6 +95,7 @@ const moduleIcons = {
 	announcements: Megaphone,
 	'institution-reports': FileSearch,
 	'industry-research': SearchCheck,
+	'theme-library': BookMarked,
 	'local-reports': BookOpen,
 } satisfies Record<MarketOverviewView, typeof Newspaper>;
 
@@ -98,6 +104,8 @@ const localReportsPageSize = 50;
 
 export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) {
 	const [activeView, setActiveView] = useState<MarketOverviewView>(() => resolveMarketOverviewView(window.location.hash));
+	const [sectorFlowRefreshKey, setSectorFlowRefreshKey] = useState(0);
+	const [themeLibraryRefreshKey, setThemeLibraryRefreshKey] = useState(0);
 	const [news, setNews] = useState<NewsItem[]>([]);
 	const [themes, setThemes] = useState<ThemeOverview[]>([]);
 	const [themeMeta, setThemeMeta] = useState<SourceMeta | null>(null);
@@ -172,7 +180,7 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 	}, [config]);
 
 	const loadModule = useCallback(async () => {
-		if (!config || activeView === 'pulse') return;
+		if (!config || activeView === 'pulse' || activeView === 'sector-flow' || activeView === 'theme-library') return;
 		setModuleState('loading');
 		setModuleError('');
 		try {
@@ -310,7 +318,6 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 		if (!config || activeView !== 'core-indexes' || !selectedIndexID) return;
 		let cancelled = false;
 		setSeriesLoading(true);
-		// 固定取近一年（250 根 ≈ 243 个交易日）；更长/更短交给图上的缩放平移
 		requestJSON<{ data: MarketIndexSeries }>(config, `/api/v1/market/index-series?id=${encodeURIComponent(selectedIndexID)}&period=day&limit=250`)
 			.then((payload) => { if (!cancelled) setIndexSeries(payload.data); })
 			.catch((error) => { if (!cancelled) { setIndexSeries(null); setModuleError(errorMessage(error, '指数走势加载失败')); } })
@@ -320,8 +327,12 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 
 	useEffect(() => {
 		const onHashChange = () => {
+			if (/^#sector-flow(?:[?&]|$)/.test(window.location.hash)) {
+				window.history.replaceState(null, '', '#market/sector-flow');
+			}
 			if (window.location.hash.startsWith('#market')) setActiveView(resolveMarketOverviewView(window.location.hash));
 		};
+		onHashChange();
 		window.addEventListener('hashchange', onHashChange);
 		return () => window.removeEventListener('hashchange', onHashChange);
 	}, []);
@@ -397,7 +408,17 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 		}
 	};
 
-	const refresh = () => activeView === 'pulse' ? void loadPulse() : void loadModule();
+	const refreshing = activeView === 'pulse'
+		? pulseState === 'loading'
+		: activeView === 'theme-library'
+			? false
+			: activeView !== 'sector-flow' && moduleState === 'loading';
+	const refresh = () => {
+		if (activeView === 'sector-flow') setSectorFlowRefreshKey((current) => current + 1);
+		else if (activeView === 'theme-library') setThemeLibraryRefreshKey((current) => current + 1);
+		else if (activeView === 'pulse') void loadPulse();
+		else void loadModule();
+	};
 	const submitResearch = () => {
 		const next = searchDraft.trim();
 		setLocalPage(0);
@@ -415,15 +436,15 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 			})}</div></section>)}
 		</aside>
 
-		<div className="market-overview-main">
+		<div className={`market-overview-main${activeView === 'sector-flow' ? ' market-overview-sector-flow' : ''}`}>
 			<header className="market-overview-hero">
 				<div><span>{marketOverviewGroups.find((group) => group.modules.some((module) => module.id === activeView))?.name}</span><h2>{activeModule.name}</h2><p>{activeModule.description}</p></div>
 				{activeView === 'futures-position' && <div className="market-futures-headline-stat" role="status"><span>当日四大期指多空单变化</span><strong>{moduleState === 'loading' ? '计算中…' : <FuturesHandsValue text={formatFuturesOpeningHands(futuresConsensus?.top20_net_long_change ?? null, true)} />}</strong><small>+ 多单 · − 空单 · 全部合约 · 前20会员{futuresConsensus?.trade_date ? ` · ${futuresConsensus.trade_date}` : ''}{!futuresConsensus && moduleState !== 'loading' ? ' · 共识数据不可用' : ''}</small></div>}
 				{activeView === 'futures-position' && <div className="market-futures-headline-stat market-futures-citic-stat" role="status"><span>中信当日四大期指多空单变化</span><strong>{moduleState === 'loading' ? '计算中…' : <FuturesHandsValue text={formatFuturesOpeningHands(futuresConsensus?.citic_net_long_change ?? null, true)} />}</strong><small>+ 多单 · − 空单 · 中信期货(代客) · 全部合约{futuresConsensus?.trade_date ? ` · ${futuresConsensus.trade_date}` : ''}{!futuresConsensus ? ' · 共识数据不可用' : ''}</small></div>}
-				<div><button type="button" className="market-ai-button" onClick={() => void askAI()} disabled={!hasEvidence || aiPreparing}>{aiPreparing ? <LoaderCircle className="spin" size={16} /> : <Bot size={16} />}{aiPreparing ? '正在聚合席位与连板证据' : '交给 AI 解读'}</button><button type="button" className="market-refresh-button" onClick={refresh} disabled={(activeView === 'pulse' ? pulseState : moduleState) === 'loading'}>{(activeView === 'pulse' ? pulseState : moduleState) === 'loading' ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}刷新</button></div>
+				<div>{activeView !== 'sector-flow' && activeView !== 'theme-library' && <button type="button" className="market-ai-button" onClick={() => void askAI()} disabled={!hasEvidence || aiPreparing}>{aiPreparing ? <LoaderCircle className="spin" size={16} /> : <Bot size={16} />}{aiPreparing ? '正在聚合席位与连板证据' : '交给 AI 解读'}</button>}<button type="button" className="market-refresh-button" onClick={refresh} disabled={refreshing}>{refreshing ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}刷新</button></div>
 			</header>
 
-			{activeView === 'pulse' ? <PulseView news={news} themes={themes} themeMeta={themeMeta} sources={sources} state={pulseState} error={pulseError} lastUpdated={lastUpdated} /> : <ModuleState state={moduleState} error={moduleError}>
+			{activeView === 'sector-flow' ? <SectorFlowWorkspace config={config} refreshKey={refreshKey + sectorFlowRefreshKey} onAskAI={onAskAI} /> : activeView === 'theme-library' ? <ThemeLibraryWorkspace config={config} refreshKey={refreshKey + themeLibraryRefreshKey} /> : activeView === 'pulse' ? <PulseView news={news} themes={themes} themeMeta={themeMeta} sources={sources} state={pulseState} error={pulseError} lastUpdated={lastUpdated} /> : <ModuleState state={moduleState} error={moduleError}>
 				{activeView === 'core-indexes' && <CoreIndexView indexes={indexes} selectedID={selectedIndexID} onSelect={setSelectedIndexID} series={indexSeries} seriesLoading={seriesLoading} meta={moduleMeta} />}
 				{activeView === 'industry-momentum' && <IndustryMomentumView items={industries} meta={moduleMeta} />}
 				{isFlowView(activeView) && <FundFlowView key={activeView} items={flows} dimension={flowDimension(activeView)} meta={moduleMeta} />}
@@ -458,13 +479,13 @@ function newsSourceName(source?: string) {
 }
 
 function PulseView({ news, themes, themeMeta, sources, state, error, lastUpdated }: { news: NewsItem[]; themes: ThemeOverview[]; themeMeta: SourceMeta | null; sources: SourceHealth[]; state: LoadState; error: string; lastUpdated: string }) {
-	const healthySources = sources.filter((source) => source.ok).length;
+	const sourceSummary = sourceHealthSummary(sources);
 	const [expandedNews, setExpandedNews] = useState('');
 	return <div className="market-pulse-view">
 		<section className="market-pulse-metrics">
 			<Metric icon={<Newspaper size={17} />} label="快讯样本" value={state === 'loading' ? '--' : String(news.length)} detail="财联社最新快讯" />
 			<Metric icon={<TrendingUp size={17} />} label="题材快照" value={state === 'loading' ? '--' : String(themes.length)} detail={themeMeta?.trade_date || '等待交易日'} />
-			<Metric icon={<Database size={17} />} label="数据源" value={sources.length ? `${healthySources}/${sources.length}` : '--'} detail="当前健康状态" />
+			<Metric icon={<Database size={17} />} label="数据源" value={sourceSummary.total ? `${sourceSummary.healthy}/${sourceSummary.total}` : '--'} detail={sourceSummary.unknown ? `${sourceSummary.unknown} 个尚未检测` : '已启用源 · 轻量接口探测'} />
 			<Metric icon={<Clock3 size={17} />} label="最近刷新" value={lastUpdated ? formatTime(lastUpdated) : '--'} detail={themeMeta?.stale ? '题材数据已标记陈旧' : '本机聚合时间'} />
 		</section>
 		{error && <div className="market-partial-warning"><AlertTriangle size={15} /><span>{error}。已展示其余可用数据。</span></div>}

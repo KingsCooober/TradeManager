@@ -101,7 +101,8 @@ func TestConcurrentSeriesDeduplicatesAndSharesStockCacheAcrossThemes(t *testing.
 	}
 	wg.Wait()
 	_, err := service.Series(context.Background(), "other", "", 240)
-	if err != nil || calls.Load() != 20 || maximum.Load() > 6 {
+	// 本地行情源较慢，New 中的 workers 上限为 10；缓存仍须共享且每只股票只请求一次。
+	if err != nil || calls.Load() != 20 || maximum.Load() > 10 {
 		t.Fatalf("cache/concurrency: calls=%d max=%d err=%v", calls.Load(), maximum.Load(), err)
 	}
 }

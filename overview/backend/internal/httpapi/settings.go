@@ -92,9 +92,11 @@ type reviewSourceProfileUpdate struct {
 }
 
 type settingsUpdateRequest struct {
-	AgentRuntime       *string             `json:"agent_runtime"`
-	LLMProfiles        *[]llmProfileUpdate `json:"llm_profiles"`
-	ActiveLLMProfileID *string             `json:"active_llm_profile_id"`
+	AgentSettings      *agentSettingsUpdateRequest `json:"agent_settings"`
+	Notifications      *notificationsUpdate        `json:"notifications"`
+	AgentRuntime       *string                     `json:"agent_runtime"`
+	LLMProfiles        *[]llmProfileUpdate         `json:"llm_profiles"`
+	ActiveLLMProfileID *string                     `json:"active_llm_profile_id"`
 	LLM                struct {
 		Provider               *string `json:"provider"`
 		BaseURL                *string `json:"base_url"`
@@ -121,12 +123,13 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	r.Body = http.MaxBytesReader(w, r.Body, 320<<10)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var request settingsUpdateRequest
 	if err := decoder.Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid settings request: "+err.Error())
+		// A decoder error may echo a credential supplied as an unknown field.
+		writeError(w, http.StatusBadRequest, "设置请求格式无效")
 		return
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
@@ -136,6 +139,22 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := validateSettingsUpdate(request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	var savedAgent *agentSettingsView
+	var updateAgent func(agent.AgentSettings) (agent.AgentSettings, error)
+	if request.AgentSettings != nil {
+		if _, ok := s.agentGateway.(*agent.Service); !ok {
+			writeError(w, http.StatusServiceUnavailable, "Skill/MCP 联合保存服务不可用")
+			return
+		}
+		updateAgent = func(current agent.AgentSettings) (agent.AgentSettings, error) {
+			updated, err := applyAgentSettings(current, *request.AgentSettings)
+			if err == nil {
+				view := buildAgentSettingsView(updated)
+				savedAgent = &view
+			}
+			return updated, err
+		}
 	}
 	var llmAPIKeyUpdate *string
 	profileKeyUpdates := map[string]*string{}
@@ -167,6 +186,13 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	values, err := s.settingsStore.UpdatePrepared(func(values *appsettings.Values) error {
+		if request.Notifications != nil {
+			var err error
+			values.Notifications, err = applyNotifications(values.Notifications, *request.Notifications)
+			if err != nil {
+				return err
+			}
+		}
 		previousModel, previousRuntime := values.LLM, values.AgentRuntime
 		if request.AgentRuntime != nil {
 			values.AgentRuntime = *request.AgentRuntime
@@ -298,7 +324,7 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}, func(values appsettings.Values) (func(bool) error, error) {
 		if service, ok := s.agentGateway.(*agent.Service); ok {
-			return service.PrepareSettings(values, profileKeyUpdates, llmAPIKeyUpdate)
+			return service.PrepareSettings(values, profileKeyUpdates, llmAPIKeyUpdate, updateAgent)
 		}
 		if s.agentGateway != nil {
 			if profileGateway, ok := s.agentGateway.(agent.ProfileGateway); ok {
@@ -324,16 +350,28 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		status := http.StatusInternalServerError
+		if errors.Is(err, agent.ErrReasoningContextChanged) {
+			status = http.StatusConflict
+		}
+		if errors.Is(err, errInvalidNotifications) {
+			writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), errInvalidNotifications.Error()+": "))
+			return
+		}
 		if errors.Is(err, agent.ErrModelProtocolUnsupported) || strings.Contains(err.Error(), "运行引擎") || strings.Contains(err.Error(), "运行时不可用") || errors.Is(err, agent.ErrProtocolUnconfirmed) {
 			status = http.StatusBadRequest
 		}
 		writeError(w, status, "保存设置: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": s.buildSettingsView(values)})
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.buildSettingsView(values), "agent_settings": savedAgent})
 }
 
 func validateSettingsUpdate(request settingsUpdateRequest) error {
+	if request.AgentSettings != nil {
+		if err := validateAgentSettingsUpdate(*request.AgentSettings); err != nil {
+			return err
+		}
+	}
 	if request.AgentRuntime != nil && *request.AgentRuntime != agent.Hermes && *request.AgentRuntime != agent.Codex {
 		return fmt.Errorf("不支持的运行引擎")
 	}

@@ -266,8 +266,10 @@ export type SourceHealth = {
   name: string;
   category: string;
   ok: boolean;
+	enabled?: boolean;
+	status?: 'healthy' | 'unhealthy' | 'unknown' | 'disabled';
   message?: string;
-  checked_at: string;
+  checked_at?: string;
 };
 
 export type SourceMeta = {
@@ -386,6 +388,139 @@ export type MarketFundFlow = {
 	leader_change_percent: number;
 	leader_net_inflow_ratio: number;
 	meta: SourceMeta;
+};
+
+// 资金流向：东方财富板块口径（概念/行业），主力净流入 = 超大单 + 大单。
+export type SectorFlowRank = {
+	code: string;
+	name: string;
+	change_percent: number;
+	main_net_inflow: number;
+	main_net_inflow_ratio: number;
+	super_large_net_inflow: number;
+	large_net_inflow: number;
+	medium_net_inflow: number;
+	small_net_inflow: number;
+	five_day_main_net_inflow: number;
+	five_day_main_net_inflow_ratio: number;
+	ten_day_main_net_inflow: number;
+	ten_day_main_net_inflow_ratio: number;
+	meta: SourceMeta;
+};
+
+export type SectorFlowPoint = {
+	time: string;
+	main: number;
+	super_large: number;
+	large: number;
+	medium: number;
+	small: number;
+};
+
+export type SectorFlowSeries = {
+	code: string;
+	name: string;
+	trade_date: string;
+	points: SectorFlowPoint[];
+	latest_main: number;
+	meta: SourceMeta;
+};
+
+// 板块分时价格：东方财富分时行情（trends2），价格为板块指数点位，涨跌幅相对昨收。
+export type SectorPricePoint = {
+	time: string;
+	price: number;
+	average: number;
+	change_percent: number;
+};
+
+export type SectorPriceSeries = {
+	code: string;
+	name: string;
+	trade_date: string;
+	pre_close: number;
+	points: SectorPricePoint[];
+	latest_change_percent: number;
+	meta: SourceMeta;
+};
+
+// 题材库：开盘啦公开题材库的静态快照，按题材 → 细分 → 标的组织。
+export type ThemeLibraryStock = {
+	code: string;
+	name: string;
+	price: number;
+	change_percent: number;
+	is_limit_up: boolean;
+	hot: number;
+	tags?: string[];
+	description?: string;
+};
+
+export type ThemeLibraryLiveQuote = {
+	price: number;
+	change_percent: number;
+	trade_time?: string;
+};
+
+export type ThemeLibraryGroup = {
+	source_id: string;
+	name: string;
+	parent_source_id?: string;
+	parent_name?: string;
+	path?: string[];
+	change_percent: number;
+	limit_up_count: number;
+	stock_count: number;
+	stocks: ThemeLibraryStock[];
+};
+
+export type ThemeLibraryTheme = {
+	id?: number;
+	source_id: string;
+	name: string;
+	description: string;
+	introduction?: string;
+	change_percent: number;
+	stock_count: number;
+	limit_up_count: number;
+	rising_count: number;
+	falling_count: number;
+	flat_count: number;
+	hot: number;
+	group_count: number;
+	relation_count: number;
+	theme_updated_at: string;
+	as_of: string;
+	source_url: string;
+	source_api_url?: string;
+	groups?: ThemeLibraryGroup[];
+};
+
+export type ThemeLibraryMeta = {
+	schema_version: number;
+	source: string;
+	source_name: string;
+	source_url: string;
+	api_url: string;
+	source_updated_at: string;
+	generated_at: string;
+	selection: string;
+};
+
+export type ThemeLibraryStats = {
+	themes: number;
+	groups: number;
+	relations: number;
+	stocks: number;
+};
+
+export type ThemeLibraryLibrary = {
+	available: boolean;
+	message?: string;
+	meta: ThemeLibraryMeta;
+	stats: ThemeLibraryStats;
+	total: number;
+	items: ThemeLibraryTheme[];
 };
 
 export type MarketMarginPoint = {
@@ -1904,6 +2039,8 @@ export type ReviewDailySummary = {
 	generation_errors?: string[];
 };
 
+export type ReviewDailySummaryHistoryItem = Pick<ReviewDailySummary, 'trade_date' | 'article_count' | 'author_count' | 'generated_at'>;
+
 export type ReviewDailySummaryJob = {
 	trade_date: string;
 	window_start?: string;
@@ -2017,6 +2154,8 @@ export type ReviewDailyValidationJob = {
 	updated_at?: string;
 	completed_at?: string;
 	result_available: boolean;
+	ready_at?: string;
+	can_start?: boolean;
 };
 
 export async function resolveBackendConfig(input: ResolveInput = {}): Promise<BackendConfig> {
@@ -2041,7 +2180,7 @@ function resolveRequestURL(path: string, backendUrl: string): URL {
   // 只在这一处读 location：若直接写 `new URL(path, globalThis.location?.href || …)`，
   // 压缩器会把它折叠成 `new URL(t, location.href || …)`，而 t 恰好是形参名，
   // 于是 `||` 后面那一段被认成多余的局部变量而整段删掉，base 变成空串（实测踩过）。
-  const here = globalThis.location.href || 'http://127.0.0.1/';
+  const here = globalThis.location?.href || 'http://127.0.0.1/';
   const raw = (backendUrl || '').trim();
   // 单一斜杠的 "/" 是「同源根路径」的写法，不能当相对基址（new URL('a', '/') 会抛 Invalid base URL）
   if (!raw || raw === '/') {
@@ -2059,7 +2198,8 @@ function resolveRequestURL(path: string, backendUrl: string): URL {
 // 子路径挂载（宿主应用把整套前端挂在 /overview/ 下）时，请求要带上挂载前缀：
 // location.pathname 是 /overview/ 或 /overview，挂载前缀就是它去掉末尾之后的部分。
 function mountPrefix(): string {
-  const dir = new URL('.', globalThis.location.href).pathname;
+  const here = globalThis.location?.href || 'http://127.0.0.1/';
+  const dir = new URL('.', here).pathname;
   return dir.length > 1 ? dir.replace(/\/+$/, '') : '';
 }
 
@@ -2221,7 +2361,7 @@ export type ETFFacts = {
  holdings?: ETFHoldings[]; announcements?: ETFAnnouncement[]; execution?: ETFExecution;
  actions?: {symbol: string; items: Array<{kind:string;date:string;value:number;price_effective_date?:string}>;meta:SourceMeta};
  trend_bars?: KLine[];
- underlying?: Array<{holding: ETFHoldings['items'][number];holding_report_date:string;financials:Array<{symbol:string;report_date:string;published_at?:string;fields:Record<string,number>;meta:SourceMeta}>;valuation?:{pe_ttm?:number;pb?:number;trade_time:string}}>;
+ underlying?: Array<{holding: ETFHoldings['items'][number];holding_report_date:string;financials?:Array<{symbol:string;report_date:string;published_at?:string;fields:Record<string,number>;meta:SourceMeta}> | null;valuation?:{pe_ttm?:number;pb?:number;trade_time:string}}>;
 
  profile: ETFProfile;
  net_values: { symbol: string; points: ETFNAVPoint[]; income_per_ten_thousand?: ETFNAVPoint[]; seven_day_annualized?: ETFNAVPoint[]; meta: SourceMeta };
