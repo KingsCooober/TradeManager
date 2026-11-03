@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BackendConfig, requestJSON, ThemeOverview } from '../lib/backend';
 import { aggregateThemeIndex, ThemeIndexPeriod, ThemeIndexSeries } from '../lib/theme-index';
-import { KLineChart } from './KLineChart';
+import { KLinePanel } from './market/KLinePanel';
 import './theme-index.css';
 
 const seriesCache = new Map<string, { value: ThemeIndexSeries; expires: number }>();
@@ -22,7 +22,7 @@ export function ThemeIndexPanel({ config, theme, refreshKey }: { config: Backend
 		const abort = new AbortController();
 		const timer = setTimeout(() => abort.abort('timeout'), 25_000);
 		setState('loading'); setError('');
-		const params = new URLSearchParams({ theme: theme.theme, limit: '240' });
+		const params = new URLSearchParams({ theme: theme.theme, limit: '300' });
 		if (force) params.set('refresh', '1');
 		if (theme.snapshot_id) params.set('snapshot_id', theme.snapshot_id);
 		void requestJSON<{ data: ThemeIndexSeries }>(config, `/api/v1/themes/index?${params}`, { signal: abort.signal }).then(({ data }) => {
@@ -38,7 +38,9 @@ export function ThemeIndexPanel({ config, theme, refreshKey }: { config: Backend
 		return () => { clearTimeout(timer); abort.abort(); };
 	}, [config, key, theme?.theme, theme?.snapshot_id, refreshKey, retry]);
 	const series = result?.key === key ? result.value : null;
-	const lines = useMemo(() => aggregateThemeIndex(series?.lines || [], period).slice(period === 'day' ? -45 : -120), [series, period]);
+	// 不再截断：后端最多给 300 根日线（约一年半），周K/月K由聚合产生。
+	// 全量灌给 klinecharts，初始视口显示近端若干根，滚轮缩放/拖拽可回看全部历史。
+	const lines = useMemo(() => aggregateThemeIndex(series?.lines || [], period), [series, period]);
 	const latest = lines.at(-1);
 	const label = { day: '日K', week: '周K', month: '月K' }[period];
 	return <section className="theme-index-panel" aria-label="题材指数走势">
@@ -46,7 +48,11 @@ export function ThemeIndexPanel({ config, theme, refreshKey }: { config: Backend
 			<div><h3>{theme?.name || '选择题材'}</h3><small>{series ? series.method === 'provider-index' ? `${series.index_name} · ${series.index_code}` : '等权参考指数' : '查看题材整体走势'}</small></div>
 			<div className="theme-index-controls"><div role="group" aria-label="题材指数K线周期">{(['day', 'week', 'month'] as const).map(value => <button type="button" key={value} aria-pressed={period === value} className={period === value ? 'active' : ''} onClick={() => setPeriod(value)}>{{ day: '日K', week: '周K', month: '月K' }[value]}</button>)}</div>{latest && <strong className={latest.change_percent && latest.change_percent < 0 ? 'down' : 'up'}>{latest.close.toFixed(2)}<small>{latest.change_percent == null ? '--' : `${latest.change_percent >= 0 ? '+' : ''}${latest.change_percent.toFixed(2)}%`}</small></strong>}</div>
 		</div>
-		<div className="theme-index-chart"><KLineChart key={`${key}:${period}`} lines={lines} state={series ? 'ready' : state} periodLabel={label} compact timeZone="Asia/Shanghai" /></div>
+		<div className="theme-index-chart">
+			{lines.length
+				? <KLinePanel lines={lines} height={340} />
+				: <div className="kline-chart-placeholder">{state === 'error' ? `${label}数据暂不可用，请稍后重试。` : state === 'loading' ? `正在加载${label}数据…` : `暂无${label}数据。`}</div>}
+		</div>
 		{error && <p className="load-notice">{error} <button type="button" onClick={() => setRetry(value => value + 1)}>重试题材指数</button></p>}
 	</section>;
 }
