@@ -999,7 +999,7 @@ a:focus-visible {
 
 .trading-layout {
 	display: grid;
-	grid-template-columns: 220px minmax(0, 1fr) 350px;
+	grid-template-columns: 220px minmax(0, 1fr) minmax(420px, 470px);
 	gap: 12px;
 	align-items: start;
 	max-width: 1840px;
@@ -2630,7 +2630,7 @@ a:focus-visible {
 
 @media (min-width: 1600px) {
 	.trading-layout {
-		grid-template-columns: 238px minmax(0, 1fr) 370px;
+		grid-template-columns: 238px minmax(0, 1fr) minmax(470px, 560px);
 	}
 }
 
@@ -3182,8 +3182,8 @@ a:focus-visible {
 .kline-modal {
 	display: grid;
 	grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
-	width: min(1040px, calc(100vw - 48px));
-	max-height: min(780px, calc(100vh - 48px));
+	width: min(1360px, calc(100vw - 48px));
+	max-height: min(820px, calc(100vh - 48px));
 	overflow: auto;
 	border: 1px solid var(--theme-line, #cbd9e8);
 	border-radius: 16px;
@@ -3213,7 +3213,7 @@ a:focus-visible {
 .kline-period-summary { display: flex; justify-content: space-between; gap: 12px; padding: 8px 24px 0; color: var(--muted); font-size: var(--fs-body); }
 .kline-modal-error { display: flex; align-items: center; gap: 8px; margin: 16px 24px 0; padding: 12px 12px; border: 1px solid var(--theme-red-line, #efc4c7); border-radius: 8px; background: var(--theme-surface-soft, #fff6f6); color: var(--theme-red, #b23842); font-size: var(--fs-body); }
 .kline-chart-wrap { position: relative; min-height: 330px; padding: 16px 24px 4px; overflow-x: auto; }
-.kline-chart { display: block; width: 100%; min-width: 720px; height: auto; }
+.kline-chart { display: block; width: 100%; min-width: 960px; height: auto; }
 .kline-grid { stroke: var(--theme-line-soft, #e8edf3); stroke-width: 1; }
 .kline-zero-grid { stroke: #aab9c9; stroke-width: 1.4; stroke-dasharray: 5 4; }
 .kline-divider { stroke: var(--theme-line-soft, #dce5ee); stroke-width: 1; }

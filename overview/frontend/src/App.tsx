@@ -827,7 +827,7 @@ function CandlestickChart({ lines, state }: { lines: KLine[]; state: LoadState }
 		return <div className="chart-placeholder"><BarChart3 size={22} /><span>{state === 'error' ? '日 K 数据暂不可用' : '选择个股查看日 K'}</span></div>;
 	}
 	// 交给 klinecharts：十字光标、缩放、MA、成交量副图都是内置的，阴线空心走 candle_down_stroke
-	return <div className="candlestick-wrap"><KLinePanel lines={lines} height={240} compact /></div>;
+	return <div className="candlestick-wrap"><KLinePanel lines={lines} height={320} compact /></div>;
 }
 function EmptyState({ icon, title, detail }: { icon: React.ReactNode; title: string; detail: string }) {
 	return <div className="empty-state">{icon}<strong>{title}</strong><span>{detail}</span></div>;

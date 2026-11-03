@@ -7,7 +7,7 @@ export function useThemeKLines(config: BackendConfig | null, active: boolean, sy
 	const [, changed] = useReducer(n => n + 1, 0);
 	const queue = useMemo(() => new ThemeKLineQueue(async (symbol, signal) => {
 		if (!config) return [];
-		const result = await requestJSON<{ data: KLine[] }>(config, `/api/v1/quotes/kline?symbol=${encodeURIComponent(symbol)}&period=day&limit=60`, { signal });
+		const result = await requestJSON<{ data: KLine[] }>(config, `/api/v1/quotes/kline?symbol=${encodeURIComponent(symbol)}&period=day&limit=120`, { signal });
 		return result.data;
 	}, changed), [config]);
 	const key = symbols.join(',');
