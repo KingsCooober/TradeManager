@@ -3289,40 +3289,9 @@ a:focus-visible {
 .kline-modal-quote strong.down { color: var(--down); }
 .kline-period-summary { display: flex; justify-content: space-between; gap: 12px; padding: 8px 24px 0; color: var(--muted); font-size: var(--fs-body); }
 .kline-modal-error { display: flex; align-items: center; gap: 8px; margin: 16px 24px 0; padding: 12px 12px; border: 1px solid var(--theme-red-line, #efc4c7); border-radius: 8px; background: var(--theme-surface-soft, #fff6f6); color: var(--theme-red, #b23842); font-size: var(--fs-body); }
-.kline-chart-wrap { position: relative; min-height: 330px; padding: 16px 24px 4px; overflow-x: auto; }
-.kline-chart { display: block; width: 100%; min-width: 960px; height: auto; }
-.kline-grid { stroke: var(--theme-line-soft, #e8edf3); stroke-width: 1; }
-.kline-zero-grid { stroke: #aab9c9; stroke-width: 1.4; stroke-dasharray: 5 4; }
-.kline-divider { stroke: var(--theme-line-soft, #dce5ee); stroke-width: 1; }
-/* 弹窗内的主题变量会被页面主题覆盖，这里固定为与个股/题材K线一致的横线样式。 */
-.kline-modal .kline-grid { stroke: #e8edf3; stroke-width: 1; }
-.kline-modal .kline-zero-grid { stroke: #aab9c9; stroke-width: 1.4; stroke-dasharray: 5 4; }
-.kline-modal .kline-divider { stroke: #dce5ee; stroke-width: 1; }
-.kline-axis-label, .kline-date-label { fill: var(--theme-muted, #7d899a); font-family: var(--font-num); font-size: var(--fs-body); }
-.kline-percent-axis-label { fill: var(--theme-muted, #62748a); font-family: var(--font-num); font-size: var(--fs-body); font-weight: 700; }
-.kline-wick { stroke-width: 1.4; }
-.kline-body, .kline-volume { opacity: .88; }
-.kline-up .kline-wick, .kline-up .kline-body { stroke: var(--theme-red, #e33b46); fill: var(--theme-red, #e33b46); }
-.kline-down .kline-wick, .kline-down .kline-body { stroke: var(--theme-green, #14865f); fill: var(--theme-green, #14865f); }
-.kline-up .kline-volume { fill: var(--theme-red, rgba(227, 59, 70, .38)); }
-.kline-down .kline-volume { fill: var(--theme-green, rgba(20, 134, 95, .38)); }
-.kline-close-line { fill: none; stroke: var(--theme-blue, #2476d2); stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
-.kline-average-line { fill: none; stroke: var(--theme-amber, #e3a929); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; opacity: .9; }
-.kline-close-point { fill: transparent; stroke: transparent; stroke-width: 8; }
-.kline-hover-layer { fill: transparent; cursor: crosshair; }
-.kline-crosshair { stroke: var(--theme-blue, #1787e8); stroke-width: 1; stroke-dasharray: 4 3; pointer-events: none; }
-.kline-crosshair-horizontal { stroke: var(--theme-subtle, #8ba8c4); stroke-dasharray: 3 3; }
-.kline-crosshair-point { fill: var(--theme-on-emphasis, #ffffff); stroke: var(--theme-blue, #1787e8); stroke-width: 2; pointer-events: none; }
-.kline-hover-card { position: absolute; top: 29px; z-index: 3; display: grid; grid-template-columns: auto auto; gap: 4px 16px; min-width: 158px; padding: 8px 12px; border: 1px solid var(--theme-line, #bfcddd); border-radius: 6px; background: var(--theme-glass, rgba(255, 255, 255, .96)); box-shadow: 0 8px 24px var(--theme-shadow, rgba(30, 52, 78, .16)); color: var(--theme-text, #24364d); font-size: var(--fs-body); pointer-events: none; }
-.kline-hover-card.left { left: 30px; }
-.kline-hover-card.right { right: 30px; }
-.kline-hover-card > strong { grid-column: 1 / -1; padding-bottom: 3px; border-bottom: 1px solid var(--theme-line-soft, #e6edf4); color: var(--theme-muted, #536a83); font-family: var(--font-num); font-size: var(--fs-subtitle); }
-.kline-hover-card > div { display: contents; }
-.kline-hover-card span { color: var(--theme-muted, #7a899a); }
-.kline-hover-card b { color: var(--theme-text, #263950); font-family: var(--font-num); font-weight: 700; text-align: right; }
-.kline-hover-card b.up { color: var(--theme-red, #e33b46); }
-.kline-hover-card b.down { color: var(--theme-green, #14865f); }
-.kline-chart-legend { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 72px 0 24px; color: var(--muted); font-size: var(--fs-body); }
+.kline-chart-wrap { position: relative; padding: 16px 24px 4px; }
+.kline-chart-legend { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 72px 0 24px; color: var(--muted); font-size: var(--fs-body); }
+.kline-legend-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .kline-chart-legend .close-dot, .kline-chart-legend .average-dot { width: 16px; height: 2px; margin-left: 8px; border-radius: 999px; background: var(--theme-blue-solid, #2476d2); }
 .kline-chart-legend .average-dot { background: var(--theme-amber-solid, #e3a929); }
 .kline-chart-legend .zero-dot { width: 16px; height: 0; margin-right: 1px; border-top: 1.5px dashed var(--theme-line, #aab9c9); }

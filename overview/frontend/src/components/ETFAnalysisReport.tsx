@@ -4,7 +4,7 @@ import type { ETFAnalysis, ETFNAVPoint } from '../lib/backend';
 import type { ResearchVerification } from '../lib/stock-research';
 import { safeResearchURL } from '../lib/stock-research';
 import { formatCompactAmount } from '../lib/stock-analysis';
-import { KLineChart } from './KLineChart';
+import { KLinePanel } from './market/KLinePanel';
 import { ResearchPanel, StockResearchReportView } from './StockResearchReport';
 import { ETFDirectionPanel, etfDirectionText } from './ETFDirectionPanel';
 import './etf-analysis.css';
@@ -83,7 +83,7 @@ export function ETFAnalysisReport({ analysis, view, copied, exporting, onCopy, o
     {[['投资范围',p.investment_scope],['投资策略',p.strategy],['风险收益特征',p.risk_description],['收益分配',p.distribution]].map(([title, text]) => <details key={title}><summary>{title}</summary><p>{text || '来源未提供'}</p></details>)}
     <ETFSourceLink url={p.meta.source_url} label="查看基金档案原文"/>
    </ResearchPanel>
-   <ResearchPanel label="市价与量能" title="完整交易日行情" icon={ChartNoAxesCombined}><p>{data.price_basis} · 成交量单位：份</p><KLineChart lines={data.trend_bars || data.bars || []} symbol={analysis.symbol} pricePrecision={3} timeZone="Asia/Shanghai"/>
+   <ResearchPanel label="市价与量能" title="完整交易日行情" icon={ChartNoAxesCombined}><p>{data.price_basis} · 成交量单位：份</p><KLinePanel lines={data.trend_bars || data.bars || []} symbol={analysis.symbol} pricePrecision={3} timeZone="Asia/Shanghai" height={420} showPercentAxis />
     <dl className="etf-metrics">{data.metrics.map(m => <div key={m.label} title={m.method}><dt>{m.label}</dt><dd>{m.value == null ? '数据不足' : m.label.includes('成交额') ? formatCompactAmount(m.value) : `${m.value.toFixed(m.unit === '元' ? 3 : 2)}${m.unit}`}</dd><small>{m.as_of || '日期未知'}</small></div>)}</dl>
    </ResearchPanel>
    <ResearchPanel label="净值与分配" title={p.asset_class === 'money' ? '货币收益资料' : '基金单位净值'} icon={FileText}>

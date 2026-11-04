@@ -2,7 +2,7 @@ import { ChartNoAxesCombined, Layers3, Newspaper, ArrowUpRight } from 'lucide-re
 import type { ETFDirectionFacts } from '../lib/backend';
 import { safeResearchURL } from '../lib/stock-research';
 import { formatCompactAmount } from '../lib/stock-analysis';
-import { KLineChart } from './KLineChart';
+import { KLinePanel } from './market/KLinePanel';
 import { ResearchPanel } from './StockResearchReport';
 
 const relationLabel = (value: string) => ({tracking_index:'实际跟踪指数',sector_reference:'相关行业参照',etf_price_proxy:'ETF市价代理'}[value] || '研究对象待核实');
@@ -36,7 +36,7 @@ export function ETFDirectionPanel({direction:d}: {direction:ETFDirectionFacts}) 
   <ResearchPanel label="对应指数 / 板块" title="近期技术走势" icon={ChartNoAxesCombined} className="etf-direction-technical">
    {t ? <><div className="etf-direction-heading"><strong>{t.name} <small>{t.symbol}</small></strong><span>{relationLabel(t.relationship)} · 截至 {t.as_of}</span></div><p className="etf-trend-note"><span>{trendLabel(t.trend)}</span>仅描述完整交易日的价格趋势</p>
     <dl className="etf-metrics">{headlineMetrics.map(m=><div key={m.label} title={m.method}><dt>{m.label}</dt><dd className={m.label.includes("价格涨幅") && m.value != null ? m.value > 0 ? "up" : m.value < 0 ? "down" : undefined : undefined}>{metricText(m)}</dd></div>)}</dl>
-    <details className="etf-direction-details"><summary>展开日线与完整技术指标</summary><KLineChart lines={t.bars} symbol={t.symbol} pricePrecision={t.relationship==='etf_price_proxy'?3:2} timeZone="Asia/Shanghai"/><p className="stock-research-muted">{t.relationship==='etf_price_proxy'?'ETF价格单位为元。':'指数点位不等于ETF价格。'} 成交额变化不能直接解释为资金净流入。</p><dl className="etf-metrics">{t.metrics.filter(m=>!headlineMetrics.includes(m)).map(m=><div key={m.label} title={m.method}><dt>{m.label}</dt><dd className={m.label.includes("价格涨幅") && m.value != null ? m.value > 0 ? "up" : m.value < 0 ? "down" : undefined : undefined}>{metricText(m)}</dd></div>)}</dl></details>
+    <details className="etf-direction-details"><summary>展开日线与完整技术指标</summary><KLinePanel lines={t.bars} symbol={t.symbol} pricePrecision={t.relationship==='etf_price_proxy'?3:2} timeZone="Asia/Shanghai" height={420} showPercentAxis /><p className="stock-research-muted">{t.relationship==='etf_price_proxy'?'ETF价格单位为元。':'指数点位不等于ETF价格。'} 成交额变化不能直接解释为资金净流入。</p><dl className="etf-metrics">{t.metrics.filter(m=>!headlineMetrics.includes(m)).map(m=><div key={m.label} title={m.method}><dt>{m.label}</dt><dd className={m.label.includes("价格涨幅") && m.value != null ? m.value > 0 ? "up" : m.value < 0 ? "down" : undefined : undefined}>{metricText(m)}</dd></div>)}</dl></details>
     {t.limitations.map(text=><p className="stock-research-muted" key={text}>{text}</p>)}</> : <p>{c.primary.key==='money'?'货币类侧重短端利率、收益分配与资金面；不套用股票价格突破分析。':'对应指数或板块日线尚未取得，暂不判断其当前技术走势。'}</p>}
   </ResearchPanel>
   <ResearchPanel label="投资方向相关消息" title="催化与风险线索" icon={Newspaper} className="etf-direction-catalysts">

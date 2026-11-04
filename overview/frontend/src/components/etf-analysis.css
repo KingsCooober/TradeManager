@@ -145,7 +145,7 @@
 .etf-trend-note { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; font-size: var(--fs-desc); color: var(--subtle); }
 .etf-trend-note > span { padding: 2px 8px; border-radius: 6px; background: var(--surface-2); color: var(--muted); font-size: var(--fs-desc); }
 .etf-direction-details { display: grid; gap: 12px; }
-.etf-direction-details > .kline-chart { margin-top: 10px; }
+.etf-direction-details > .kline-chart-wrap { margin-top: 10px; }
 .etf-direction .kline-chart-legend { flex-wrap: wrap; justify-content: flex-start; padding: 0 12px; }
 .etf-news-coverage { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--fs-caption); }
 .etf-news-coverage > div { display: grid; gap: 2px; }
