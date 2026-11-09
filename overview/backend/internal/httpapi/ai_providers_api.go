@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"strings"
@@ -298,21 +299,27 @@ func (s *Server) requireAILogin(w http.ResponseWriter) bool {
 }
 
 // POST /api/v1/settings/llm/login/start —— 两步式登录第一步：写占位账号并立刻返回授权链接。
+// callbackBase 由前端按当前站点地址算出（服务器公网回调端点绝对 URL）；带上它走旧式
+// ticket 模式，让华为云授权后浏览器 302 回跳到服务器，而不是访客本机 127.0.0.1。
 func (s *Server) aiLoginStart(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAIProviders(w) || !s.requireAILogin(w) {
 		return
 	}
 	var input struct {
-		Provider string `json:"provider"`
+		Provider     string `json:"provider"`
+		CallbackBase string `json:"callbackBase"`
 	}
-	if !decodeAIProviderJSON(w, r, &input, 8<<10) {
+	if !decodeAIProviderJSON(w, r, &input, 16<<10) {
 		return
 	}
 	providerID := strings.ToLower(strings.TrimSpace(input.Provider))
 	if providerID == "" {
 		providerID = aiproviders.ProviderCodeArts
 	}
-	result, err := s.aiLogin.StartLogin(providerID)
+	// 服务端再兜一层：忽略 127.0.0.1/localhost 的回调基址（那是访客本机，不是服务器）。
+	// 前端同源部署时给的是当前站点 origin，正常为公网域名；本地开发同源时允许本机。
+	callbackBase := strings.TrimSpace(input.CallbackBase)
+	result, err := s.aiLogin.StartLogin(providerID, callbackBase)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -350,6 +357,31 @@ func (s *Server) aiLoginCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"submitted": true}})
+}
+
+// GET /api/v1/settings/llm/login/callback/{accountId}/{ticketID}?secret=...&code=...
+// 公网部署时华为云 doer/redirect 授权完成后把浏览器 302 回跳到这里（服务器地址，不是
+// 127.0.0.1）。这是顶层导航、带不了 X-A-Stock-Token 头，故在 authorized() 里单独放行，
+// 由一次性 ticket_id 校验兜底。把 code/secret 交回会话后，凭据换取全在服务器后台完成。
+func (s *Server) aiLoginCallback(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAILogin(w) {
+		return
+	}
+	accountID := r.PathValue("accountId")
+	ticketID := r.PathValue("ticketID")
+	q := r.URL.Query()
+	code := strings.TrimSpace(q.Get("code"))
+	secret := strings.TrimSpace(q.Get("secret"))
+	err := s.aiLogin.SubmitServerCallback(accountID, ticketID, code, secret)
+	title, msg, hint := "登录完成", "授权已提交给服务器，凭据正在后台写入。", "可以关闭本页，回到「AI 供应商与订阅账号」设置页查看账号与模型。"
+	if err != nil {
+		title = "登录未完成"
+		msg = html.EscapeString(err.Error())
+		hint = "请回到设置页重新点击「登录账号」再试一次。"
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = fmt.Fprintf(w, `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title><style>body{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;background:#0d1117;color:#e6edf3;display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center}.card{max-width:460px;padding:36px;border-radius:14px;background:#161b22;border:1px solid #30363d;text-align:center}h1{font-size:20px;margin:0 0 14px}p{font-size:14px;line-height:1.7;color:#8b949e;margin:8px 0}</style></head><body><div class="card"><h1>%s</h1><p>%s</p><p>%s</p></div></body></html>`, title, title, html.EscapeString(msg), html.EscapeString(hint))
 }
 
 func (s *Server) aiProviderModelsData(providerID string) map[string]any {

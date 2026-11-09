@@ -54,6 +54,15 @@ const (
 	caChatPath          = "/chat/completions"
 	caOAuthTimeout      = 180 * time.Second
 	caMinCallbackPort   = 10000
+
+	// 旧式 ticket 登录（浏览器授权后回跳 auth_callback_url，可指向服务器公网地址）。
+	// 新式 portal 把回调 host 硬编码成 127.0.0.1，只适合 IDE 桌面插件本机登录；
+	// 公网部署必须走这条 doer/redirect + secret 轮询链路，否则浏览器跳到访客本机回环。
+	caTicketLoginBase  = "https://devcloud.cn-north-4.huaweicloud.com/doer/redirect"
+	caHuaweiAuthBase   = "https://auth.huaweicloud.com/authui/login.html"
+	caTicketEndpoint   = "https://snap-access.cn-north-4.myhuaweicloud.com/snap-manager/v1/login/ticket"
+	caTicketPluginName = "snap_jetbrains"
+	caTicketPluginVer  = "26.3.3"
 )
 
 // defaultCodeArtsModels 是远端目录拉不到时的冷缓存兜底（插件 DEFAULT_MODELS）。
@@ -194,6 +203,115 @@ func buildPortalResultURL(succeeded bool) string {
 	q.Set("uri_scheme", caClientID)
 	q.Set("locale", caOAuthLocale)
 	return caPortalLogin + "?" + q.Encode()
+}
+
+// buildTicketLoginURL 构造旧式 ticket 登录链接：auth_callback_url 可指向服务器公网地址，
+// 华为云 doer/redirect 授权完成后浏览器 302 回跳该地址并带回 secret。
+// 与插件 buildLoginUrl 逐字一致，唯一差别是 callbackURL 不再是 127.0.0.1。
+func buildTicketLoginURL(callbackURL, ticketID string) string {
+	q := url.Values{}
+	q.Set("IdeaType", "jetbrains")
+	q.Set("auth_callback_url", callbackURL)
+	q.Set("plugin-name", caTicketPluginName)
+	q.Set("plugin-version", caTicketPluginVer)
+	q.Set("ticket_id", ticketID)
+	redirectURL := caTicketLoginBase + "?" + q.Encode()
+	return caHuaweiAuthBase + "?service=" + url.QueryEscape(redirectURL)
+}
+
+// ticketCredentialResponse 对齐插件 parseCredentialResponse 的两种响应形状：
+// data.credential（旧版）/ data.result（新版）。
+type ticketCredentialResponse struct {
+	Credential *struct {
+		Access         string `json:"access"`
+		Secret         string `json:"secret"`
+		SecurityToken  string `json:"securitytoken"`
+		SecurityToken2 string `json:"securityToken"`
+		ExpiresAt      string `json:"expires_at"`
+		ExpiresAt2     string `json:"expiresAt"`
+	} `json:"credential"`
+	DomainID string `json:"domain_id"`
+	UserID   string `json:"user_id"`
+	UserName string `json:"user_name"`
+	Result   *struct {
+		AccessKeyID     string `json:"accessKeyId"`
+		SecretAccessKey string `json:"secretAccessKey"`
+		SecurityToken   string `json:"securityToken"`
+		Expiration      string `json:"expiration"`
+		ExpiresAt       string `json:"expiresAt"`
+	} `json:"result"`
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// parseTicketCredential 未拿到完整 AK/SK/security_token 时返回 false（继续轮询）。
+func parseTicketCredential(body []byte) (CodeArtsCredential, bool) {
+	var resp ticketCredentialResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return CodeArtsCredential{}, false
+	}
+	if c := resp.Credential; c != nil && c.Access != "" {
+		st := firstNonEmpty(c.SecurityToken, c.SecurityToken2)
+		if st != "" {
+			return CodeArtsCredential{
+				AccessKeyID:     c.Access,
+				SecretAccessKey: c.Secret,
+				SecurityToken:   st,
+				ExpiresAt:       firstNonEmpty(c.ExpiresAt, c.ExpiresAt2),
+				DomainID:        resp.DomainID,
+				UserID:          resp.UserID,
+				UserName:        resp.UserName,
+			}, true
+		}
+	}
+	if r := resp.Result; r != nil && r.AccessKeyID != "" && r.SecurityToken != "" {
+		return CodeArtsCredential{
+			AccessKeyID:     r.AccessKeyID,
+			SecretAccessKey: r.SecretAccessKey,
+			SecurityToken:   r.SecurityToken,
+			ExpiresAt:       firstNonEmpty(r.Expiration, r.ExpiresAt),
+		}, true
+	}
+	return CodeArtsCredential{}, false
+}
+
+// pollTicketCredential 用回调带回的 secret 轮询 ticket 端点换 AK/SK（对齐插件
+// pollForCredential：120 次 ×1s，瞬时失败跳过不视为致命）。
+func pollTicketCredential(ctx context.Context, client *http.Client, ticketID, secret string, maxAttempts int) (CodeArtsCredential, error) {
+	endpoint := caTicketEndpoint + "?ticket_id=" + url.QueryEscape(ticketID) + "&secret=" + url.QueryEscape(secret)
+	for i := 0; i < maxAttempts; i++ {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return CodeArtsCredential{}, ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return CodeArtsCredential{}, err
+		}
+		req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+		req.Header.Set("plugin-name", caTicketPluginName)
+		req.Header.Set("plugin-version", caTicketPluginVer)
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		if cred, ok := parseTicketCredential(body); ok {
+			return cred, nil
+		}
+	}
+	return CodeArtsCredential{}, errors.New("CodeArts ticket 凭据轮询超时：授权可能未完成或被拒绝")
 }
 
 // stsTokenResponse 是 STS /v1/oauth2/tokens 的响应形状。

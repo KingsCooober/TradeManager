@@ -935,6 +935,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/settings/llm/login/start", s.aiLoginStart)
 	s.mux.HandleFunc("GET /api/v1/settings/llm/login/poll", s.aiLoginPoll)
 	s.mux.HandleFunc("POST /api/v1/settings/llm/login/code", s.aiLoginCode)
+	// 公网部署服务器回调端点（华为云授权后 302 回跳，路径尾部带 accountId/ticketID）。
+	s.mux.HandleFunc("GET /api/v1/settings/llm/login/callback/{accountId}/{ticketID}", s.aiLoginCallback)
 	s.mux.HandleFunc("GET /api/v1/settings/llm/models", s.aiProviderModels)
 	s.mux.HandleFunc("POST /api/v1/settings/llm/models/disabled", s.aiProviderModelsDisabled)
 	s.mux.HandleFunc("POST /api/v1/settings/llm/models/all", s.aiProviderModelsAll)

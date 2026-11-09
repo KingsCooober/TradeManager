@@ -456,6 +456,14 @@ function mount(app, options) {
   //    iframe / 顶层导航带不了 Authorization 头，所以用登录时下发的 httpOnly Cookie 判定；
   //    没注入 auth 模块时（单元测试）退回"仅本机可访问"。
   app.use(PREFIX, function (req, res, next) {
+    // —— 服务器登录回调例外：公网部署时华为云授权完成后 302 顶层导航回跳到本路径。
+    //    cookie 是 SameSite=Lax，正常会带上；但内嵌浏览器/cookie 过期等场景可能丢失。
+    //    真正的凭证是路径里的 64 位一次性 ticket_id，由 Go handler 校验，匿名放行不
+    //    会让它人能提交凭据（没有匹配票据会被拒），换取凭据全在服务器后台完成。
+    if (req.method === 'GET'
+      && /^\/overview\/api\/v1\/settings\/llm\/login\/callback\/[^/]+\/[0-9a-fA-F]{16,}(\?|$)/.test(String(req.originalUrl || ''))) {
+      return next();
+    }
     if (auth) {
       const user = auth.userFromCookie(req);
       if (user) { req.user = user; return next(); }
