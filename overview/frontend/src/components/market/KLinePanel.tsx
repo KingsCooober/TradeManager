@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from 'react';
-import type { Chart, KLineData, YAxisTemplate } from 'klinecharts';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Chart, Crosshair, KLineData, YAxisTemplate } from 'klinecharts';
 import type { KLine } from '../../lib/backend';
 
 type ChartMode = 'intraday' | 'daily';
@@ -29,7 +29,19 @@ type Props = {
 	timeZone?: string;
 	/** 是否加左侧涨跌幅轴与 0% 基准线（带图例说明） */
 	showPercentAxis?: boolean;
+	/** 图表上方固定信息条：默认显示最新一根，hover 时跟随十字光标显示当日行情 */
+	hoverInfoBar?: boolean;
 };
+
+/** 默认的 506.148M / 3-07-23 是英文习惯，换成 A 股看得懂的 亿/万 */
+function formatBigNumber(value: unknown): string {
+	const numeric = typeof value === 'string' ? Number(value) : value;
+	if (typeof numeric !== 'number' || !Number.isFinite(numeric)) return '--';
+	const abs = Math.abs(numeric);
+	if (abs >= 1e8) return `${(numeric / 1e8).toFixed(2)}亿`;
+	if (abs >= 1e4) return `${(numeric / 1e4).toFixed(2)}万`;
+	return String(numeric);
+}
 
 /** 左侧涨跌幅轴：display 域是百分比，real 域仍是价格 */
 const PERCENT_AXIS = 'kline-change-percent';
@@ -149,16 +161,9 @@ function styleChart(chart: Chart, options: { compact: boolean; mode: ChartMode; 
 	const muted = themeColor('--theme-muted', '#65768c');
 	const accent = themeColor('--theme-blue', '#2476d2');
 	const fontSize = compact ? 9 : 11;
-	// 默认的 506.148M / 3-07-23 是英文习惯，换成 A 股看得懂的 亿/万 和 月-日
+	// 分时/日线的数值统一用 亿/万，跟图内 VOL 轴、tooltip 保持一个口径
 	chart.setFormatter({
-		formatBigNumber: (value) => {
-			const numeric = typeof value === 'string' ? Number(value) : value;
-			if (!Number.isFinite(numeric)) return String(value);
-			const abs = Math.abs(numeric);
-			if (abs >= 1e8) return `${(numeric / 1e8).toFixed(2)}亿`;
-			if (abs >= 1e4) return `${(numeric / 1e4).toFixed(2)}万`;
-			return String(numeric);
-		},
+		formatBigNumber,
 		formatDate,
 	});
 	chart.setStyles({
@@ -325,12 +330,15 @@ export function KLinePanel({
 	periodLabel,
 	timeZone,
 	showPercentAxis = false,
+	hoverInfoBar = false,
 }: Props) {
 	const holderRef = useRef<HTMLDivElement | null>(null);
 	const chartRef = useRef<Chart | null>(null);
 	const apiRef = useRef<typeof import('klinecharts') | null>(null);
 	const versionRef = useRef(0);
 	const zeroLineRef = useRef<string | null>(null);
+	const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+	const hoverIndexRef = useRef<number | null>(null);
 
 	const bars = useMemo<KLineData[]>(() => [...lines]
 		.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
@@ -391,6 +399,8 @@ export function KLinePanel({
 		let cancelled = false;
 		let resizeObserver: ResizeObserver | undefined;
 		let themeObserver: MutationObserver | undefined;
+		let subscribedChart: Chart | null = null;
+		let crosshairHandler: ((data?: unknown) => void) | undefined;
 		void import('klinecharts').then((api) => {
 			if (cancelled) return;
 			apiRef.current = api;
@@ -404,6 +414,30 @@ export function KLinePanel({
 			// 空参数只显示成交量柱，不带出 MA5/MA10/MA20 三条量均线。
 			if (showVolume) chart.createIndicator({ name: 'VOL', calcParams: [] });
 			if (showPercentAxis) chart.createYAxis({ name: PERCENT_AXIS, position: 'left' });
+			// 顶部信息条：订阅十字光标变化。
+			// ⚠️ v10 的 onCrosshairChange 回调传的是原始 crosshair（只有 x/y/paneId），
+			// 不含 kLineData/timestamp（内部 _crosshair 才有），所以必须用 convertFromPixel
+			// 把像素换算成 dataIndex，再去 bars 里取那根 K 线。
+			if (hoverInfoBar) {
+				const handler = (data?: unknown) => {
+					const cr = (data ?? {}) as Crosshair;
+					let next: number | null = null;
+					if (typeof cr.x === 'number') {
+						const converted = chart.convertFromPixel([{ x: cr.x, y: cr.y ?? 0 }], { paneId: cr.paneId });
+						const point = (Array.isArray(converted) ? converted[0] : converted) as { dataIndex?: number } | undefined;
+						const raw = point?.dataIndex;
+						if (typeof raw === 'number' && Number.isFinite(raw)) {
+							next = Math.min(barsRef.current.length - 1, Math.max(0, Math.round(raw)));
+						}
+					}
+					if (next === hoverIndexRef.current) return;
+					hoverIndexRef.current = next;
+					setHoverIndex(next);
+				};
+				crosshairHandler = handler;
+				subscribedChart = chart;
+				chart.subscribeAction('onCrosshairChange', handler);
+			}
 			resizeObserver = new ResizeObserver(() => chart.resize());
 			resizeObserver.observe(holder);
 			themeObserver = new MutationObserver(() => styleChart(chart, { compact, mode, formatDate: formatRef.current, showLastText: !showPercentAxisRef.current }));
@@ -419,16 +453,21 @@ export function KLinePanel({
 			cancelled = true;
 			resizeObserver?.disconnect();
 			themeObserver?.disconnect();
+			if (subscribedChart && crosshairHandler) subscribedChart.unsubscribeAction('onCrosshairChange', crosshairHandler);
 			apiRef.current?.dispose(holder);
 			apiRef.current = null;
 			chartRef.current = null;
 			zeroLineRef.current = null;
+			hoverIndexRef.current = null;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [mode, compact, showVolume, showPercentAxis, maKey, ready, timeZone]);
+	}, [mode, compact, showVolume, showPercentAxis, hoverInfoBar, maKey, ready, timeZone]);
 
 	// v10 用 setDataLoader + setSymbol/setPeriod 重载；ticker 版本号确保数据变化会触发刷新。
 	useEffect(() => {
+		// 换标的/换周期后旧的光标索引已失效，信息条回到最新一根
+		hoverIndexRef.current = null;
+		setHoverIndex(null);
 		const chart = chartRef.current;
 		if (!chart) return;
 		(chart as ChartWithBase).__klinePercentBase = referencePrice;
@@ -469,11 +508,40 @@ export function KLinePanel({
 		return <div className="kline-chart-placeholder">{state === 'error' ? `${label}数据暂不可用，请稍后重试。` : `暂无${label}数据。`}</div>;
 	}
 
-	const panel = <div className="kline-panel" ref={holderRef} style={{ height: `${height}px` }} />;
-	if (!showPercentAxis) return panel;
+	// 顶部信息条：没 hover 时显示最新一根，hover 时跟随十字光标。
+	// 放在 HTML 里而不是 canvas tooltip，小卡片（compact）也不会挤成一团或压住 K 线。
+	const activeIndex = hoverIndex != null && hoverIndex < bars.length ? hoverIndex : bars.length - 1;
+	const active = bars[activeIndex];
+	const previous = activeIndex > 0 ? bars[activeIndex - 1] : null;
+	const changePercent = active && previous && previous.close > 0 ? ((active.close - previous.close) / previous.close) * 100 : null;
+	const changeTone = changePercent == null ? '' : changePercent >= 0 ? 'up' : 'down';
+	const changeText = changePercent == null ? '--' : `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`;
+	const amount = active && typeof active.amount === 'number' && active.amount > 0 ? active.amount : null;
+	const turnover = active && typeof active.turnoverRate === 'number' && Number.isFinite(active.turnoverRate) ? active.turnoverRate : null;
+	const infoBar = hoverInfoBar && active ? (
+		<div className="kline-hover-bar" aria-live="polite">
+			<span className="kline-hover-date">{formatDate({ timestamp: active.timestamp, type: 'tooltip' })}</span>
+			<span>开 <b>{active.open.toFixed(pricePrecision)}</b></span>
+			<span>高 <b className="up">{active.high.toFixed(pricePrecision)}</b></span>
+			<span>低 <b className="down">{active.low.toFixed(pricePrecision)}</b></span>
+			<span>收 <b>{active.close.toFixed(pricePrecision)}</b></span>
+			<span>涨跌 <b className={changeTone}>{changeText}</b></span>
+			<span>量 <b>{formatBigNumber(active.volume)}</b></span>
+			{amount != null && <span>额 <b>{formatBigNumber(amount)}</b></span>}
+			{turnover != null && <span>换手 <b>{turnover.toFixed(2)}%</b></span>}
+		</div>
+	) : null;
+	const resetHover = () => {
+		if (hoverIndexRef.current === null) return;
+		hoverIndexRef.current = null;
+		setHoverIndex(null);
+	};
+	const panel = <div className="kline-panel" ref={holderRef} style={{ height: `${height}px` }} onMouseLeave={hoverInfoBar ? resetHover : undefined} />;
+	if (!showPercentAxis) return <>{infoBar}{panel}</>;
 
 	return (
 		<div className="kline-chart-wrap">
+			{infoBar}
 			{panel}
 			<div className="kline-chart-legend">
 				<span className="kline-legend-item"><span className="zero-dot" />0%基准：{referencePrice.toFixed(pricePrecision)}</span>

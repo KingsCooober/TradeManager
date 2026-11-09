@@ -50,7 +50,7 @@ export function ThemeIndexPanel({ config, theme, refreshKey }: { config: Backend
 		</div>
 		<div className="theme-index-chart">
 			{lines.length
-				? <KLinePanel lines={lines} height={340} showPercentAxis />
+				? <KLinePanel lines={lines} height={340} />
 				: <div className="kline-chart-placeholder">{state === 'error' ? `${label}数据暂不可用，请稍后重试。` : state === 'loading' ? `正在加载${label}数据…` : `暂无${label}数据。`}</div>}
 		</div>
 		{error && <p className="load-notice">{error} <button type="button" onClick={() => setRetry(value => value + 1)}>重试题材指数</button></p>}

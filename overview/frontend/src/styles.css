@@ -7492,6 +7492,25 @@ a:focus-visible {
 /* klinecharts 画布容器：canvas 需要有确定尺寸 */
 .kline-panel { width: 100%; }
 
+/* 图表上方固定信息条：默认最新一根，hover 时跟随十字光标显示当日行情。
+   放在 HTML 里而不是 canvas tooltip，compact 小卡片也不会压住 K 线。 */
+.kline-hover-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 2px 12px;
+	padding: 7px 8px 5px;
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--theme-muted);
+	font-variant-numeric: tabular-nums;
+}
+.kline-hover-bar span { white-space: nowrap; }
+.kline-hover-bar .kline-hover-date { margin-right: 2px; font-weight: 700; color: var(--theme-text); }
+.kline-hover-bar b { font-weight: 600; color: var(--theme-text); }
+.kline-hover-bar .up { color: var(--up); }
+.kline-hover-bar .down { color: var(--down); }
+
 /* ── 个股走势弹窗：点个股标签就地看日 K，不用切到题材雷达重搜 ── */
 .stock-peek-trigger { cursor: pointer; }
 .stock-peek-trigger:hover { border-color: var(--theme-blue, #2476d2); background: var(--theme-blue-soft, #dcebff); text-decoration: underline; text-underline-offset: 2px; }
