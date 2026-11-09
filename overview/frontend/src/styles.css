@@ -5146,6 +5146,38 @@ a:focus-visible {
 .review-profile-empty strong { color: var(--text); font-size: var(--fs-body); }
 .review-profile-empty span { font-size: var(--fs-body); }
 
+/* AI 供应商注册表 / 订阅账号池 */
+.ai-registry-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ai-registry-toolbar > button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 36px; padding: 0 12px; border: 1px solid var(--theme-blue-line, #b9cee5); border-radius: 8px; background: var(--theme-surface, #ffffff); color: var(--theme-blue, #175ea9); font-size: var(--fs-body); font-weight: 700; cursor: pointer; }
+.ai-registry-toolbar > button.danger { border-color: var(--theme-line, #e5c8ca); color: var(--theme-red, #a92732); }
+.ai-registry-toolbar > button:disabled { opacity: .45; cursor: default; }
+.ai-registry-toolbar > small { color: var(--muted); font-size: var(--fs-desc); }
+.ai-registry-list { display: grid; gap: 6px; }
+.ai-registry-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid var(--theme-line, #d6e0ea); border-radius: 8px; background: var(--theme-surface, #fbfcfe); }
+.ai-registry-row.active { border-color: var(--theme-blue-line, #9abce0); background: var(--theme-blue-soft, #f2f8ff); }
+.ai-registry-name { display: grid; gap: 2px; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.ai-registry-name strong { overflow: hidden; font-size: var(--fs-body); text-overflow: ellipsis; white-space: nowrap; }
+.ai-registry-name small { color: var(--muted); font-size: var(--fs-desc); }
+.ai-registry-row > button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--theme-line, #cbd6e2); border-radius: 7px; background: var(--theme-surface, #ffffff); color: var(--muted); cursor: pointer; }
+.ai-registry-row > button.danger { color: var(--theme-red, #b23740); }
+.ai-registry-row > button:disabled { opacity: .4; cursor: default; }
+.ai-registry-editor { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--theme-line, #d6e0ea); border-radius: 8px; background: var(--theme-surface-soft, #f7fbff); }
+.ai-registry-editor > strong { color: var(--text); font-size: var(--fs-subtitle); }
+.ai-registry-editor > small { color: var(--muted); font-size: var(--fs-desc); line-height: var(--lh-snug); }
+.ai-registry-account { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid var(--theme-line, #d6e0ea); border-radius: 8px; background: var(--theme-surface, #ffffff); }
+.ai-registry-account > span { display: grid; gap: 2px; min-width: 0; }
+.ai-registry-account > span strong { overflow: hidden; font-size: var(--fs-body); text-overflow: ellipsis; white-space: nowrap; }
+.ai-registry-account > span small { color: var(--muted); font-size: var(--fs-desc); overflow-wrap: anywhere; }
+.ai-registry-account > button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--theme-line, #cbd6e2); border-radius: 6px; background: var(--theme-surface, #ffffff); color: var(--muted); cursor: pointer; }
+.ai-registry-account > button.danger { color: var(--theme-red, #b23740); }
+.ai-registry-account > button:disabled { opacity: .4; cursor: default; }
+.ai-registry-editor > button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 36px; padding: 0 12px; border: 1px solid var(--theme-blue-line, #9ebedd); border-radius: 8px; background: var(--theme-blue-soft, #edf5ff); color: var(--theme-blue, #175ea9); font-size: var(--fs-body); font-weight: 700; cursor: pointer; }
+.ai-registry-editor > button:disabled { opacity: .45; cursor: default; }
+.ai-registry-checks { display: flex; flex-wrap: wrap; gap: 18px; }
+.ai-registry-check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-body); }
+.ai-registry-editor .ai-registry-check { justify-self: start; }
+.ai-registry-check input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--theme-blue, #175ea9); }
+
 .review-article-text {
 	flex: 1;
 	margin-top: 16px;

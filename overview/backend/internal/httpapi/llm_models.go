@@ -56,7 +56,7 @@ func (s *Server) settingsLLMModels(w http.ResponseWriter, r *http.Request) {
 
 	saved := s.settingsStore.Snapshot().LLM
 	provider := strings.ToLower(firstNonEmpty(strings.TrimSpace(input.Provider), strings.TrimSpace(saved.Provider), "openai"))
-	if !supportedLLMProvider(provider) {
+	if !s.providerSupported(provider) {
 		writeError(w, http.StatusBadRequest, "unsupported llm provider: "+provider)
 		return
 	}
@@ -66,7 +66,7 @@ func (s *Server) settingsLLMModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseURL := firstNonEmpty(strings.TrimSpace(input.BaseURL), strings.TrimSpace(saved.BaseURL))
-	modelsURL, err := buildModelsURL(provider, baseURL)
+	modelsURL, err := s.modelsURLFor(provider, baseURL)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -101,7 +101,19 @@ func (s *Server) settingsLLMModels(w http.ResponseWriter, r *http.Request) {
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("User-Agent", "easy-stock/model-discovery")
 	if apiKey != "" {
-		if provider == "anthropic" {
+		if s.aiProviders != nil {
+			if p, ok := s.aiProviders.Get(provider); ok && !p.Builtin {
+				// 自定义供应商：按注册表声明的鉴权方式（bearer / x-api-key / none）拼 header。
+				for name, value := range s.aiProviders.AuthHeaders(provider, apiKey) {
+					request.Header.Set(name, value)
+				}
+			} else if provider == "anthropic" {
+				request.Header.Set("x-api-key", apiKey)
+				request.Header.Set("anthropic-version", "2023-06-01")
+			} else {
+				request.Header.Set("Authorization", "Bearer "+apiKey)
+			}
+		} else if provider == "anthropic" {
 			request.Header.Set("x-api-key", apiKey)
 			request.Header.Set("anthropic-version", "2023-06-01")
 		} else {

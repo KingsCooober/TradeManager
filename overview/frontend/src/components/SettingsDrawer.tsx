@@ -21,8 +21,9 @@ import {
 	X,
 } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { AppSettings, BackendConfig, BackendRequestError, BrowserAuthStatus, LLMConnectionTestResult, LLMModelOption, LLMModelsResult, LLMProfile, ReviewAutomationProfile, RuntimeLogStatus, SecretSettingStatus, WechatServiceStatus, requestJSON } from '../lib/backend';
-import { llmBaseURLForAPIMode, llmProviderDefinition, llmProviders } from '../lib/llm-providers';
+import { AIHubStatus, AIProvider, AppSettings, BackendConfig, BackendRequestError, BrowserAuthStatus, LLMConnectionTestResult, LLMModelOption, LLMModelsResult, LLMProfile, ReviewAutomationProfile, RuntimeLogStatus, SecretSettingStatus, WechatServiceStatus, requestJSON } from '../lib/backend';
+import { llmBaseURLForAPIMode, llmProviderDefinition, llmProviderList, registerLLMProviders } from '../lib/llm-providers';
+import { AIProviderRegistryPanel } from './AIProviderRegistryPanel';
 import { AppUpdatePanel } from './AppUpdatePanel';
 import { AgentSettingsPanel } from './AgentSettingsPanel';
 import { useAgentSettings } from '../lib/agent-settings';
@@ -59,6 +60,8 @@ const emptySecrets = (): Record<SecretKey, string> => ({
 export function SettingsDrawer({ config, open, initialSection, onClose, onSaved }: Props) {
 	const agent = useAgentSettings(config, open);
 	const [settings, setSettings] = useState<AppSettings | null>(null);
+	const [aiProviders, setAIProviders] = useState<AIProvider[]>([]);
+	const [aiHub, setAIHub] = useState<AIHubStatus | null>(null);
 	const [notifications, setNotifications] = useState<NotificationsDraft | null>(null);
 	const [notificationRevision, setNotificationRevision] = useState(0);
 	const [notificationTesting, setNotificationTesting] = useState(false);
@@ -141,6 +144,10 @@ export function SettingsDrawer({ config, open, initialSection, onClose, onSaved 
 			.then((payload) => {
 				if (cancelled) return;
 				setSettings(payload.data);
+				const registryProviders = payload.data.llm_providers || [];
+				registerLLMProviders(registryProviders);
+				setAIProviders(registryProviders);
+				setAIHub(payload.data.ai_hub || null);
 				loadNotifications(payload.data.notifications);
 		setAgentRuntime(payload.data.agent_runtime || 'hermes');
 				const modelProfiles = normalizeLLMProfiles(payload.data);
@@ -483,6 +490,10 @@ export function SettingsDrawer({ config, open, initialSection, onClose, onSaved 
 			agent.acceptSaved(payload.agent_settings);
 		}
 		setSettings(payload.data);
+		const savedRegistryProviders = payload.data.llm_providers || [];
+		registerLLMProviders(savedRegistryProviders);
+		setAIProviders(savedRegistryProviders);
+		setAIHub(payload.data.ai_hub || null);
 		loadNotifications(payload.data.notifications);
 		window.dispatchEvent(new Event(notificationSettingsChangedEvent));
 		setAgentRuntime(payload.data.agent_runtime || 'hermes');
@@ -578,7 +589,7 @@ export function SettingsDrawer({ config, open, initialSection, onClose, onSaved 
 							</div>
 							<label><span>配置名称</span><input value={profileName} onChange={(event) => { setProfileName(event.target.value); patchSelectedLLMProfile({ name: event.target.value }); }} placeholder="例如 DeepSeek 日常 / GPT-5.6 Sol 深度分析" /></label>
 							<div className="settings-grid two-columns">
-								<label><span>服务商</span><select value={provider} onChange={(event) => updateProvider(event.target.value)}>{llmProviders.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
+								<label><span>服务商</span><select value={provider} onChange={(event) => updateProvider(event.target.value)}>{llmProviderList().map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
 								<label><span>接口协议</span><select value={apiMode} onChange={(event) => updateAPIMode(event.target.value)}><option value="codex_responses">Responses API</option><option value="chat_completions">Chat Completions</option><option value="anthropic_messages">Anthropic Messages</option><option value="auto">自动检测（优先 Responses）</option></select></label>
 							</div>
 								<label><span>API Base URL</span><input value={baseURL} onChange={(event) => updateBaseURL(event.target.value)} placeholder="https://api.example.com/v1" />{llmProviderDefinition(provider).protocolBaseURLs && <small>切换协议时同步对应的官方地址；自定义地址保持不变。</small>}</label>
@@ -598,6 +609,8 @@ export function SettingsDrawer({ config, open, initialSection, onClose, onSaved 
 								<button type="button" onClick={testConnection} disabled={!config || !notifications || !agent.ready || agent.loading || saving}>{testState === 'testing' ? <LoaderCircle className="spin" size={15} /> : <PlugZap size={15} />}保存并测试连接</button>
 							</div>
 						</SettingsSection>
+
+						<AIProviderRegistryPanel config={config} providers={aiProviders} hub={aiHub} onProvidersChanged={setAIProviders} disabled={saving} />
 
 						<SettingsSection title="大V复盘自动化" description="按平台管理多套采集配置，每个大V订阅可以绑定其中一套。" icon={<Clock3 size={18} />}>
 							<div className="review-profile-tabs">{(['xueqiu', 'taoguba', 'wechat'] as ReviewSource[]).map((source) => <button type="button" className={reviewSource === source ? 'active' : ''} onClick={() => setReviewSource(source)} key={source}>{reviewSourceLabel(source)}<em>{reviewProfiles.filter((profile) => profile.source === source).length}</em></button>)}</div>

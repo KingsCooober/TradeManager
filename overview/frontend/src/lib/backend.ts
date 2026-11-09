@@ -1,5 +1,8 @@
 import { logRuntimeEvent, runtimeErrorDetails, runtimeFeatureForPath } from './runtime-log';
 import type { ResearchReport } from './stock-research';
+import type { AIProvider, AIHubStatus } from './llm-providers';
+
+export type { AIProvider, AIProviderAccount, AIHubStatus } from './llm-providers';
 
 export type BackendConfig = {
   backendUrl: string;
@@ -129,6 +132,8 @@ export type AppSettings = {
 	};
 	llm_profiles: LLMProfile[];
 	active_llm_profile_id: string;
+	llm_providers?: AIProvider[];
+	ai_hub?: AIHubStatus;
 	credentials: {
 		tushare_token: SecretSettingStatus;
 		ths_cookie: SecretSettingStatus;

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"easy-stock/backend/internal/agent"
+	"easy-stock/backend/internal/aiproviders"
 	"easy-stock/backend/internal/httpapi"
 	"easy-stock/backend/internal/methodology"
 	"easy-stock/backend/internal/runtimelog"
@@ -108,6 +109,34 @@ func main() {
 		CacheDir:   masteryCacheDir,
 		HermesHome: hermesHome,
 	})
+	// AI 供应商注册表 / 凭据库 / 用量账本与 settings.json 同目录（用户配置目录）。
+	aiProvidersDir := filepath.Dir(settingsPath)
+	aiProvidersPath := firstNonEmptyEnv("A_STOCK_AI_PROVIDERS_PATH", filepath.Join(aiProvidersDir, "ai-providers.json"))
+	aiCredentialsPath := firstNonEmptyEnv("A_STOCK_AI_CREDENTIALS_PATH", filepath.Join(aiProvidersDir, "ai-credentials.json"))
+	aiHubListen := firstNonEmptyEnv("A_STOCK_AI_HUB_LISTEN", "127.0.0.1:8327")
+	aiHubKeyPath := firstNonEmptyEnv("A_STOCK_AI_HUB_API_KEY_PATH", filepath.Join(aiProvidersDir, "ai-hub-api-key"))
+	if settingsPath == "" {
+		// 无持久化目录时回落内存态（单测 / 降级场景），三个路径置空即不落盘。
+		aiProvidersPath, aiCredentialsPath, aiHubKeyPath = "", "", ""
+	}
+	providerStore, err := aiproviders.Open(aiProvidersPath, aiCredentialsPath)
+	if err != nil {
+		log.Fatalf("open ai provider registry: %v", err)
+	}
+	hubKey := ""
+	if aiHubKeyPath != "" {
+		hubKey, err = aiproviders.LoadOrCreateAPIKey(aiHubKeyPath)
+		if err != nil {
+			log.Fatalf("load ai hub api key: %v", err)
+		}
+	} else {
+		hubKey = strings.TrimSpace(os.Getenv("A_STOCK_AI_HUB_API_KEY"))
+	}
+	hubListen, err := aiproviders.HubListenAddr(aiHubListen)
+	if err != nil {
+		log.Fatalf("ai hub listen: %v", err)
+	}
+	aiHub := aiproviders.NewHub(providerStore, hubKey, nil)
 	monitorDBPath := os.Getenv("A_STOCK_MONITOR_DB")
 	if monitorDBPath == "" {
 		monitorDBPath = dataPath(dataDir, "monitor.db")
@@ -129,6 +158,9 @@ func main() {
 		DuanxianxiaBaseURL:       os.Getenv("A_STOCK_DUANXIANXIA_BASE_URL"),
 		WeChatAPIURL:             os.Getenv("A_STOCK_WECHAT_API_URL"),
 		SettingsPath:             settingsPath,
+		AIProviderStore:          providerStore,
+		AIHub:                    aiHub,
+		AIHubListen:              hubListen,
 		AgentGateway:             agentGateway,
 		MasteryLibrary:           masteryLibrary,
 		Logger:                   log.Default(),
@@ -139,6 +171,25 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	// 本机 OpenAI 兼容网关（只绑回环）与订阅账号提前续期循环。
+	if strings.TrimSpace(os.Getenv("A_STOCK_AI_HUB_DISABLE")) != "1" {
+		hubServer, err := aiproviders.StartHub(aiHub, hubListen)
+		if err != nil {
+			log.Fatalf("start ai hub: %v", err)
+		}
+		log.Printf("ai provider hub listening on http://%s/v1 (loopback only)", hubListen)
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			_ = hubServer.Shutdown(shutdownCtx)
+		}()
+	}
+	providerStore.StartRefreshLoop(ctx, &http.Client{Timeout: 30 * time.Second}, func(results []aiproviders.RefreshResult) {
+		for _, result := range results {
+			log.Printf("level=info event=ai_provider_refresh provider=%s account=%s ok=%v message=%q", result.ProviderID, result.AccountID, result.OK, result.Message)
+		}
+	})
 	go server.RunReviewScheduler(ctx)
 	go server.RunDailySummaryScheduler(ctx)
 	go server.RunRemoteDailyReviewScheduler(ctx)
@@ -170,6 +221,13 @@ func runtimeVersion() string {
 		return value
 	}
 	return "development"
+}
+
+func firstNonEmptyEnv(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func preferredDataDir(configDir string) string {

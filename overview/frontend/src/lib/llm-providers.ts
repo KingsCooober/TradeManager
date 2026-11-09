@@ -33,7 +33,96 @@ export const llmProviders: LLMProviderDefinition[] = [
 	{ id: 'custom', label: 'OpenAI 兼容接口', baseURL: '', defaultModel: '', apiMode: 'codex_responses' },
 ];
 
-const providersByID = new Map(llmProviders.map((provider) => [provider.id, provider]));
+// 后端运行时注册表项，字段逐字对齐 overview/backend/internal/aiproviders.Provider。
+export type AIProviderAccount = {
+	id: string;
+	nickname: string;
+	enabled: boolean;
+	credential_ref: string;
+	refreshable: boolean;
+	created_at: number;
+	expires_at?: number;
+	model_rate_limits?: Record<string, number>;
+};
+
+export type AIProvider = {
+	id: string;
+	label: string;
+	base_url: string;
+	chat_path?: string;
+	responses_path?: string;
+	messages_path?: string;
+	models_path?: string;
+	refresh_url?: string;
+	auth_scheme?: string;
+	api_mode?: string;
+	default_model?: string;
+	credential_ref?: string;
+	cached_models?: string[];
+	enabled: boolean;
+	builtin: boolean;
+	accounts?: AIProviderAccount[];
+};
+
+export type AIHubStatus = {
+	enabled: boolean;
+	listen?: string;
+	model_routes?: string[];
+	api_key_masked?: string;
+};
+
+const staticIDs = new Set(llmProviders.map((provider) => provider.id));
+
+// providersByID 可被后端注册表刷新；llmProviders 静态数组始终保持原样
+// （llm-providers.test.ts 直接断言它的内容与 llmProviderDefinition 的回落行为）。
+let providersByID = new Map(llmProviders.map((provider) => [provider.id, provider]));
+let providerList: LLMProviderDefinition[] = [...llmProviders];
+
+function normalizeAPIMode(value: string): LLMAPIMode {
+	if (value === 'auto' || value === 'chat_completions' || value === 'anthropic_messages' || value === 'codex_responses') {
+		return value;
+	}
+	// 后端的 responses / 空值 / 未知值一律按 Codex Responses 处理。
+	return 'codex_responses';
+}
+
+function toDefinition(provider: AIProvider): LLMProviderDefinition {
+	return {
+		id: provider.id,
+		label: provider.label || provider.id,
+		baseURL: provider.base_url || '',
+		defaultModel: provider.default_model || '',
+		apiMode: normalizeAPIMode(provider.api_mode || ''),
+	};
+}
+
+// registerLLMProviders 把 /api/v1/settings 返回的运行时注册表合并进下拉列表：
+// 内置项只用后端的显示名覆盖（保留静态的 protocolBaseURLs 与默认地址），
+// 用户自定义供应商追加到末尾。凭据明文永不进入前端。
+export function registerLLMProviders(providers: AIProvider[]): void {
+	const overrides = new Map<string, AIProvider>();
+	const custom: AIProvider[] = [];
+	for (const provider of providers || []) {
+		if (!provider || !provider.id) continue;
+		if (staticIDs.has(provider.id)) {
+			overrides.set(provider.id, provider);
+		} else {
+			custom.push(provider);
+		}
+	}
+	const mergedStatic = llmProviders.map((definition) => {
+		const override = overrides.get(definition.id);
+		return override ? { ...definition, label: override.label || definition.label } : definition;
+	});
+	const mergedCustom = custom.map(toDefinition);
+	providerList = [...mergedStatic, ...mergedCustom];
+	providersByID = new Map(providerList.map((provider) => [provider.id, provider]));
+}
+
+// llmProviderList 供设置页的「服务商」下拉使用：静态 10 家 + 运行时自定义项。
+export function llmProviderList(): LLMProviderDefinition[] {
+	return providerList;
+}
 
 export function llmProviderDefinition(provider: string): LLMProviderDefinition {
 	return providersByID.get(provider) || providersByID.get('custom')!;

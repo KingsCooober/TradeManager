@@ -10,12 +10,20 @@ import (
 	"time"
 
 	"easy-stock/backend/internal/agent"
+	"easy-stock/backend/internal/aiproviders"
 	"easy-stock/backend/internal/appsettings"
 )
 
 type secretSettingStatus struct {
 	Configured bool   `json:"configured"`
 	Masked     string `json:"masked,omitempty"`
+}
+
+type aiHubView struct {
+	Enabled      bool     `json:"enabled"`
+	Listen       string   `json:"listen,omitempty"`
+	ModelRoutes  []string `json:"model_routes,omitempty"`
+	APIKeyMasked string   `json:"api_key_masked,omitempty"`
 }
 
 type settingsView struct {
@@ -25,6 +33,8 @@ type settingsView struct {
 	Hermes             agent.Status            `json:"hermes"`
 	ActiveLLMProfileID string                  `json:"active_llm_profile_id"`
 	LLMProfiles        []llmProfileView        `json:"llm_profiles"`
+	LLMProviders       []aiproviders.Provider  `json:"llm_providers,omitempty"`
+	AIHub              aiHubView               `json:"ai_hub"`
 	LLM                struct {
 		Provider               string              `json:"provider"`
 		BaseURL                string              `json:"base_url"`
@@ -136,7 +146,7 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateSettingsUpdate(request); err != nil {
+	if err := s.validateSettingsUpdate(request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -366,7 +376,7 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": s.buildSettingsView(values), "agent_settings": savedAgent})
 }
 
-func validateSettingsUpdate(request settingsUpdateRequest) error {
+func (s *Server) validateSettingsUpdate(request settingsUpdateRequest) error {
 	if request.AgentSettings != nil {
 		if err := validateAgentSettingsUpdate(*request.AgentSettings); err != nil {
 			return err
@@ -398,7 +408,7 @@ func validateSettingsUpdate(request settingsUpdateRequest) error {
 			copyRequest.LLM.BaseURL = &baseURL
 			copyRequest.LLM.Model = &model
 			copyRequest.LLM.APIMode = &apiMode
-			if err := validateSingleLLM(copyRequest); err != nil {
+			if err := s.validateSingleLLM(copyRequest); err != nil {
 				return err
 			}
 			if profile.APIKey != nil && len(*profile.APIKey) > 16<<10 {
@@ -409,14 +419,13 @@ func validateSettingsUpdate(request settingsUpdateRequest) error {
 			return fmt.Errorf("当前模型配置不存在")
 		}
 	}
-	return validateSingleLLM(request)
+	return s.validateSingleLLM(request)
 }
 
-func validateSingleLLM(request settingsUpdateRequest) error {
+func (s *Server) validateSingleLLM(request settingsUpdateRequest) error {
 	if request.LLM.Provider != nil {
 		provider := strings.TrimSpace(*request.LLM.Provider)
-		allowed := map[string]bool{"": true, "openai": true, "deepseek": true, "qwen": true, "moonshot": true, "minimax": true, "zhipu": true, "siliconflow": true, "anthropic": true, "custom": true, "xiaomi": true}
-		if !allowed[provider] {
+		if !s.providerAllowSet()[provider] {
 			return fmt.Errorf("unsupported llm provider: %s", provider)
 		}
 	}
@@ -535,6 +544,20 @@ func (s *Server) buildSettingsView(values appsettings.Values) settingsView {
 	}
 	view.LLM.ResponseTimeoutSeconds = appsettings.NormalizeLLMResponseTimeoutSeconds(values.LLM.ResponseTimeoutSeconds)
 	view.LLM.APIKey.Configured = view.Hermes.APIKeyConfigured
+	// 运行时可自定义供应商注册表（不含任何明文凭据）与本机网关状态一并
+	// 随 /api/v1/settings 返回，设置页无需再单独拉注册表接口。
+	if s.aiProviders != nil {
+		view.LLMProviders = s.aiProviders.List()
+	}
+	if s.aiHub != nil {
+		status := s.aiHub.Status(s.aiHubListen)
+		view.AIHub = aiHubView{
+			Enabled:      status.Enabled && strings.TrimSpace(s.aiHubListen) != "",
+			Listen:       status.Listen,
+			ModelRoutes:  status.ModelRoutes,
+			APIKeyMasked: maskHubAPIKey(s.aiHub.APIKey()),
+		}
+	}
 	view.ActiveLLMProfileID = values.ActiveLLMProfileID
 	view.LLMProfiles = make([]llmProfileView, 0, len(values.LLMProfiles))
 	profileGateway, _ := s.agentGateway.(agent.ProfileGateway)

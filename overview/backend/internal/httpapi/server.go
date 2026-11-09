@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"easy-stock/backend/internal/agent"
+	"easy-stock/backend/internal/aiproviders"
 	"easy-stock/backend/internal/appsettings"
 	"easy-stock/backend/internal/cockpit"
 	"easy-stock/backend/internal/foundation"
@@ -103,6 +104,9 @@ type Server struct {
 	reviewImporter           ReviewImporter
 	wechatAPIURL             string
 	settingsStore            *appsettings.Store
+	aiProviders              *aiproviders.Store
+	aiHub                    *aiproviders.Hub
+	aiHubListen              string
 	notificationSender       notificationSender
 	notifications            *notification.Dispatcher
 	reviewAutomation         *review.Automation
@@ -337,6 +341,10 @@ func NewServer(config any) *Server {
 			cfg.SettingsStore, _ = appsettings.Open("")
 		}
 	}
+	// AI 供应商注册表：优先用主程序注入的落盘实例；测试/嵌入场景回落到内存态。
+	if cfg.AIProviderStore == nil {
+		cfg.AIProviderStore, _ = aiproviders.Open("", "")
+	}
 	if cfg.HotStocks == nil {
 		cfg.HotStocks = hotstock.NewClient()
 	}
@@ -430,6 +438,9 @@ func NewServer(config any) *Server {
 		reviewImporter:           cfg.ReviewImporter,
 		wechatAPIURL:             strings.TrimSpace(cfg.WeChatAPIURL),
 		settingsStore:            cfg.SettingsStore,
+		aiProviders:              cfg.AIProviderStore,
+		aiHub:                    cfg.AIHub,
+		aiHubListen:              cfg.AIHubListen,
 		notificationSender:       notification.NewSender(),
 		ladderThemeAI:            newLadderThemeAI(cfg.SettingsPath),
 		reviewAutomation:         cfg.ReviewAutomation,
@@ -908,6 +919,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/settings/llm/models", s.settingsLLMModels)
 	s.mux.HandleFunc("POST /api/v1/settings/llm/api-key/reveal", s.settingsLLMAPIKeyReveal)
 	s.mux.HandleFunc("POST /api/v1/settings/llm/test", s.settingsLLMTest)
+	s.mux.HandleFunc("GET /api/v1/settings/llm/providers", s.aiProvidersList)
+	s.mux.HandleFunc("PUT /api/v1/settings/llm/providers", s.aiProvidersUpsert)
+	s.mux.HandleFunc("DELETE /api/v1/settings/llm/providers", s.aiProvidersDelete)
+	s.mux.HandleFunc("POST /api/v1/settings/llm/providers/account", s.aiProvidersAccount)
+	s.mux.HandleFunc("POST /api/v1/settings/llm/providers/credential", s.aiProvidersCredential)
+	s.mux.HandleFunc("GET /api/v1/settings/llm/providers/usage", s.aiProvidersUsage)
+	s.mux.HandleFunc("GET /api/v1/settings/llm/providers/refresh", s.aiProvidersRefresh)
+	s.mux.HandleFunc("POST /api/v1/settings/llm/providers/refresh", s.aiProvidersRefresh)
+	s.mux.HandleFunc("GET /api/v1/settings/llm/hub", s.aiHubStatus)
 	s.mux.HandleFunc("GET /api/v1/settings/notifications", s.settingsNotificationsGet)
 	s.mux.HandleFunc("PUT /api/v1/settings/notifications", s.settingsNotificationsUpdate)
 	s.mux.HandleFunc("POST /api/v1/settings/notifications/reveal", s.settingsNotificationsReveal)

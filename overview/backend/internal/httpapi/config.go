@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"easy-stock/backend/internal/agent"
+	"easy-stock/backend/internal/aiproviders"
 	"easy-stock/backend/internal/appsettings"
 	"easy-stock/backend/internal/foundation"
 	"easy-stock/backend/internal/marketemotion"
@@ -227,6 +228,9 @@ type Config struct {
 	ReviewImporter           ReviewImporter
 	SettingsPath             string
 	SettingsStore            *appsettings.Store
+	AIProviderStore          *aiproviders.Store
+	AIHub                    *aiproviders.Hub
+	AIHubListen              string
 	ReviewAutomation         *review.Automation
 	ReviewCalendar           review.TradingCalendar
 	RemoteDailyReviewURL     string
