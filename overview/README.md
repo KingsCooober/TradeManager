@@ -12,11 +12,16 @@
 
 ```powershell
 cd overview/frontend
-$env:VITE_A_STOCK_BACKEND_URL = '/'
 $env:TMP = '<仓库根>\.esbuild-tmp'; $env:TEMP = $env:TMP
 npm install   # 首次
 npm run build # 产物 dist/ → 拷贝到 public/overview-app/
 ```
+
+> `VITE_A_STOCK_BACKEND_URL` 已固化在 `overview/frontend/.env.production`（值为 `/`，
+> 同源根路径 + `mountPrefix()` 自动补 `/overview/` 前缀）。**不要再手工设成别的值**：
+> 若缺失，前端会 fallback 到 `http://127.0.0.1:20081`，公网浏览器会去连访客本机的
+> 端口，表现为「页面能开、所有数据都拉不到」。仅在本地 `npm run dev` 时才走该兜底。
+> 构建后务必把 `dist/` 整体同步到 `public/overview-app/`，部署脚本只重启服务、不构建前端。
 
 ## 后端编译
 
