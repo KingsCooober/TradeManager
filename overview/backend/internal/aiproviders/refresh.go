@@ -38,6 +38,10 @@ func (s *Store) RefreshPlans() []RefreshPlan {
 	var out []RefreshPlan
 	for _, p := range s.providers {
 		refreshURL := strings.TrimSpace(p.RefreshURL)
+		if p.LoginType == LoginTypeCodeArts {
+			// CodeArts 不配 RefreshURL：续期固定走 STS refresh_token 端点。
+			refreshURL = caSTSTokenEndpoint
+		}
 		for _, a := range p.Accounts {
 			due := a.Enabled && a.Refreshable && refreshURL != "" && a.ExpiresAt > 0 && a.ExpiresAt-now <= RefreshLeadMs
 			out = append(out, RefreshPlan{
@@ -99,6 +103,9 @@ func (s *Store) RefreshAccount(ctx context.Context, client *http.Client, provide
 		return result, false, fmt.Errorf("供应商不存在：%s", providerID)
 	}
 	refreshURL := strings.TrimSpace(p.RefreshURL)
+	if p.LoginType == LoginTypeCodeArts {
+		refreshURL = caSTSTokenEndpoint
+	}
 	if refreshURL == "" {
 		return result, false, errors.New("该供应商未配置刷新地址")
 	}
@@ -117,6 +124,9 @@ func (s *Store) RefreshAccount(ctx context.Context, client *http.Client, provide
 	secret, ok := s.Credential(account.CredentialRef)
 	if !ok || secret == "" {
 		return result, false, fmt.Errorf("凭据不存在：%s", account.CredentialRef)
+	}
+	if p.LoginType == LoginTypeCodeArts {
+		return s.refreshCodeArtsAccount(ctx, client, providerID, account, secret, result)
 	}
 	blob, ok := decodeCredential(secret)
 	if !ok {
@@ -192,6 +202,42 @@ func (s *Store) RefreshAccount(ctx context.Context, client *http.Client, provide
 	}
 	result.OK = true
 	result.ExpiresAt = next.ExpiresAt
+	result.Message = "续期成功"
+	return result, true, nil
+}
+
+// refreshCodeArtsAccount 用 STS refresh_token（DPoP + code_verifier + 原私钥）刷新 AK/SK。
+// 与通用 RefreshURL 流程不同：凭据是 CodeArtsCredential JSON，不是 access_token blob。
+func (s *Store) refreshCodeArtsAccount(ctx context.Context, client *http.Client, providerID string, account Account, secret string, result RefreshResult) (RefreshResult, bool, error) {
+	cred, err := ParseCodeArtsCredential(secret)
+	if err != nil {
+		return result, false, err
+	}
+	if cred.RefreshToken == "" || cred.DPoPPrivateJWK == nil {
+		return result, false, errors.New("该 CodeArts 账号不可续期（无 refresh_token 或 DPoP 私钥），请重新登录")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
+	next, err := RefreshCodeArtsCredential(ctx, client, cred)
+	if err != nil {
+		result.Message = "CodeArts 续期失败：" + err.Error()
+		return result, true, errors.New(result.Message)
+	}
+	encoded, err := json.Marshal(next)
+	if err != nil {
+		return result, true, err
+	}
+	if err := s.SetCredential(account.CredentialRef, string(encoded)); err != nil {
+		return result, true, err
+	}
+	account.ExpiresAt = parseExpiry(next.ExpiresAt)
+	account.Refreshable = next.RefreshToken != ""
+	if err := s.UpsertAccount(providerID, account); err != nil {
+		return result, true, err
+	}
+	result.OK = true
+	result.ExpiresAt = account.ExpiresAt
 	result.Message = "续期成功"
 	return result, true, nil
 }

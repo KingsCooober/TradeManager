@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Database, KeyRound, LoaderCircle, Plus, RefreshCw, Save, Server, Trash2, ArrowUp, ArrowDown, Power } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Database, KeyRound, LoaderCircle, Plus, RefreshCw, Save, Server, Trash2, ArrowUp, ArrowDown, Power, LogIn, ExternalLink, CheckCircle2, CircleAlert, X } from 'lucide-react';
 import { BackendConfig, requestJSON } from '../lib/backend';
-import { AIProvider, AIProviderAccount, AIHubStatus, registerLLMProviders, llmProviderList } from '../lib/llm-providers';
+import { AIProvider, AIProviderAccount, AIProviderModel, AIHubStatus, registerLLMProviders } from '../lib/llm-providers';
 import { SettingsSection } from './SettingsSection';
 
 type Props = {
@@ -19,6 +19,12 @@ type RefreshResult = { provider_id: string; account_id: string; ok: boolean; mes
 type PlansResult = { data: { plans: RefreshPlan[]; results?: RefreshResult[] } };
 type UsageEntry = { key: string; provider: string; account: string; model: string; requests: number; errors: number; input_tokens: number; output_tokens: number };
 type UsageResult = { data: { days: { date: string; entries: UsageEntry[] }[] } };
+
+// 登录与模型：对齐 Jet Hub 的 account.create / login.poll / model.list 契约。
+type LoginStart = { data: { accountId: string; loginUrl: string; incognitoOpened: boolean; callbackPort: number } };
+type LoginPoll = { data: { done: boolean; success: boolean; error?: string } };
+type ModelsData = { models: AIProviderModel[]; enabled: string[] };
+type ModelsResult = { data: ModelsData; complete?: boolean };
 
 type ProviderDraft = {
 	id: string;
@@ -45,6 +51,11 @@ type AccountDraft = {
 	enabled: boolean;
 	expires_at: string;
 };
+
+const CODEARTS = 'codearts';
+const LOGIN_TYPE = 'codearts_oauth';
+const POLL_INTERVAL_MS = 1000;
+const POLL_DEADLINE_MS = 5 * 60 * 1000;
 
 const emptyProviderDraft = (): ProviderDraft => ({
 	id: '', label: '', base_url: 'https://', chat_path: '/chat/completions', responses_path: '/responses',
@@ -127,15 +138,48 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 	const [refreshResults, setRefreshResults] = useState<RefreshResult[]>([]);
 	const [usage, setUsage] = useState<UsageResult['data']['days']>([]);
 
+	// 登录会话状态：与 Jet Hub 一致，先返回链接再后台轮询凭据是否落库。
+	const [loginOpen, setLoginOpen] = useState(false);
+	const [loginURL, setLoginURL] = useState('');
+	const [loginAccountID, setLoginAccountID] = useState('');
+	const [loginStatus, setLoginStatus] = useState<'idle' | 'waiting' | 'success' | 'error'>('idle');
+	const [loginNote, setLoginNote] = useState('');
+	const [manualCode, setManualCode] = useState('');
+	const pollTimer = useRef<number | null>(null);
+
+	// 模型目录：黑名单制，只有被关掉的模型才会隐藏，服务端新增模型默认显示。
+	const [models, setModels] = useState<AIProviderModel[]>([]);
+	const [enabledModels, setEnabledModels] = useState<string[]>([]);
+	const [modelsLoading, setModelsLoading] = useState(false);
+	const [modelBusyID, setModelBusyID] = useState('');
+	const [modelFilter, setModelFilter] = useState('');
+
 	useEffect(() => { setItems(providers); }, [providers]);
+
+	useEffect(() => {
+		if (!selectedID && items.length > 0) setSelectedID(items[0].id);
+	}, [items, selectedID]);
+
+	useEffect(() => () => { if (pollTimer.current !== null) window.clearInterval(pollTimer.current); }, []);
 
 	const selected = useMemo(() => items.find((item) => item.id === selectedID), [items, selectedID]);
 	const customProviders = useMemo(() => items.filter((item) => !item.builtin), [items]);
+	const isLoginProvider = selected?.login_type === LOGIN_TYPE;
+
+	const shownModels = useMemo(() => {
+		const q = modelFilter.trim().toLowerCase();
+		return q ? models.filter((m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)) : models;
+	}, [models, modelFilter]);
 
 	const applyProviders = (next: AIProvider[]) => {
 		setItems(next);
 		registerLLMProviders(next);
 		onProvidersChanged(next);
+	};
+
+	const applyModels = (data: ModelsData) => {
+		setModels(data.models || []);
+		setEnabledModels(data.enabled || []);
 	};
 
 	const run = async (task: () => Promise<void>) => {
@@ -159,6 +203,114 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 		const plansPayload = await requestJSON<PlansResult>(config!, '/api/v1/settings/llm/providers/refresh');
 		setPlans(plansPayload.data.plans || []);
 		setMessage('供应商注册表与续期计划已刷新');
+	});
+
+	const loadModels = (providerID: string) => run(async () => {
+		setModelsLoading(true);
+		try {
+			const payload = await requestJSON<ModelsResult>(config!, `/api/v1/settings/llm/models?provider=${encodeURIComponent(providerID)}`);
+			applyModels(payload.data);
+		} finally {
+			setModelsLoading(false);
+		}
+	});
+
+	const refreshModels = () => run(async () => {
+		setModelsLoading(true);
+		try {
+			const payload = await requestJSON<ModelsResult>(config!, '/api/v1/settings/llm/models/refresh', {
+				method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: selectedID }),
+			});
+			applyModels(payload.data);
+			setMessage(payload.complete === false ? '已读取缓存目录（远端目录暂不可用）' : '私有模型目录已刷新');
+		} finally {
+			setModelsLoading(false);
+		}
+	});
+
+	const toggleModel = (model: AIProviderModel) => run(async () => {
+		setModelBusyID(model.id);
+		try {
+			const payload = await requestJSON<ModelsResult>(config!, '/api/v1/settings/llm/models/disabled', {
+				method: 'POST', headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ provider: selectedID, modelId: model.id, disabled: !model.disabled }),
+			});
+			applyModels(payload.data);
+		} finally {
+			setModelBusyID('');
+		}
+	});
+
+	const setAllModels = (disabledAll: boolean) => run(async () => {
+		const payload = await requestJSON<ModelsResult>(config!, '/api/v1/settings/llm/models/all', {
+			method: 'POST', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ provider: selectedID, disabled: disabledAll }),
+		});
+		applyModels(payload.data);
+		setMessage(disabledAll ? '已关闭全部模型' : '已启用全部模型');
+	});
+
+	const stopPoll = () => {
+		if (pollTimer.current !== null) {
+			window.clearInterval(pollTimer.current);
+			pollTimer.current = null;
+		}
+	};
+
+	const startLogin = () => run(async () => {
+		const payload = await requestJSON<LoginStart>(config!, '/api/v1/settings/llm/login/start', {
+			method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: selectedID || CODEARTS }),
+		});
+		const { accountId, loginUrl } = payload.data;
+		setLoginOpen(true);
+		setLoginURL(loginUrl);
+		setLoginAccountID(accountId);
+		setLoginStatus('waiting');
+		setLoginNote('已创建登录会话，正在等待授权…');
+		setManualCode('');
+		const opened = window.open(loginUrl, '_blank', 'width=800,height=600');
+		if (!opened) setLoginNote('登录窗口被浏览器拦截，请手动打开下方链接完成登录。');
+		stopPoll();
+		const deadline = Date.now() + POLL_DEADLINE_MS;
+		pollTimer.current = window.setInterval(async () => {
+			if (!config) { stopPoll(); return; }
+			try {
+				const poll = await requestJSON<LoginPoll>(config, `/api/v1/settings/llm/login/poll?accountId=${encodeURIComponent(accountId)}`);
+				if (poll.data.success === false) {
+					stopPoll();
+					setLoginStatus('error');
+					setLoginNote(poll.data.error || '登录失败，请重试');
+					return;
+				}
+				if (poll.data.done) {
+					stopPoll();
+					setLoginStatus('success');
+					setLoginNote('登录成功，账号已写入凭据库，模型目录同步完成。');
+					const refreshed = await requestJSON<ProvidersResult>(config, '/api/v1/settings/llm/providers');
+					applyProviders(refreshed.data.providers || []);
+					const modelsPayload = await requestJSON<ModelsResult>(config, `/api/v1/settings/llm/models?provider=${encodeURIComponent(selectedID || CODEARTS)}`);
+					applyModels(modelsPayload.data);
+					return;
+				}
+				if (Date.now() > deadline) {
+					stopPoll();
+					setLoginStatus('error');
+					setLoginNote('登录超时或未完成（已等待 5 分钟）：可能是授权未完成、授权被拒，或账号条目已被删除。请重新点击「登录账号」再试一次。');
+				}
+			} catch {
+				// 轮询请求偶发失败不终止，累计到 deadline 才超时（对齐 Jet Hub）。
+			}
+		}, POLL_INTERVAL_MS);
+	});
+
+	const submitManualCode = () => run(async () => {
+		if (!manualCode.trim()) { setError('请粘贴授权 code 或完整回调链接'); return; }
+		await requestJSON(config!, '/api/v1/settings/llm/login/code', {
+			method: 'POST', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ accountId: loginAccountID, code: manualCode.trim() }),
+		});
+		setManualCode('');
+		setLoginNote('已提交授权 code，继续等待凭据落库…');
 	});
 
 	const saveProvider = () => run(async () => {
@@ -237,10 +389,18 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 		setSelectedID('');
 	};
 
+	const selectProvider = (id: string) => {
+		setSelectedID(id);
+		setEditing(false);
+		setModels([]);
+		setEnabledModels([]);
+		if (config) void loadModels(id);
+	};
+
 	return (
 		<SettingsSection
-			title="AI 供应商注册表与订阅账号池"
-			description="运行时自定义供应商、按账号顺序选号、429 自动换号、提前 1 小时续期；凭据单独存 0600 文件，明文不出现在任何列表里。本机网关把 provider/model 反代到注册表里的真实地址。"
+			title="AI 供应商与订阅账号"
+			description="内置 CodeArts 订阅渠道：点「登录账号」完成授权后自动建号、拉取私有模型目录；勾选要使用的模型，第三方通过本机网关按 provider/model 调用。凭据单独存 0600 文件，明文不出现在任何列表里。"
 			icon={<Server size={18} />}
 		>
 			<div className="ai-registry-toolbar">
@@ -260,27 +420,82 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 			)}
 
 			<div className="ai-registry-list">
-				{llmProviderList().map((definition) => {
-					const record = items.find((item) => item.id === definition.id);
-					const builtin = record?.builtin ?? true;
-					return (
-						<div className={`ai-registry-row ${selectedID === definition.id ? 'active' : ''}`} key={definition.id}>
-							<button type="button" className="ai-registry-name" onClick={() => record && beginEdit(record)}>
-								<strong>{definition.label}</strong><small>{definition.id} · {record?.accounts?.length || 0} 个账号 · {record?.enabled === false ? '已停用' : '启用'}</small>
-							</button>
-							{record && <button type="button" title={record.enabled ? '停用' : '启用'} onClick={() => void toggleProvider(record)} disabled={busy || disabled}><Power size={14} /></button>}
-							{!builtin && record && <button type="button" className="danger" title="删除自定义供应商" onClick={() => void deleteProvider(record.id)} disabled={busy || disabled}><Trash2 size={14} /></button>}
-						</div>
-					);
-				})}
-				{customProviders.length === 0 && <div className="review-profile-empty"><strong>还没有自定义供应商</strong><span>内置 10 家可直接停用或改地址；点击「新增供应商」接入订阅制渠道。</span></div>}
+				{items.map((record) => (
+					<div className={`ai-registry-row ${selectedID === record.id ? 'active' : ''}`} key={record.id}>
+						<button type="button" className="ai-registry-name" onClick={() => selectProvider(record.id)}>
+							<strong>{record.label || record.id}</strong><small>{record.id} · {record.accounts?.length || 0} 个账号 · {record.enabled === false ? '已停用' : '启用'}{record.login_type ? ' · 登录型' : ''}</small>
+						</button>
+						<button type="button" title={record.enabled ? '停用' : '启用'} onClick={() => void toggleProvider(record)} disabled={busy || disabled}><Power size={14} /></button>
+						{!record.builtin && <button type="button" className="danger" title="删除自定义供应商" onClick={() => void deleteProvider(record.id)} disabled={busy || disabled}><Trash2 size={14} /></button>}
+					</div>
+				))}
+				{items.length === 0 && <div className="review-profile-empty"><strong>注册表为空</strong><span>点击「刷新注册表」从后端载入内置 CodeArts 供应商。</span></div>}
+				{customProviders.length > 0 && <div className="review-profile-empty"><span>已接入 {customProviders.length} 个自定义供应商；内置只保留 CodeArts 一家。</span></div>}
 			</div>
+
+			{/* 登录账号：两步式 OAuth，与插件一致（先给链接，再轮询凭据落库） */}
+			{selected && isLoginProvider && (
+				<div className="ai-registry-editor ai-registry-login">
+					<strong>登录账号 · {selected.label}</strong>
+					<small>点击后打开华为云授权页；登录成功后自动写入账号与凭据，并刷新可用模型。远程部署可用「手动填入授权 code」兜底。</small>
+					<div className="ai-registry-toolbar">
+						<button type="button" onClick={() => void startLogin()} disabled={!config || busy || disabled || loginStatus === 'waiting'}><LogIn size={14} />登录账号</button>
+						{loginOpen && <button type="button" onClick={() => { stopPoll(); setLoginOpen(false); setLoginStatus('idle'); }}><X size={14} />取消等待</button>}
+					</div>
+					{loginOpen && (
+						<div className={`ai-registry-login-card ${loginStatus}`}>
+							<div className="ai-registry-login-status">
+								{loginStatus === 'waiting' && <LoaderCircle className="spin" size={16} />}
+								{loginStatus === 'success' && <CheckCircle2 size={16} />}
+								{loginStatus === 'error' && <CircleAlert size={16} />}
+								<span>{loginNote}</span>
+							</div>
+							{loginURL && <a className="ai-registry-login-link" href={loginURL} target="_blank" rel="noreferrer"><ExternalLink size={13} />打开授权链接</a>}
+							<div className="ai-registry-login-manual">
+								<input value={manualCode} onChange={(event) => setManualCode(event.target.value)} placeholder="粘贴授权 code 或完整回调 URL" />
+								<button type="button" onClick={() => void submitManualCode()} disabled={!manualCode.trim() || busy || disabled}>提交</button>
+							</div>
+						</div>
+					)}
+				</div>
+			)}
+
+			{/* 选择模型：黑名单制勾选，只有被关闭的才隐藏 */}
+			{selected && (
+				<div className="ai-registry-editor ai-registry-models">
+					<strong>选择模型 · {selected.label}</strong>
+					<small>列出该供应商的全部模型。开关默认打开；关闭后该模型不再出现在网关的模型列表里（黑名单制，服务端新增模型默认显示）。已启用 {enabledModels.length} / {models.length} 个。</small>
+					<div className="ai-registry-toolbar">
+						<button type="button" onClick={() => void loadModels(selectedID)} disabled={!config || busy || disabled || modelsLoading}><RefreshCw size={14} />读取模型</button>
+						{isLoginProvider && <button type="button" onClick={() => void refreshModels()} disabled={!config || busy || disabled || modelsLoading}><RefreshCw size={14} />刷新远端目录</button>}
+						<button type="button" onClick={() => void setAllModels(false)} disabled={!config || busy || disabled || models.length === 0}>全部启用</button>
+						<button type="button" onClick={() => void setAllModels(true)} disabled={!config || busy || disabled || models.length === 0}>全部关闭</button>
+						<input className="ai-registry-model-filter" value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} placeholder="搜索模型" />
+					</div>
+					<div className="ai-registry-model-list">
+						{shownModels.map((model) => (
+							<label className={`ai-registry-model-row ${model.disabled ? 'off' : ''} ${model.dead ? 'dead' : ''}`} key={model.id}>
+								<input
+									type="checkbox"
+									role="switch"
+									checked={!model.disabled}
+									disabled={busy || disabled || modelBusyID === model.id}
+									onChange={() => void toggleModel(model)}
+								/>
+								<span><strong>{model.name || model.id}</strong><small>{model.id}{model.dead ? ' · 目录已移除，可重新打开' : ''}</small></span>
+								{modelBusyID === model.id && <LoaderCircle className="spin" size={13} />}
+							</label>
+						))}
+						{shownModels.length === 0 && <div className="review-profile-empty"><span>{modelsLoading ? '正在读取模型目录…' : models.length === 0 ? '点击「读取模型」加载目录；登录型供应商可先「刷新远端目录」。' : '没有匹配的模型。'}</span></div>}
+					</div>
+				</div>
+			)}
 
 			{editing && (
 				<div className="ai-registry-editor">
 					<strong>{providerDraft.id ? `编辑 ${providerDraft.id}` : '新增自定义供应商'}</strong>
 					<div className="settings-grid two-columns">
-						<label><span>供应商 ID</span><input value={providerDraft.id} onChange={(event) => setProviderDraft({ ...providerDraft, id: event.target.value })} placeholder="例如 qiniu / codearts" disabled={!!providerDraft.id} /></label>
+						<label><span>供应商 ID</span><input value={providerDraft.id} onChange={(event) => setProviderDraft({ ...providerDraft, id: event.target.value })} placeholder="例如 qiniu" disabled={!!providerDraft.id} /></label>
 						<label><span>显示名称</span><input value={providerDraft.label} onChange={(event) => setProviderDraft({ ...providerDraft, label: event.target.value })} placeholder="例如 七牛云" /></label>
 						<label><span>API Base URL</span><input value={providerDraft.base_url} onChange={(event) => setProviderDraft({ ...providerDraft, base_url: event.target.value })} placeholder="https://api.example.com/v1" /></label>
 						<label><span>鉴权方式</span><select value={providerDraft.auth_scheme} onChange={(event) => setProviderDraft({ ...providerDraft, auth_scheme: event.target.value })}><option value="bearer">Bearer</option><option value="x-api-key">x-api-key（Anthropic）</option><option value="none">无鉴权</option></select></label>
@@ -305,7 +520,7 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 			{selected && (
 				<div className="ai-registry-editor">
 					<strong>订阅账号池 · {selected.label}</strong>
-					<small>数组顺序即选号优先级；429 会写模型级限流并自动换下一个账号，401/403 换号但不写限流。</small>
+					<small>数组顺序即选号优先级；429 会写模型级限流并自动换下一个账号，401/403 换号但不写限流。登录型账号由「登录账号」自动创建。</small>
 					{(selected.accounts || []).map((account, index) => (
 						<div className="ai-registry-account" key={account.id}>
 							<span><strong>{account.nickname || account.id}</strong><small>{account.credential_ref} · {account.enabled ? '启用' : '停用'} · 到期 {formatExpiry(account.expires_at)} · {account.refreshable ? '可续期' : '纯 Key'}</small></span>
@@ -315,7 +530,7 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 							<button type="button" className="danger" title="删除账号" onClick={() => void accountAction('delete', account)} disabled={busy || disabled}><Trash2 size={13} /></button>
 						</div>
 					))}
-					{!(selected.accounts || []).length && <div className="review-profile-empty"><span>暂无账号；可新增订阅账号，或直接用「单 Key 凭据引用」。</span></div>}
+					{!(selected.accounts || []).length && <div className="review-profile-empty"><span>暂无账号；登录型供应商请点「登录账号」，或手工添加订阅账号。</span></div>}
 					<div className="settings-grid two-columns">
 						<label><span>账号 ID</span><input value={accountDraft.id} onChange={(event) => setAccountDraft({ ...accountDraft, id: event.target.value })} placeholder="acc-1" /></label>
 						<label><span>昵称</span><input value={accountDraft.nickname} onChange={(event) => setAccountDraft({ ...accountDraft, nickname: event.target.value })} placeholder="主号 / 备用号" /></label>

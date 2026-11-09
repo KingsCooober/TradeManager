@@ -45,6 +45,13 @@ export type AIProviderAccount = {
 	model_rate_limits?: Record<string, number>;
 };
 
+export type AIProviderModel = {
+	id: string;
+	name: string;
+	disabled: boolean;
+	dead?: boolean;
+};
+
 export type AIProvider = {
 	id: string;
 	label: string;
@@ -59,6 +66,9 @@ export type AIProvider = {
 	default_model?: string;
 	credential_ref?: string;
 	cached_models?: string[];
+	login_type?: string;
+	model_catalog?: AIProviderModel[];
+	disabled_models?: string[];
 	enabled: boolean;
 	builtin: boolean;
 	accounts?: AIProviderAccount[];

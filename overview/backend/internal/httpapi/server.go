@@ -107,6 +107,7 @@ type Server struct {
 	aiProviders              *aiproviders.Store
 	aiHub                    *aiproviders.Hub
 	aiHubListen              string
+	aiLogin                  *aiproviders.LoginBroker
 	notificationSender       notificationSender
 	notifications            *notification.Dispatcher
 	reviewAutomation         *review.Automation
@@ -345,6 +346,9 @@ func NewServer(config any) *Server {
 	if cfg.AIProviderStore == nil {
 		cfg.AIProviderStore, _ = aiproviders.Open("", "")
 	}
+	if cfg.AILogin == nil {
+		cfg.AILogin = aiproviders.NewLoginBroker(cfg.AIProviderStore, &http.Client{Timeout: 60 * time.Second})
+	}
 	if cfg.HotStocks == nil {
 		cfg.HotStocks = hotstock.NewClient()
 	}
@@ -441,6 +445,7 @@ func NewServer(config any) *Server {
 		aiProviders:              cfg.AIProviderStore,
 		aiHub:                    cfg.AIHub,
 		aiHubListen:              cfg.AIHubListen,
+		aiLogin:                  cfg.AILogin,
 		notificationSender:       notification.NewSender(),
 		ladderThemeAI:            newLadderThemeAI(cfg.SettingsPath),
 		reviewAutomation:         cfg.ReviewAutomation,
@@ -927,6 +932,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/settings/llm/providers/usage", s.aiProvidersUsage)
 	s.mux.HandleFunc("GET /api/v1/settings/llm/providers/refresh", s.aiProvidersRefresh)
 	s.mux.HandleFunc("POST /api/v1/settings/llm/providers/refresh", s.aiProvidersRefresh)
+	s.mux.HandleFunc("POST /api/v1/settings/llm/login/start", s.aiLoginStart)
+	s.mux.HandleFunc("GET /api/v1/settings/llm/login/poll", s.aiLoginPoll)
+	s.mux.HandleFunc("POST /api/v1/settings/llm/login/code", s.aiLoginCode)
+	s.mux.HandleFunc("GET /api/v1/settings/llm/models", s.aiProviderModels)
+	s.mux.HandleFunc("POST /api/v1/settings/llm/models/disabled", s.aiProviderModelsDisabled)
+	s.mux.HandleFunc("POST /api/v1/settings/llm/models/all", s.aiProviderModelsAll)
+	s.mux.HandleFunc("POST /api/v1/settings/llm/models/refresh", s.aiProviderModelsRefresh)
 	s.mux.HandleFunc("GET /api/v1/settings/llm/hub", s.aiHubStatus)
 	s.mux.HandleFunc("GET /api/v1/settings/notifications", s.settingsNotificationsGet)
 	s.mux.HandleFunc("PUT /api/v1/settings/notifications", s.settingsNotificationsUpdate)

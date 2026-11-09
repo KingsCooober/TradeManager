@@ -22,29 +22,46 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
-func TestOpenSeedsTenBuiltinProviders(t *testing.T) {
+func TestOpenSeedsCodeArtsOnly(t *testing.T) {
 	s := testStore(t)
 	list := s.List()
-	if len(list) != 10 {
-		t.Fatalf("builtin count = %d, want 10", len(list))
+	// 只内置 codearts 一家登录型订阅渠道，其他 API Key 型不再内置。
+	if len(list) != 1 {
+		t.Fatalf("builtin count = %d, want 1", len(list))
 	}
-	ids := map[string]bool{}
-	for _, p := range list {
-		ids[p.ID] = true
-		if !p.Builtin || !p.Enabled {
-			t.Fatalf("builtin %q flags: builtin=%v enabled=%v", p.ID, p.Builtin, p.Enabled)
+	p := list[0]
+	if p.ID != ProviderCodeArts || !p.Builtin || !p.Enabled {
+		t.Fatalf("seed = %+v", p)
+	}
+	if p.LoginType != LoginTypeCodeArts || len(p.CachedModels) == 0 {
+		t.Fatalf("codearts seed: login_type=%q models=%d", p.LoginType, len(p.CachedModels))
+	}
+	for _, gone := range []string{"openai", "deepseek", "anthropic", "custom"} {
+		if s.Exists(gone) {
+			t.Fatalf("old API builtin %q still present", gone)
 		}
 	}
-	for _, want := range []string{"openai", "deepseek", "moonshot", "minimax", "zhipu", "qwen", "siliconflow", "xiaomi", "anthropic", "custom"} {
-		if !ids[want] {
-			t.Fatalf("missing builtin %q", want)
-		}
-	}
-	if got := s.Exists("openai"); !got {
-		t.Fatal("Exists(openai) = false")
-	}
-	if got := s.Exists("nope"); got {
+	if s.Exists("nope") {
 		t.Fatal("Exists(nope) = true")
+	}
+}
+
+// mergeSeed 必须剪掉旧版本落盘的内置项，同时保留用户自定义项。
+func TestMergeSeedPrunesOldBuiltins(t *testing.T) {
+	saved := []Provider{
+		{ID: "openai", Label: "OpenAI", BaseURL: "https://api.openai.com/v1", Builtin: true, Enabled: true},
+		{ID: "mine", Label: "我的", BaseURL: "https://mine.example.com/v1", Builtin: false, Enabled: true},
+	}
+	merged := mergeSeed(saved)
+	ids := map[string]bool{}
+	for _, p := range merged {
+		ids[p.ID] = true
+	}
+	if ids["openai"] {
+		t.Fatal("old builtin openai was not pruned")
+	}
+	if !ids[ProviderCodeArts] || !ids["mine"] {
+		t.Fatalf("merge lost providers: %v", ids)
 	}
 }
 
@@ -88,7 +105,7 @@ func TestUpsertProviderCustomAndValidate(t *testing.T) {
 		t.Fatalf("update lost flags: builtin=%v(want %v) accounts=%d", got.Builtin, before.Builtin, len(got.Accounts))
 	}
 
-	if err := s.DeleteProvider("openai"); err == nil {
+	if err := s.DeleteProvider(ProviderCodeArts); err == nil {
 		t.Fatal("builtin provider should not be deletable")
 	}
 	if err := s.DeleteProvider("qiniu"); err != nil {
@@ -220,23 +237,31 @@ func TestMoveAccountAndClassifyStatus(t *testing.T) {
 
 func TestAuthHeadersAndPaths(t *testing.T) {
 	s := testStore(t)
-	if got := s.AuthHeaders("openai", "k")["Authorization"]; got != "Bearer k" {
+	// 未知 id 回落 Bearer。
+	if got := s.AuthHeaders("any", "k")["Authorization"]; got != "Bearer k" {
 		t.Fatalf("bearer header = %q", got)
 	}
-	if got := s.AuthHeaders("anthropic", "k")["x-api-key"]; got != "k" {
-		t.Fatalf("x-api-key header = %q", got)
-	}
-	if got := s.AuthHeaders("anthropic", "k")["anthropic-version"]; got != "2023-06-01" {
-		t.Fatalf("anthropic-version = %q", got)
-	}
-	if len(s.AuthHeaders("openai", "")) != 0 {
+	if len(s.AuthHeaders("any", "")) != 0 {
 		t.Fatal("empty key should produce no auth headers")
 	}
-	if got := s.MessagesPath("anthropic"); got != "/v1/messages" {
+	// x-api-key 供应商用自定义项验证，不再依赖内置 anthropic。
+	_ = s.UpsertProvider(Provider{ID: "claude", Label: "Claude 兼容", BaseURL: "https://a.com", AuthScheme: AuthAPIKey, MessagesPath: "/v1/messages", Enabled: true})
+	if got := s.AuthHeaders("claude", "k")["x-api-key"]; got != "k" {
+		t.Fatalf("x-api-key header = %q", got)
+	}
+	if got := s.AuthHeaders("claude", "k")["anthropic-version"]; got != "2023-06-01" {
+		t.Fatalf("anthropic-version = %q", got)
+	}
+	if got := s.MessagesPath("claude"); got != "/v1/messages" {
 		t.Fatalf("MessagesPath = %q", got)
 	}
-	if got := s.ResponsesPath("openai"); got != "/responses" {
+	_ = s.UpsertProvider(Provider{ID: "codex", Label: "Codex", BaseURL: "https://a.com", AuthScheme: AuthBearer, ResponsesPath: "/responses", Enabled: true})
+	if got := s.ResponsesPath("codex"); got != "/responses" {
 		t.Fatalf("ResponsesPath = %q", got)
+	}
+	// codearts 是 AuthNone：明文 key 不产生 Bearer（hub 会改用 SDK 签名头）。
+	if len(s.AuthHeaders(ProviderCodeArts, "k")) != 0 {
+		t.Fatal("codearts must not emit bearer headers")
 	}
 }
 

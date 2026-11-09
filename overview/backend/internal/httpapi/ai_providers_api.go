@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -286,4 +287,188 @@ func maskHubAPIKey(key string) string {
 		return "••••"
 	}
 	return key[:6] + "••••" + key[len(key)-4:]
+}
+
+func (s *Server) requireAILogin(w http.ResponseWriter) bool {
+	if s.aiLogin == nil {
+		writeError(w, http.StatusServiceUnavailable, "登录服务不可用")
+		return false
+	}
+	return true
+}
+
+// POST /api/v1/settings/llm/login/start —— 两步式登录第一步：写占位账号并立刻返回授权链接。
+func (s *Server) aiLoginStart(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAIProviders(w) || !s.requireAILogin(w) {
+		return
+	}
+	var input struct {
+		Provider string `json:"provider"`
+	}
+	if !decodeAIProviderJSON(w, r, &input, 8<<10) {
+		return
+	}
+	providerID := strings.ToLower(strings.TrimSpace(input.Provider))
+	if providerID == "" {
+		providerID = aiproviders.ProviderCodeArts
+	}
+	result, err := s.aiLogin.StartLogin(providerID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": result})
+}
+
+// GET /api/v1/settings/llm/login/poll?accountId=... —— 两步式登录第二步：轮询凭据是否落库。
+func (s *Server) aiLoginPoll(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAILogin(w) {
+		return
+	}
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, "accountId 必填")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.aiLogin.Poll(accountID)})
+}
+
+// POST /api/v1/settings/llm/login/code —— 远程部署时手动回填授权 code 兜底。
+func (s *Server) aiLoginCode(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAILogin(w) {
+		return
+	}
+	var input struct {
+		AccountID string `json:"accountId"`
+		Code      string `json:"code"`
+	}
+	if !decodeAIProviderJSON(w, r, &input, 16<<10) {
+		return
+	}
+	if err := s.aiLogin.SubmitCode(input.AccountID, input.Code); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"submitted": true}})
+}
+
+func (s *Server) aiProviderModelsData(providerID string) map[string]any {
+	return map[string]any{"models": s.aiProviders.ProviderModels(providerID), "enabled": s.aiProviders.EnabledModelIDs(providerID)}
+}
+
+// GET /api/v1/settings/llm/models?provider=codearts —— 全量目录 + 每行 disabled 标记。
+func (s *Server) aiProviderModels(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAIProviders(w) {
+		return
+	}
+	providerID := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider")))
+	if providerID == "" {
+		providerID = aiproviders.ProviderCodeArts
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.aiProviderModelsData(providerID)})
+}
+
+// POST /api/v1/settings/llm/models/disabled —— 单个模型启用/禁用（黑名单制）。
+func (s *Server) aiProviderModelsDisabled(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAIProviders(w) {
+		return
+	}
+	var input struct {
+		Provider string `json:"provider"`
+		ModelID  string `json:"modelId"`
+		Disabled bool   `json:"disabled"`
+	}
+	if !decodeAIProviderJSON(w, r, &input, 16<<10) {
+		return
+	}
+	providerID := strings.ToLower(strings.TrimSpace(input.Provider))
+	if providerID == "" {
+		providerID = aiproviders.ProviderCodeArts
+	}
+	if err := s.aiProviders.SetModelDisabled(providerID, input.ModelID, input.Disabled); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.aiProviderModelsData(providerID)})
+}
+
+// POST /api/v1/settings/llm/models/all —— 全开/全关目录里的所有模型。
+func (s *Server) aiProviderModelsAll(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAIProviders(w) {
+		return
+	}
+	var input struct {
+		Provider string `json:"provider"`
+		Disabled bool   `json:"disabled"`
+	}
+	if !decodeAIProviderJSON(w, r, &input, 8<<10) {
+		return
+	}
+	providerID := strings.ToLower(strings.TrimSpace(input.Provider))
+	if providerID == "" {
+		providerID = aiproviders.ProviderCodeArts
+	}
+	if err := s.aiProviders.SetAllModelsDisabled(providerID, input.Disabled); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.aiProviderModelsData(providerID)})
+}
+
+// POST /api/v1/settings/llm/models/refresh —— 用账号凭据拉一次 CodeArts 私有模型目录。
+func (s *Server) aiProviderModelsRefresh(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAIProviders(w) {
+		return
+	}
+	var input struct {
+		Provider string `json:"provider"`
+	}
+	if !decodeAIProviderJSON(w, r, &input, 8<<10) {
+		return
+	}
+	providerID := strings.ToLower(strings.TrimSpace(input.Provider))
+	if providerID == "" {
+		providerID = aiproviders.ProviderCodeArts
+	}
+	p, ok := s.aiProviders.Get(providerID)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "供应商不存在："+providerID)
+		return
+	}
+	// 找一个可用账号的明文凭据（catalog 拉取与具体模型无关，不经过 Select 的限流过滤）。
+	secret := ""
+	if key, exists := s.aiProviders.Credential(p.CredentialRef); exists {
+		secret = key
+	}
+	if secret == "" {
+		for _, a := range p.Accounts {
+			if !a.Enabled {
+				continue
+			}
+			if key, exists := s.aiProviders.Credential(a.CredentialRef); exists && strings.TrimSpace(key) != "" {
+				secret = key
+				break
+			}
+		}
+	}
+	if secret == "" {
+		writeError(w, http.StatusPreconditionFailed, "请先登录 CodeArts 账号后再刷新模型目录")
+		return
+	}
+	if p.LoginType != aiproviders.LoginTypeCodeArts {
+		writeError(w, http.StatusBadRequest, "该供应商没有私有模型目录")
+		return
+	}
+	cred, err := aiproviders.ParseCodeArtsCredential(secret)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "账号凭据格式无效："+err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	models, complete := aiproviders.FetchCodeArtsModels(ctx, s.reviewHTTPClient(), cred)
+	if len(models) > 0 {
+		_ = s.aiProviders.SetProviderCatalog(providerID, models)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.aiProviderModelsData(providerID), "complete": complete})
 }

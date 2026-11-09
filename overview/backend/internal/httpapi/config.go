@@ -231,6 +231,7 @@ type Config struct {
 	AIProviderStore          *aiproviders.Store
 	AIHub                    *aiproviders.Hub
 	AIHubListen              string
+	AILogin                  *aiproviders.LoginBroker
 	ReviewAutomation         *review.Automation
 	ReviewCalendar           review.TradingCalendar
 	RemoteDailyReviewURL     string

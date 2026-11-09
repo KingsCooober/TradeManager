@@ -93,7 +93,7 @@ func (h *Hub) Status(listen string) HubStatus {
 		if !p.Enabled {
 			continue
 		}
-		for _, m := range p.CachedModels {
+		for _, m := range h.store.EnabledModelIDs(p.ID) {
 			routes = append(routes, p.ID+"/"+m)
 			if len(routes) >= 16 {
 				break
@@ -150,10 +150,11 @@ func (h *Hub) writeModels(w http.ResponseWriter) {
 		if !p.Enabled {
 			continue
 		}
-		for _, m := range p.CachedModels {
+		models := h.store.EnabledModelIDs(p.ID)
+		for _, m := range models {
 			items = append(items, modelItem{ID: p.ID + "/" + m, Object: "model", OwnedBy: p.ID})
 		}
-		if len(p.CachedModels) == 0 && p.DefaultModel != "" {
+		if len(models) == 0 && p.DefaultModel != "" && h.store.IsModelEnabled(p.ID, p.DefaultModel) {
 			items = append(items, modelItem{ID: p.ID + "/" + p.DefaultModel, Object: "model", OwnedBy: p.ID})
 		}
 	}
@@ -191,6 +192,11 @@ func (h *Hub) proxy(w http.ResponseWriter, r *http.Request, protocol string) {
 	p, ok := h.store.Get(providerID)
 	if !ok || !p.Enabled {
 		writeHubError(w, http.StatusNotFound, "unknown provider: "+providerID, "unknown_provider")
+		return
+	}
+	// 黑名单制：设置页关掉的模型，网关也必须拒发（否则会出现「对话框看不到但还能调」）。
+	if p.ID == ProviderCodeArts && !h.store.IsModelEnabled(providerID, modelID) {
+		writeHubError(w, http.StatusBadRequest, "model is disabled: "+modelID, "invalid_request")
 		return
 	}
 
@@ -257,8 +263,31 @@ func (h *Hub) forward(w http.ResponseWriter, r *http.Request, selected Selected,
 	if req.Header.Get("Accept") == "" {
 		req.Header.Set("Accept", "application/json")
 	}
-	for k, v := range h.store.AuthHeaders(selected.Provider.ID, selected.Key) {
-		req.Header.Set(k, v)
+	// CodeArts 登录型渠道：凭据是 AK/SK JSON，出站用 SDK-HMAC-SHA256 签名头 +
+	// 私有 /api/v2 chat 端点，而不是 AuthHeaders 的 Bearer。
+	if selected.Provider.LoginType == LoginTypeCodeArts {
+		cred, parseErr := ParseCodeArtsCredential(selected.Key)
+		if parseErr != nil {
+			return http.StatusUnauthorized, parseErr.Error(), false, 0
+		}
+		benefit := strings.Contains(strings.ToLower(modelID), "glm")
+		headers, signErr := codeArtsChatHeaders(cred, body, benefit)
+		if signErr != nil {
+			return http.StatusBadGateway, signErr.Error(), false, 0
+		}
+		for k, v := range headers {
+			if strings.EqualFold(k, "host") || strings.EqualFold(k, "content-type") {
+				continue
+			}
+			req.Header.Set(k, v)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("user-agent", caUserAgent)
+		req.Header.Set("lang", "en")
+	} else {
+		for k, v := range h.store.AuthHeaders(selected.Provider.ID, selected.Key) {
+			req.Header.Set(k, v)
+		}
 	}
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -307,6 +336,10 @@ func (h *Hub) forward(w http.ResponseWriter, r *http.Request, selected Selected,
 }
 
 func (h *Hub) upstreamURL(p Provider, protocol string) (string, error) {
+	// CodeArts 私有 chat 端点与 provider.BaseURL 无关（签名也必须针对它计算）。
+	if p.LoginType == LoginTypeCodeArts {
+		return codeArtsChatURL(), nil
+	}
 	base := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	if base == "" {
 		return "", fmt.Errorf("供应商 %s 未配置 API Base URL", p.ID)

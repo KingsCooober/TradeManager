@@ -47,10 +47,13 @@ type Provider struct {
 	APIMode       string    `json:"api_mode,omitempty"`
 	DefaultModel  string    `json:"default_model,omitempty"`
 	CredentialRef string    `json:"credential_ref,omitempty"`
-	CachedModels  []string  `json:"cached_models,omitempty"`
-	Enabled       bool      `json:"enabled"`
-	Builtin       bool      `json:"builtin"`
-	Accounts      []Account `json:"accounts,omitempty"`
+	CachedModels   []string    `json:"cached_models,omitempty"`
+	LoginType      string      `json:"login_type,omitempty"`
+	ModelCatalog   []ModelInfo `json:"model_catalog,omitempty"`
+	DisabledModels []string    `json:"disabled_models,omitempty"`
+	Enabled        bool        `json:"enabled"`
+	Builtin        bool        `json:"builtin"`
+	Accounts       []Account   `json:"accounts,omitempty"`
 }
 
 // Account 是该供应商下的一个订阅账号 / 凭据槽位。CredentialRef 只保存引用名，
@@ -221,15 +224,26 @@ func (s *Store) loadUsage() error {
 	return nil
 }
 
-// mergeSeed 以已保存的注册表为准，只把文件里缺失的内置供应商补进去，
-// 这样升级后新内置项会出现，而用户自定义项与对内置项的改动都保留。
+// mergeSeed 以已保存的注册表为准，补齐文件里缺失的内置供应商，并剪掉
+// 不再属于当前种子的旧内置项（例如已下线的 API Key 型供应商）。用户自定义项
+// （Builtin=false）与对保留内置项的改动一律保留。
 func mergeSeed(saved []Provider) []Provider {
+	seed := seedProviders()
+	allowed := make(map[string]bool, len(seed))
+	for _, b := range seed {
+		allowed[b.ID] = true
+	}
+	out := make([]Provider, 0, len(saved)+len(seed))
 	seen := make(map[string]bool, len(saved))
 	for _, p := range saved {
+		if p.Builtin && !allowed[p.ID] {
+			continue
+		}
 		seen[p.ID] = true
+		out = append(out, p)
 	}
-	out := cloneProviders(saved)
-	for _, b := range seedProviders() {
+	out = cloneProviders(out)
+	for _, b := range seed {
 		if !seen[b.ID] {
 			out = append(out, b)
 		}
@@ -316,6 +330,13 @@ func cloneProviders(in []Provider) []Provider {
 		out[i] = in[i]
 		if in[i].CachedModels != nil {
 			out[i].CachedModels = append([]string(nil), in[i].CachedModels...)
+		}
+		if in[i].ModelCatalog != nil {
+			out[i].ModelCatalog = make([]ModelInfo, len(in[i].ModelCatalog))
+			copy(out[i].ModelCatalog, in[i].ModelCatalog)
+		}
+		if in[i].DisabledModels != nil {
+			out[i].DisabledModels = append([]string(nil), in[i].DisabledModels...)
 		}
 		if in[i].Accounts != nil {
 			out[i].Accounts = make([]Account, len(in[i].Accounts))
