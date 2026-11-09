@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react';
-import type { BackendConfig } from './backend';
+import { resolveNetworkURL, type BackendConfig } from './backend';
 
 export type LiveQuote = { price: number; changePercent: number; ts: number; stale?: boolean };
 export type LiveStreamStatus = { connection: 'closed' | 'connecting' | 'open' | 'reconnecting'; stale: boolean; sessionOpen: boolean; source: string; warning: string };
@@ -70,7 +70,9 @@ export function createMonitorLiveBus() {
 
 	return {
 		connect(config: BackendConfig) {
-			const url = new URL('/api/v1/monitor/stream', config.backendUrl);
+			// 统一走 backend.ts 的解析：生产构建里 backendUrl='/' 是合法配置，
+			// 但直接拿它当 new URL 的 base 会抛 Invalid base URL（#monitor 白屏）。
+			const url = resolveNetworkURL('/api/v1/monitor/stream', config.backendUrl);
 			if (config.token) url.searchParams.set('token', config.token);
 			const key = url.toString();
 			if (active?.key !== key) {

@@ -1,7 +1,7 @@
 import { CheckCircle2, CircleAlert, ExternalLink, LoaderCircle, Network, Plus, Puzzle, Save, Search, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BackendConfig, AgentSettings, AgentInstalledSkill, AgentSkillMarketEntry, AgentSkillMarketSource } from '../lib/backend';
-import { requestJSON } from '../lib/backend';
+import { requestJSON, resolveNetworkURL } from '../lib/backend';
 import { SettingsSection } from './SettingsSection';
 import { nextID, type AgentSettingsController, type MCPDraft, type SecretEntryDraft } from '../lib/agent-settings';
 export { splitMCPArgs } from '../lib/agent-settings';
@@ -97,7 +97,8 @@ export function AgentSettingsPanel({ config, open, agent, disabled }: Props) {
 		setMessage('正在连接 GitHub…');
 		try {
 			await agent.run(async () => {
-				const response = await fetch(new URL('/api/v1/settings/agent/skills/install-git?progress=1', config.backendUrl), { method: 'POST', headers: { 'Content-Type': 'application/json', ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}) }, body: JSON.stringify({ url: url.trim() }) });
+				const installURL = resolveNetworkURL('/api/v1/settings/agent/skills/install-git?progress=1', config.backendUrl);
+				const response = await fetch(installURL, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}) }, body: JSON.stringify({ url: url.trim() }) });
 				if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
 				const reader = response.body?.getReader();
 				if (!reader) throw new Error('浏览器不支持读取下载进度');

@@ -2205,7 +2205,13 @@ function mountPrefix(): string {
 
 // 真正发请求前用这个：backendUrl 为空或 '/' 表示「同源」，此时自动补挂载前缀；
 // 显式配了绝对后端地址（如 http://127.0.0.1:20081）时保持原样，由代理或直连负责。
-function resolveNetworkURL(path: string, backendUrl: string): URL {
+//
+// ★ 导出给「自己拼 URL」的模块（WebSocket / EventSource / fetch 流式请求）复用。
+//   2026-11-09 踩过：monitorLiveBus 直接写 new URL('/api/v1/monitor/stream', config.backendUrl)，
+//   而生产构建把 backendUrl 固化成 '/'（同源根路径）——new URL 的 base 必须是**绝对 URL**，
+//   '/' 会抛 "Invalid base URL"，#monitor 页整个 React 树白屏。
+//   凡是拿 config.backendUrl 当 base 的地方，一律走这里，不要自己 new URL。
+export function resolveNetworkURL(path: string, backendUrl: string): URL {
   const raw = (backendUrl || '').trim();
   if (!raw || raw === '/') {
     const prefix = mountPrefix();
