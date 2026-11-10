@@ -240,6 +240,13 @@ func (s *Server) settingsUpdate(w http.ResponseWriter, r *http.Request) {
 		// LLM secrets are owned by Hermes' .env and must never be persisted in
 		// the application's general settings file.
 		values.LLM.APIKey = ""
+		codeArtsHubKey, err := s.applyCodeArtsLLM(values, profileKeyUpdates)
+		if err != nil {
+			return err
+		}
+		if codeArtsHubKey != nil {
+			llmAPIKeyUpdate = codeArtsHubKey
+		}
 		if request.LLMProfiles == nil && hasLLMUpdate(request) {
 			upsertActiveLLMProfile(values)
 		}

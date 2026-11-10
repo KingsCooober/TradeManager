@@ -214,10 +214,13 @@ export function SettingsDrawer({ config, open, initialSection, onClose, onSaved 
 
 	const loadProfileFields = (profile: LLMProfile) => {
 		const profileProvider = profile.provider || 'openai';
-		const profileMode = profile.api_mode === 'responses' ? 'codex_responses' : profile.api_mode || (profileProvider === 'anthropic' ? 'anthropic_messages' : 'chat_completions');
+		const profileMode = profileProvider === 'codearts' ? 'chat_completions' : profile.api_mode === 'responses' ? 'codex_responses' : profile.api_mode || (profileProvider === 'anthropic' ? 'anthropic_messages' : 'chat_completions');
+		const profileBaseURL = profileProvider === 'codearts' && aiHub?.listen
+			? `http://${aiHub.listen}/v1`
+			: profile.base_url || llmBaseURLForAPIMode(profileProvider, '', profileMode);
 		setProfileName(profile.name);
 		setProvider(profileProvider);
-		setBaseURL(profile.base_url || llmBaseURLForAPIMode(profileProvider, '', profileMode));
+		setBaseURL(profileBaseURL);
 		setModel(profile.model || '');
 		setAPIMode(profileMode);
 	};
@@ -270,17 +273,25 @@ export function SettingsDrawer({ config, open, initialSection, onClose, onSaved 
 
 	const updateProvider = (nextProvider: string) => {
 		const nextDefinition = llmProviderDefinition(nextProvider);
+		const isCodeArts = nextProvider === 'codearts';
+		const nextBaseURL = isCodeArts && aiHub?.listen ? `http://${aiHub.listen}/v1` : nextDefinition.baseURL;
+		const nextModel = isCodeArts
+			? aiHub?.model_routes?.find((route) => route.startsWith('codearts/')) || ''
+			: nextDefinition.defaultModel;
+		const nextMode = isCodeArts ? 'chat_completions' : nextDefinition.apiMode;
 		setProvider(nextProvider);
-		setBaseURL(nextDefinition.baseURL);
-		setModel(nextDefinition.defaultModel);
-		setAPIMode(nextDefinition.apiMode);
-		patchSelectedLLMProfile({ provider: nextProvider, base_url: nextDefinition.baseURL, model: nextDefinition.defaultModel, api_mode: nextDefinition.apiMode });
+		setBaseURL(nextBaseURL);
+		setModel(nextModel);
+		setAPIMode(nextMode);
+		patchSelectedLLMProfile({ provider: nextProvider, base_url: nextBaseURL, model: nextModel, api_mode: nextMode });
 		resetModelList();
 		setTestState('idle');
 		setTestResult(null);
-		setModelListMessage(nextDefinition.baseURL
-			? '请确认 Base URL，输入模型 API Key，然后点击“获取模型”。'
-			: '请输入兼容接口的 Base URL 和 API Key，再获取模型列表。');
+		setModelListMessage(isCodeArts
+			? 'CodeArts 使用下方已登录的订阅账号，无需填写 API Key；点击“获取模型”读取已勾选模型。'
+			: nextDefinition.baseURL
+				? '请确认 Base URL，输入模型 API Key，然后点击“获取模型”。'
+				: '请输入兼容接口的 Base URL 和 API Key，再获取模型列表。');
 	};
 
 	const updateAPIMode = (nextMode: string) => {
@@ -590,17 +601,17 @@ export function SettingsDrawer({ config, open, initialSection, onClose, onSaved 
 							<label><span>配置名称</span><input value={profileName} onChange={(event) => { setProfileName(event.target.value); patchSelectedLLMProfile({ name: event.target.value }); }} placeholder="例如 DeepSeek 日常 / GPT-5.6 Sol 深度分析" /></label>
 							<div className="settings-grid two-columns">
 								<label><span>服务商</span><select value={provider} onChange={(event) => updateProvider(event.target.value)}>{llmProviderList().map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
-								<label><span>接口协议</span><select value={apiMode} onChange={(event) => updateAPIMode(event.target.value)}><option value="codex_responses">Responses API</option><option value="chat_completions">Chat Completions</option><option value="anthropic_messages">Anthropic Messages</option><option value="auto">自动检测（优先 Responses）</option></select></label>
+								<label><span>接口协议</span><select value={apiMode} disabled={provider === 'codearts'} onChange={(event) => updateAPIMode(event.target.value)}><option value="codex_responses">Responses API</option><option value="chat_completions">Chat Completions</option><option value="anthropic_messages">Anthropic Messages</option><option value="auto">自动检测（优先 Responses）</option></select></label>
 							</div>
-								<label><span>API Base URL</span><input value={baseURL} onChange={(event) => updateBaseURL(event.target.value)} placeholder="https://api.example.com/v1" />{llmProviderDefinition(provider).protocolBaseURLs && <small>切换协议时同步对应的官方地址；自定义地址保持不变。</small>}</label>
-								<SecretField key={`llm-api-key-${activeLLMProfileID}-${settings?.updated_at}`} label="模型 API Key" secretKey="llm_api_key" status={selectedLLMProfile?.api_key} value={profileKeyValues[activeLLMProfileID] || ''} clearing={clearProfileKeys.has(activeLLMProfileID)} onChange={updateSecret} onClear={toggleClear} hint="已保存密钥默认隐藏，点击眼睛可查看；输入新值可替换当前配置的密钥" revealable readSavedValue={readSavedModelKey} />
+								<label><span>API Base URL</span><input value={baseURL} readOnly={provider === 'codearts'} onChange={(event) => updateBaseURL(event.target.value)} placeholder="https://api.example.com/v1" />{provider === 'codearts' ? <small>服务器内部通过本机兼容网关调用 CodeArts；这里显示的是服务器地址，不是浏览器请求地址。</small> : llmProviderDefinition(provider).protocolBaseURLs && <small>切换协议时同步对应的官方地址；自定义地址保持不变。</small>}</label>
+								{provider !== 'codearts' && <SecretField key={`llm-api-key-${activeLLMProfileID}-${settings?.updated_at}`} label="模型 API Key" secretKey="llm_api_key" status={selectedLLMProfile?.api_key} value={profileKeyValues[activeLLMProfileID] || ''} clearing={clearProfileKeys.has(activeLLMProfileID)} onChange={updateSecret} onClear={toggleClear} hint="已保存密钥默认隐藏，点击眼睛可查看；输入新值可替换当前配置的密钥" revealable readSavedValue={readSavedModelKey} />}
 								<div className="model-field">
 									<span className="model-field-heading"><span>模型</span>{modelListState === 'success' && <button type="button" onClick={() => setManualModel((current) => !current)}>{manualModel ? '使用下拉' : '手动输入'}</button>}</span>
 									<span className="model-picker-row">
 										{modelListState === 'success' && !manualModel ? <select value={model} onChange={(event) => { if (event.target.value === manualModelOption) setManualModel(true); else updateModel(event.target.value); }}><option value="">请选择模型</option>{selectableModels.map((option) => <option value={option.id} key={option.id}>{modelOptionLabel(option)}</option>)}<option value={manualModelOption}>手动输入其他模型…</option></select> : <input value={model} onChange={(event) => updateModel(event.target.value)} placeholder="例如 gpt-5.5 或 deepseek-v4-pro" />}
 										<button type="button" className="model-refresh-button" onClick={() => void fetchModels()} disabled={!config || state === 'saving' || modelListState === 'loading'}>{modelListState === 'loading' ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{modelListState === 'success' ? '刷新' : '获取模型'}</button>
 									</span>
-									<small className={`model-list-message ${modelListState}`}>{modelListMessage || '请先填写 Base URL 和 API Key，再获取模型列表；也可继续手动输入。'}</small>
+									<small className={`model-list-message ${modelListState}`}>{modelListMessage || (provider === 'codearts' ? '使用下方已登录账号；点击“获取模型”读取你在 CodeArts 面板中勾选的模型。' : '请先填写 Base URL 和 API Key，再获取模型列表；也可继续手动输入。')}</small>
 									{selectedModelCapability && <small className="model-list-message">思考选项：{selectedModelCapability.options.map((option) => option.label).join('、')} · {selectedModelCapability.source === 'model_api' ? '来源：模型接口' : selectedModelCapability.source === 'hermes' ? '来源：Hermes 模型目录' : selectedModelCapability.source === 'unknown' ? '能力未确认' : '来源：官方文档'}</small>}
 								</div>
 							<label className="settings-timeout-field"><span>模型响应等待时间（秒）</span><input type="number" min={30} max={3600} step={30} value={responseTimeoutSeconds} onChange={(event) => setResponseTimeoutSeconds(Number(event.target.value) || defaultResponseTimeoutSeconds)} /><small>默认 300 秒，范围 30–3600 秒；模型长时间无响应时将等待更久再重试。</small></label>

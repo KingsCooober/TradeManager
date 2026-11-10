@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"easy-stock/backend/internal/agent"
+	"easy-stock/backend/internal/aiproviders"
 	"easy-stock/backend/internal/appsettings"
 )
 
@@ -66,6 +67,17 @@ func (s *Server) settingsLLMModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseURL := firstNonEmpty(strings.TrimSpace(input.BaseURL), strings.TrimSpace(saved.BaseURL))
+	if provider == aiproviders.ProviderCodeArts {
+		// 登录型供应商统一走服务器本机网关，模型列表因此只包含已勾选模型。
+		// 忽略前端可能保存的上游地址，避免向 CodeArts 私有端点直接发 /models。
+		hubBaseURL, hubErr := s.codeArtsHubBaseURL()
+		if hubErr != nil {
+			writeError(w, http.StatusPreconditionFailed, hubErr.Error())
+			return
+		}
+		baseURL = hubBaseURL
+		mode = "chat_completions"
+	}
 	modelsURL, err := s.modelsURLFor(provider, baseURL)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -73,7 +85,9 @@ func (s *Server) settingsLLMModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiKey := ""
-	if input.APIKey != nil {
+	if provider == aiproviders.ProviderCodeArts {
+		apiKey = s.aiHub.APIKey()
+	} else if input.APIKey != nil {
 		apiKey = strings.TrimSpace(*input.APIKey)
 	} else if s.agentGateway != nil {
 		if gateway, ok := s.agentGateway.(agent.ProfileGateway); ok && strings.TrimSpace(input.ProfileID) != "" {
