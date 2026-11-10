@@ -63,6 +63,10 @@ const (
 	caTicketEndpoint   = "https://snap-access.cn-north-4.myhuaweicloud.com/snap-manager/v1/login/ticket"
 	caTicketPluginName = "snap_jetbrains"
 	caTicketPluginVer  = "26.3.3"
+
+	// 推理模型（GLM/Kimi）先烧 reasoning_content 再出正文，输出预算必须给足，
+	// 与插件 llm-adapter.js 的 CODEARTS_DEFAULT_MAX_OUTPUT_TOKENS=32_000 对齐。
+	codeArtsDefaultMaxOutputTokens = 32000
 )
 
 // defaultCodeArtsModels 是远端目录拉不到时的冷缓存兜底（插件 DEFAULT_MODELS）。

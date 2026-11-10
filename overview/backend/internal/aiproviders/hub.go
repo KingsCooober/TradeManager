@@ -184,6 +184,16 @@ func (h *Hub) proxy(w http.ResponseWriter, r *http.Request, protocol string) {
 	}
 	// 转发给上游时用不带前缀的真实模型 id。
 	envelope["model"] = modelID
+	// CodeArts 的 GLM/Kimi 是推理模型：会先烧大量 reasoning_content 再输出正文，
+	// 调用方给的 max_tokens（Hermes 常见几百~几千）会被推理耗尽 → finish_reason=length
+	// 且 content 为空，表现为「模型没有回复」。对齐插件 CODEARTS_DEFAULT_MAX_OUTPUT_TOKENS：
+	// 缺省或小于 32000 时抬到 32000，只抬不降（调用方显式给更大值则保留）。
+	if providerID == ProviderCodeArts {
+		maxTokens, _ := envelope["max_tokens"].(float64)
+		if maxTokens < codeArtsDefaultMaxOutputTokens {
+			envelope["max_tokens"] = codeArtsDefaultMaxOutputTokens
+		}
+	}
 	body, err = json.Marshal(envelope)
 	if err != nil {
 		writeHubError(w, http.StatusBadRequest, err.Error(), "invalid_request")

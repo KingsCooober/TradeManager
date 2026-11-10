@@ -1,6 +1,7 @@
 package aiproviders
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -122,6 +123,65 @@ func TestHubCodeArtsRetriesEmpty200AndLearnsBenefit(t *testing.T) {
 	}
 	if !s.CodeArtsBenefitModel(ProviderCodeArts, "glm-5.3") {
 		t.Fatal("纠错后的 benefit 未学习保存")
+	}
+}
+
+func TestHubCodeArtsRaisesMaxTokensFloor(t *testing.T) {
+	s := testStore(t)
+	p, ok := s.Get(ProviderCodeArts)
+	if !ok {
+		t.Fatal("codearts seed 缺失")
+	}
+	p.CredentialRef = "CODEARTS_TEST"
+	if err := s.UpsertProvider(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetCredential("CODEARTS_TEST", `{"access_key_id":"ak","secret_access_key":"sk","security_token":"st"}`); err != nil {
+		t.Fatal(err)
+	}
+	var gotMaxTokens float64
+	var gotModel string
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var env map[string]any
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &env)
+		gotMaxTokens, _ = env["max_tokens"].(float64)
+		gotModel, _ = env["model"].(string)
+		return &http.Response{
+			StatusCode: 200, ContentLength: -1, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"OK"}}]}`)), Request: r,
+		}, nil
+	})}
+	h := NewHub(s, "hub-key", client)
+
+	// 小预算必须抬到 32000（推理模型正文才出得来）
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"codearts/glm-5.3","messages":[],"max_tokens":500}`))
+	req.Header.Set("Authorization", "Bearer hub-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 || gotMaxTokens != 32000 || gotModel != "glm-5.3" {
+		t.Fatalf("max_tokens 未抬升：code=%d max_tokens=%v model=%q", rec.Code, gotMaxTokens, gotModel)
+	}
+
+	// 缺省也必须给默认值
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"codearts/glm-5.3","messages":[]}`))
+	req2.Header.Set("Authorization", "Bearer hub-key")
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	h.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code != 200 || gotMaxTokens != 32000 {
+		t.Fatalf("缺省 max_tokens 未给默认：code=%d max_tokens=%v", rec2.Code, gotMaxTokens)
+	}
+
+	// 调用方显式给更大值：只抬不降
+	req3 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"codearts/glm-5.3","messages":[],"max_tokens":48000}`))
+	req3.Header.Set("Authorization", "Bearer hub-key")
+	req3.Header.Set("Content-Type", "application/json")
+	rec3 := httptest.NewRecorder()
+	h.Handler().ServeHTTP(rec3, req3)
+	if rec3.Code != 200 || gotMaxTokens != 48000 {
+		t.Fatalf("更大的 max_tokens 被降级：code=%d max_tokens=%v", rec3.Code, gotMaxTokens)
 	}
 }
 
