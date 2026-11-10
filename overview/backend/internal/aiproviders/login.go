@@ -66,10 +66,14 @@ type LoginStartResult struct {
 
 // LoginPollResult 是 Poll 的返回（对齐 Jet Hub login.poll 的三态）。
 type LoginPollResult struct {
-	Done    bool   `json:"done"`
-	Success bool   `json:"success"`
+	Done bool `json:"done"`
+	// 等待中必须省略 success，对齐 Jet Hub 的 {done:false}；若序列化成 false，
+	// 前端会把第一轮等待误判为失败终态并停止轮询。
+	Success *bool  `json:"success,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
+
+func loginPollSuccess(value bool) *bool { return &value }
 
 // LoginBroker 持有进行中的登录会话。进程内状态，不落盘。
 type LoginBroker struct {
@@ -329,7 +333,7 @@ func (b *LoginBroker) Poll(accountID string) LoginPollResult {
 	_, pending := b.sessions[accountID]
 	b.mu.Unlock()
 	if failed {
-		return LoginPollResult{Done: true, Success: false, Error: failure}
+		return LoginPollResult{Done: true, Success: loginPollSuccess(false), Error: failure}
 	}
 	p, ok := b.store.Get(ProviderCodeArts)
 	if ok {
@@ -338,14 +342,14 @@ func (b *LoginBroker) Poll(accountID string) LoginPollResult {
 				continue
 			}
 			if secret, exists := b.store.Credential(a.CredentialRef); exists && strings.TrimSpace(secret) != "" {
-				return LoginPollResult{Done: true, Success: true}
+				return LoginPollResult{Done: true, Success: loginPollSuccess(true)}
 			}
 			return LoginPollResult{Done: false}
 		}
 	}
 	if !pending {
 		// 会话已结束且账号不在 → 终态失败（例如占位被删）。
-		return LoginPollResult{Done: true, Success: false, Error: "账号不存在（可能已被删除）"}
+		return LoginPollResult{Done: true, Success: loginPollSuccess(false), Error: "账号不存在（可能已被删除）"}
 	}
 	return LoginPollResult{Done: false}
 }

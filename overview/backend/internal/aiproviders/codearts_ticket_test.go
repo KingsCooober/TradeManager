@@ -1,6 +1,7 @@
 package aiproviders
 
 import (
+	"encoding/json"
 	"net/url"
 	"strings"
 	"testing"
@@ -126,5 +127,29 @@ func TestSubmitServerCallbackRejectsMismatchedTicket(t *testing.T) {
 	}
 	if err := broker.SubmitServerCallback("missing-account", ticket, "", "secret-y"); err == nil {
 		t.Fatal("不存在的会话应报错")
+	}
+}
+
+// 等待中必须只返回 {"done":false}，不能带 success:false，否则前端第一轮就停止轮询。
+func TestPollPendingOmitsSuccess(t *testing.T) {
+	store := testStore(t)
+	broker := NewLoginBroker(store, nil)
+	accountID := "codearts-pending1"
+	if err := store.UpsertAccount(ProviderCodeArts, Account{
+		ID: accountID, Nickname: accountID, Enabled: true,
+		CredentialRef: "CODEARTS_ACCOUNT_PENDING1", CreatedAt: 1,
+	}); err != nil {
+		t.Fatalf("创建占位账号：%v", err)
+	}
+	broker.mu.Lock()
+	broker.sessions[accountID] = &loginSession{providerID: ProviderCodeArts, accountID: accountID}
+	broker.mu.Unlock()
+
+	raw, err := json.Marshal(broker.Poll(accountID))
+	if err != nil {
+		t.Fatalf("序列化 Poll：%v", err)
+	}
+	if string(raw) != `{"done":false}` {
+		t.Fatalf("等待中响应 = %s，应省略 success", raw)
 	}
 }
