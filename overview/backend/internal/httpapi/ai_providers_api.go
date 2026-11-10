@@ -324,6 +324,9 @@ func (s *Server) aiLoginStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if s.logger != nil {
+		s.logger.Printf("level=info event=ai_login_start provider=%q mode=%q account_id=%q has_callback_base=%t", providerID, result.Mode, result.AccountID, callbackBase != "")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": result})
 }
 
@@ -372,7 +375,13 @@ func (s *Server) aiLoginCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	code := strings.TrimSpace(q.Get("code"))
 	secret := strings.TrimSpace(q.Get("secret"))
+	if s.logger != nil {
+		s.logger.Printf("level=info event=ai_login_callback account_id=%q has_code=%t has_secret=%t", accountID, code != "", secret != "")
+	}
 	err := s.aiLogin.SubmitServerCallback(accountID, ticketID, code, secret)
+	if err != nil && s.logger != nil {
+		s.logger.Printf("level=warn event=ai_login_callback_failed account_id=%q error=%q", accountID, err.Error())
+	}
 	title, msg, hint := "登录完成", "授权已提交给服务器，凭据正在后台写入。", "可以关闭本页，回到「AI 供应商与订阅账号」设置页查看账号与模型。"
 	if err != nil {
 		title = "登录未完成"

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Database, KeyRound, LoaderCircle, Plus, RefreshCw, Save, Server, Trash2, ArrowUp, ArrowDown, Power, LogIn, ExternalLink, CheckCircle2, CircleAlert, X } from 'lucide-react';
-import { BackendConfig, requestJSON } from '../lib/backend';
+import { BackendConfig, requestJSON, resolveNetworkURL } from '../lib/backend';
 import { AIProvider, AIProviderAccount, AIProviderModel, AIHubStatus, registerLLMProviders } from '../lib/llm-providers';
 import { SettingsSection } from './SettingsSection';
 
@@ -24,11 +24,18 @@ type UsageResult = { data: { days: { date: string; entries: UsageEntry[] }[] } }
 type LoginStart = { data: { accountId: string; loginUrl: string; incognitoOpened: boolean; callbackPort: number; mode?: string; callbackUrl?: string } };
 type LoginPoll = { data: { done: boolean; success: boolean; error?: string } };
 
-// 远程登录统一用新式 OAuth（portal authorize）。回调 host 被华为云硬编码成 127.0.0.1，
-// 公网部署下浏览器跳的是访客本机——这没关系：用户在新窗口完成授权后，地址栏里会显示
-// http://127.0.0.1:PORT/oauth/callback?code=XXX（页面打不开但 URL 里有 code），
-// 复制该完整 URL 粘贴回来即可。服务器用 code 向 STS 换 AK/SK，全程不依赖外部 callback 可达。
-// 本机访问时 loopback 自动回调成功，无需手动粘贴。
+// 计算「服务器可达的登录回调端点」绝对 URL。
+// 新式 portal 把回调 host 写死成 127.0.0.1（IDE 桌面插件本机协议），公网部署下浏览器
+// 跳的是访客本机回环、服务器收不到。远程部署改用旧式 doer/redirect 的 auth_callback_url
+// 指向当前站点（服务器）地址，让华为云授权完成后 302 回跳服务器，由服务器后台换凭据落库。
+// 仅当访问地址本身就是本机回环（浏览器与后端同机）时，沿用带 refresh_token 的新式 OAuth。
+const serverCallbackBase = (config: BackendConfig): string => {
+	const host = globalThis.location?.hostname || '';
+	if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') {
+		return ''; // 本机部署：新式 OAuth loopback 可达，且能拿到 refresh_token
+	}
+	return resolveNetworkURL('/api/v1/settings/llm/login/callback', config.backendUrl).toString();
+};
 type ModelsData = { models: AIProviderModel[]; enabled: string[] };
 type ModelsResult = { data: ModelsData; complete?: boolean };
 
@@ -313,15 +320,18 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 	};
 
 	const startLogin = () => run(async () => {
+		const callbackBase = serverCallbackBase(config!);
 		const payload = await requestJSON<LoginStart>(config!, '/api/v1/settings/llm/login/start', {
-			method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: selectedID || CODEARTS }),
+			method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: selectedID || CODEARTS, callbackBase }),
 		});
-		const { accountId, loginUrl } = payload.data;
+		const { accountId, loginUrl, mode } = payload.data;
 		setLoginOpen(true);
 		setLoginURL(loginUrl);
 		setLoginAccountID(accountId);
 		setLoginStatus('waiting');
-		setLoginNote('已打开华为云授权页。请在新窗口完成登录；若页面跳转到 127.0.0.1 打不开，复制地址栏里的完整链接粘贴到下方提交。');
+		setLoginNote(mode === 'ticket'
+			? '已打开华为云授权页。请在新窗口完成登录，授权完成后浏览器会自动跳回服务器完成登录。'
+			: '已打开华为云授权页。请在新窗口完成登录；若页面跳转到 127.0.0.1 打不开，复制地址栏里的完整链接粘贴到下方提交。');
 		setManualCode('');
 		const opened = window.open(loginUrl, '_blank', 'width=800,height=600');
 		if (!opened) setLoginNote('登录窗口被浏览器拦截，请手动打开下方链接完成登录。');
@@ -475,7 +485,7 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 			{selected && isLoginProvider && (
 				<div className="ai-registry-editor ai-registry-login">
 					<strong>登录账号 · {selected.label}</strong>
-					<small>点击后打开华为云授权页。在新窗口完成登录后，若页面跳转到 127.0.0.1 打不开，复制地址栏里的完整链接（含 code=...）粘贴到下方提交即可。本机访问时会自动完成。</small>
+					<small>点击后打开华为云授权页。远程部署时授权完成后浏览器会自动跳回服务器完成登录；若自动回跳失败，复制授权后地址栏里的完整链接粘贴到下方提交即可。本机访问时走 127.0.0.1 回环自动完成。</small>
 					<div className="ai-registry-toolbar">
 						<button type="button" onClick={() => void startLogin()} disabled={!config || busy || disabled || loginStatus === 'waiting'}><LogIn size={14} />登录账号</button>
 						{loginOpen && <button type="button" onClick={() => { stopPoll(); setLoginOpen(false); setLoginStatus('idle'); }}><X size={14} />取消等待</button>}
@@ -490,7 +500,7 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 							</div>
 							{loginURL && <a className="ai-registry-login-link" href={loginURL} target="_blank" rel="noreferrer"><ExternalLink size={13} />打开授权链接</a>}
 							<div className="ai-registry-login-manual">
-								<input value={manualCode} onChange={(event) => setManualCode(event.target.value)} placeholder="粘贴授权后地址栏里的完整链接（含 code=...）" />
+								<input value={manualCode} onChange={(event) => setManualCode(event.target.value)} placeholder="自动回跳失败时，粘贴授权后的完整链接（含 code 或 secret）" />
 								<button type="button" onClick={() => void submitManualCode()} disabled={!manualCode.trim() || busy || disabled}>提交</button>
 							</div>
 						</div>
