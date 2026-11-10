@@ -101,8 +101,9 @@ func randomHex(n int) string {
 func shortID() string { return randomHex(4) } // 8 字符，对齐插件 shortId()
 
 // StartLogin 只支持 codearts。立即返回，不等 OAuth 完成。
-// callbackBase 是「服务器可达的回调端点绝对 URL」：非空时走 ticket 模式（公网部署自动回跳），
-// 为空时走 oauth 模式（本机桌面插件）。浏览器授权后永远把凭据线索交回服务器，凭据换取全在服务器。
+// 统一走新式 OAuth（portal authorize），回调 host 被华为云硬编码成 127.0.0.1。
+// 本机访问时 loopback 自动回调成功；远程访问时用户复制地址栏 URL 手动粘贴 code。
+// callbackBase 参数保留但不再使用（兼容旧前端调用），始终走 oauth 模式。
 func (b *LoginBroker) StartLogin(providerID string, callbackBase string) (LoginStartResult, error) {
 	if providerID != ProviderCodeArts {
 		return LoginStartResult{}, fmt.Errorf("该供应商暂不支持登录：%s", providerID)
@@ -119,24 +120,10 @@ func (b *LoginBroker) StartLogin(providerID string, callbackBase string) (LoginS
 	refName := strings.ToUpper(ProviderCodeArts) + "_ACCOUNT_" + strings.ToUpper(shortID())
 	ticketID := randomHex(32)
 
+	// 统一 oauth 模式：callbackBase 参数保留兼容但不再使用。
 	mode := "oauth"
 	var callbackURL string
-	if cb := strings.TrimSpace(callbackBase); cb != "" {
-		mode = "ticket"
-		u, err := url.Parse(cb)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return LoginStartResult{}, fmt.Errorf("回调地址无效（必须是服务器可达的 http(s) 绝对 URL）：%s", cb)
-		}
-		// accountId / ticket_id 放进路径而非 query：华为云 doer/redirect 授权后回跳时
-		// 只会追加/覆盖 query 参数（secret），path 段保持不变，会话定位才可靠。
-		// 若把标识放 query，一旦回跳实现重建 URL 就会丢参数，服务器找不到会话。
-		u.Path = strings.TrimRight(u.Path, "/") + "/" + url.PathEscape(accountID) + "/" + ticketID
-		u.RawQuery = ""
-		callbackURL = u.String()
-	}
 
-	// 找一个 >= 10000 的回环端口：oauth 模式是真回调监听端口；ticket 模式保留给
-	// 「新式 code 兜底」用（exchangeAuthorizationCode 的 redirect_uri 需要这个端口值）。
 	listener, port, err := listenCallbackPort()
 	if err != nil {
 		return LoginStartResult{}, err
@@ -201,10 +188,6 @@ func (b *LoginBroker) StartLogin(providerID string, callbackBase string) (LoginS
 	}()
 
 	loginURL := buildOAuthLoginURL(port, pkce, ticketID)
-	if mode == "ticket" {
-		// auth_callback_url 指向服务器：浏览器授权后 302 回跳服务器 callback 端点。
-		loginURL = buildTicketLoginURL(callbackURL, ticketID)
-	}
 	return LoginStartResult{
 		AccountID:       accountID,
 		LoginURL:        loginURL,

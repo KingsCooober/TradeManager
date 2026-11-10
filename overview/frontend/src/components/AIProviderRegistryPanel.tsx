@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Database, KeyRound, LoaderCircle, Plus, RefreshCw, Save, Server, Trash2, ArrowUp, ArrowDown, Power, LogIn, ExternalLink, CheckCircle2, CircleAlert, X } from 'lucide-react';
-import { BackendConfig, requestJSON, resolveNetworkURL } from '../lib/backend';
+import { BackendConfig, requestJSON } from '../lib/backend';
 import { AIProvider, AIProviderAccount, AIProviderModel, AIHubStatus, registerLLMProviders } from '../lib/llm-providers';
 import { SettingsSection } from './SettingsSection';
 
@@ -24,18 +24,11 @@ type UsageResult = { data: { days: { date: string; entries: UsageEntry[] }[] } }
 type LoginStart = { data: { accountId: string; loginUrl: string; incognitoOpened: boolean; callbackPort: number; mode?: string; callbackUrl?: string } };
 type LoginPoll = { data: { done: boolean; success: boolean; error?: string } };
 
-// 计算「服务器可达的登录回调端点」绝对 URL。
-// 新式 portal 把回调 host 写死成 127.0.0.1（IDE 桌面插件本机协议），公网部署下浏览器
-// 跳的是访客本机回环、服务器收不到。远程部署必须把 auth_callback_url 指到当前站点（服务器）
-// 地址，让华为云授权完成后 302 回跳服务器，由服务器后台换凭据落库。
-// 仅当访问地址本身就是本机回环（浏览器与后端同机）时，沿用带 refresh_token 的新式 OAuth。
-const serverCallbackBase = (config: BackendConfig): string => {
-	const host = globalThis.location?.hostname || '';
-	if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') {
-		return ''; // 本机部署：新式 OAuth loopback 可达，且能拿到 refresh_token
-	}
-	return resolveNetworkURL('/api/v1/settings/llm/login/callback', config.backendUrl).toString();
-};
+// 远程登录统一用新式 OAuth（portal authorize）。回调 host 被华为云硬编码成 127.0.0.1，
+// 公网部署下浏览器跳的是访客本机——这没关系：用户在新窗口完成授权后，地址栏里会显示
+// http://127.0.0.1:PORT/oauth/callback?code=XXX（页面打不开但 URL 里有 code），
+// 复制该完整 URL 粘贴回来即可。服务器用 code 向 STS 换 AK/SK，全程不依赖外部 callback 可达。
+// 本机访问时 loopback 自动回调成功，无需手动粘贴。
 type ModelsData = { models: AIProviderModel[]; enabled: string[] };
 type ModelsResult = { data: ModelsData; complete?: boolean };
 
@@ -69,6 +62,51 @@ const CODEARTS = 'codearts';
 const LOGIN_TYPE = 'codearts_oauth';
 const POLL_INTERVAL_MS = 1000;
 const POLL_DEADLINE_MS = 5 * 60 * 1000;
+
+// 模块级全局 poll timer：不随组件卸载而中断。SettingsDrawer 关闭/重渲染时面板会卸载，
+// 但登录会话仍在服务器后台等待回调，poll 必须持续运行直到成功/超时/手动取消。
+let globalPollTimer: number | null = null;
+let globalPollConfig: BackendConfig | null = null;
+let globalPollAccountID = '';
+let globalPollDeadline = 0;
+let globalPollOnDone: (() => void) | null = null;
+let globalPollOnError: ((msg: string) => void) | null = null;
+
+function stopGlobalPoll() {
+	if (globalPollTimer !== null) { window.clearInterval(globalPollTimer); globalPollTimer = null; }
+	globalPollAccountID = '';
+}
+
+function startGlobalPoll(config: BackendConfig, accountId: string, onDone: () => void, onError: (msg: string) => void) {
+	stopGlobalPoll();
+	globalPollConfig = config;
+	globalPollAccountID = accountId;
+	globalPollDeadline = Date.now() + POLL_DEADLINE_MS;
+	globalPollOnDone = onDone;
+	globalPollOnError = onError;
+	globalPollTimer = window.setInterval(async () => {
+		if (!globalPollConfig || !globalPollAccountID) { stopGlobalPoll(); return; }
+		try {
+			const poll = await requestJSON<LoginPoll>(globalPollConfig, `/api/v1/settings/llm/login/poll?accountId=${encodeURIComponent(globalPollAccountID)}`);
+			if (poll.data.success === false) {
+				stopGlobalPoll();
+				globalPollOnError?.(poll.data.error || '登录失败，请重试');
+				return;
+			}
+			if (poll.data.done) {
+				stopGlobalPoll();
+				globalPollOnDone?.();
+				return;
+			}
+			if (Date.now() > globalPollDeadline) {
+				stopGlobalPoll();
+				globalPollOnError?.('登录超时（已等待 5 分钟）。请重新点击「登录账号」再试。');
+			}
+		} catch {
+			// 偶发网络错误不终止，累计到 deadline 才超时
+		}
+	}, POLL_INTERVAL_MS);
+}
 
 const emptyProviderDraft = (): ProviderDraft => ({
 	id: '', label: '', base_url: 'https://', chat_path: '/chat/completions', responses_path: '/responses',
@@ -158,7 +196,6 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 	const [loginStatus, setLoginStatus] = useState<'idle' | 'waiting' | 'success' | 'error'>('idle');
 	const [loginNote, setLoginNote] = useState('');
 	const [manualCode, setManualCode] = useState('');
-	const pollTimer = useRef<number | null>(null);
 
 	// 模型目录：黑名单制，只有被关掉的模型才会隐藏，服务端新增模型默认显示。
 	const [models, setModels] = useState<AIProviderModel[]>([]);
@@ -173,7 +210,15 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 		if (!selectedID && items.length > 0) setSelectedID(items[0].id);
 	}, [items, selectedID]);
 
-	useEffect(() => () => { if (pollTimer.current !== null) window.clearInterval(pollTimer.current); }, []);
+	useEffect(() => {
+		// 组件挂载时恢复全局 poll 状态（如果之前有正在进行的登录会话）
+		if (globalPollAccountID && globalPollConfig) {
+			setLoginOpen(true);
+			setLoginAccountID(globalPollAccountID);
+			setLoginStatus('waiting');
+			setLoginNote('登录会话仍在进行中，正在等待授权回调…');
+		}
+	}, []);
 
 	const selected = useMemo(() => items.find((item) => item.id === selectedID), [items, selectedID]);
 	const customProviders = useMemo(() => items.filter((item) => !item.builtin), [items]);
@@ -264,59 +309,36 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 	});
 
 	const stopPoll = () => {
-		if (pollTimer.current !== null) {
-			window.clearInterval(pollTimer.current);
-			pollTimer.current = null;
-		}
+		stopGlobalPoll();
 	};
 
 	const startLogin = () => run(async () => {
-		const callbackBase = serverCallbackBase(config!);
 		const payload = await requestJSON<LoginStart>(config!, '/api/v1/settings/llm/login/start', {
-			method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: selectedID || CODEARTS, callbackBase }),
+			method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: selectedID || CODEARTS }),
 		});
-		const { accountId, loginUrl, mode } = payload.data;
+		const { accountId, loginUrl } = payload.data;
 		setLoginOpen(true);
 		setLoginURL(loginUrl);
 		setLoginAccountID(accountId);
 		setLoginStatus('waiting');
-		setLoginNote(mode === 'ticket'
-			? '远程模式：授权完成后浏览器会自动跳回服务器完成登录，请在新窗口里完成华为云登录。'
-			: '已创建登录会话，正在等待本机授权回调…');
+		setLoginNote('已打开华为云授权页。请在新窗口完成登录；若页面跳转到 127.0.0.1 打不开，复制地址栏里的完整链接粘贴到下方提交。');
 		setManualCode('');
 		const opened = window.open(loginUrl, '_blank', 'width=800,height=600');
 		if (!opened) setLoginNote('登录窗口被浏览器拦截，请手动打开下方链接完成登录。');
 		stopPoll();
-		const deadline = Date.now() + POLL_DEADLINE_MS;
-		pollTimer.current = window.setInterval(async () => {
-			if (!config) { stopPoll(); return; }
+		startGlobalPoll(config!, accountId, async () => {
+			setLoginStatus('success');
+			setLoginNote('登录成功，账号已写入凭据库，模型目录同步完成。');
 			try {
-				const poll = await requestJSON<LoginPoll>(config, `/api/v1/settings/llm/login/poll?accountId=${encodeURIComponent(accountId)}`);
-				if (poll.data.success === false) {
-					stopPoll();
-					setLoginStatus('error');
-					setLoginNote(poll.data.error || '登录失败，请重试');
-					return;
-				}
-				if (poll.data.done) {
-					stopPoll();
-					setLoginStatus('success');
-					setLoginNote('登录成功，账号已写入凭据库，模型目录同步完成。');
-					const refreshed = await requestJSON<ProvidersResult>(config, '/api/v1/settings/llm/providers');
-					applyProviders(refreshed.data.providers || []);
-					const modelsPayload = await requestJSON<ModelsResult>(config, `/api/v1/settings/llm/models?provider=${encodeURIComponent(selectedID || CODEARTS)}`);
-					applyModels(modelsPayload.data);
-					return;
-				}
-				if (Date.now() > deadline) {
-					stopPoll();
-					setLoginStatus('error');
-					setLoginNote('登录超时或未完成（已等待 5 分钟）：可能是授权未完成、授权被拒，或账号条目已被删除。请重新点击「登录账号」再试一次。');
-				}
-			} catch {
-				// 轮询请求偶发失败不终止，累计到 deadline 才超时（对齐 Jet Hub）。
-			}
-		}, POLL_INTERVAL_MS);
+				const refreshed = await requestJSON<ProvidersResult>(config!, '/api/v1/settings/llm/providers');
+				applyProviders(refreshed.data.providers || []);
+				const modelsPayload = await requestJSON<ModelsResult>(config!, `/api/v1/settings/llm/models?provider=${encodeURIComponent(selectedID || CODEARTS)}`);
+				applyModels(modelsPayload.data);
+			} catch { /* best-effort refresh */ }
+		}, (msg) => {
+			setLoginStatus('error');
+			setLoginNote(msg);
+		});
 	});
 
 	const submitManualCode = () => run(async () => {
@@ -453,7 +475,7 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 			{selected && isLoginProvider && (
 				<div className="ai-registry-editor ai-registry-login">
 					<strong>登录账号 · {selected.label}</strong>
-					<small>点击后打开华为云授权页。远程部署（用域名访问）时，授权完成后浏览器会自动跳回服务器完成登录，凭据由服务器写入并刷新可用模型；本机访问走 127.0.0.1 回环。若回跳被拦，复制授权后地址栏里的完整链接粘贴到下方手动回填。</small>
+					<small>点击后打开华为云授权页。在新窗口完成登录后，若页面跳转到 127.0.0.1 打不开，复制地址栏里的完整链接（含 code=...）粘贴到下方提交即可。本机访问时会自动完成。</small>
 					<div className="ai-registry-toolbar">
 						<button type="button" onClick={() => void startLogin()} disabled={!config || busy || disabled || loginStatus === 'waiting'}><LogIn size={14} />登录账号</button>
 						{loginOpen && <button type="button" onClick={() => { stopPoll(); setLoginOpen(false); setLoginStatus('idle'); }}><X size={14} />取消等待</button>}
@@ -468,7 +490,7 @@ export function AIProviderRegistryPanel({ config, providers, hub, onProvidersCha
 							</div>
 							{loginURL && <a className="ai-registry-login-link" href={loginURL} target="_blank" rel="noreferrer"><ExternalLink size={13} />打开授权链接</a>}
 							<div className="ai-registry-login-manual">
-								<input value={manualCode} onChange={(event) => setManualCode(event.target.value)} placeholder="粘贴授权后的完整回调链接（含 code 或 secret）" />
+								<input value={manualCode} onChange={(event) => setManualCode(event.target.value)} placeholder="粘贴授权后地址栏里的完整链接（含 code=...）" />
 								<button type="button" onClick={() => void submitManualCode()} disabled={!manualCode.trim() || busy || disabled}>提交</button>
 							</div>
 						</div>
