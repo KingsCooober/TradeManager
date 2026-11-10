@@ -1,4 +1,4 @@
-import type { BackendConfig } from './backend';
+import { resolveNetworkURL, type BackendConfig } from './backend';
 import { logRuntimeEvent, runtimeErrorDetails } from './runtime-log';
 
 export type AgentStreamResult = {
@@ -56,12 +56,10 @@ type RPCFrame = {
 const HANDSHAKE_TIMEOUT_MS = 20_000;
 
 export function buildAgentWebSocketURL(config: BackendConfig, configurationID?: string) {
-	// 基址可能是 ''、'/'（同源根）或 '/overview/' 这类只给路径的写法，三种都要能拼出合法 URL。
-	const raw = (config.backendUrl || '').trim();
-	const here = globalThis.location?.href || 'http://127.0.0.1/';
-	const url = raw && raw !== '/'
-		? new URL('api/v1/ai/ws', `${new URL(raw.replace(/\/+$/, ''), here).href.replace(/\/+$/, '')}/`)
-		: new URL('/api/v1/ai/ws', here);
+	// 必须走 resolveNetworkURL：同源部署（backendUrl='/' 或 ''）时它会补上 /overview 挂载前缀。
+	// 2026-11-10 踩过：之前自己 new URL('/api/v1/ai/ws', location.href) 丢掉了前缀，
+	// 公网从 http://host:3000/overview/ 打开时 WebSocket 连到主站根路径（无此路由）→ 握手失败 → 前端 20s 超时。
+	const url = resolveNetworkURL('/api/v1/ai/ws', config.backendUrl);
 	url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
 	if (config.token) url.searchParams.set('token', config.token);
 	if (configurationID) url.searchParams.set('configuration_id', configurationID);

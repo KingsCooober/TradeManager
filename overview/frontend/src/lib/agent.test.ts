@@ -95,6 +95,18 @@ describe('Agent TUI gateway client', () => {
 			.toBe('wss://127.0.0.1:20001/api/v1/ai/ws?token=desktop+token');
 	});
 
+	it('keeps the /overview mount prefix for same-origin deployments', () => {
+		// 公网同源部署（页面在 http://host:3000/overview/ 下，backendUrl 固化为 '/'）：
+		// WebSocket 必须带 /overview 前缀走代理升级，否则连到主站根路径 → 握手失败 → 20s 超时。
+		vi.stubGlobal('location', new URL('http://212.64.17.221:3000/overview/'));
+		expect(buildAgentWebSocketURL({ backendUrl: '/', token: '' }))
+			.toBe('ws://212.64.17.221:3000/overview/api/v1/ai/ws');
+		vi.unstubAllGlobals();
+		vi.stubGlobal('location', new URL('https://example.com/overview/'));
+		expect(buildAgentWebSocketURL({ backendUrl: '', token: 'tok' }))
+			.toBe('wss://example.com/overview/api/v1/ai/ws?token=tok');
+	});
+
 	it('creates a Agent session, streams text, and keeps the stored session id', async () => {
 		vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
 		const deltas: string[] = [];
