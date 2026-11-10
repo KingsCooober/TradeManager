@@ -38,22 +38,22 @@ const LoginTypeCodeArts = "codearts_oauth"
 
 // 线上端点与常量（与插件逐字一致）。
 const (
-	caClientID          = "codearts-agent"
-	caRedirectPath      = "/oauth/callback"
-	caSTSTokenEndpoint  = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens"
-	caPortalAuthorize   = "https://codearts.huaweicloud.com/portal/authorize"
-	caPortalLogin       = "https://codearts.huaweicloud.com/portal/login"
-	caChatAPIBase       = "https://snap-access.cn-north-4.myhuaweicloud.com/api/v2"
-	caGatewayConfigURL  = "https://opengw.developer.huaweicloud.com/api/v1/gateway/config"
-	caBuiltinModelsURL  = "https://snap-access.cn-north-4.myhuaweicloud.com/v1/model/builtin"
-	caUserAgent         = "codearts/1.0.0-1147257973136832"
-	caLoginPluginName   = "snap_AIIDE"
-	caLoginPluginVer    = "5.2.0"
-	caOAuthTheme        = "2"
-	caOAuthLocale       = "zh-cn"
-	caChatPath          = "/chat/completions"
-	caOAuthTimeout      = 180 * time.Second
-	caMinCallbackPort   = 10000
+	caClientID         = "codearts-agent"
+	caRedirectPath     = "/oauth/callback"
+	caSTSTokenEndpoint = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens"
+	caPortalAuthorize  = "https://codearts.huaweicloud.com/portal/authorize"
+	caPortalLogin      = "https://codearts.huaweicloud.com/portal/login"
+	caChatAPIBase      = "https://snap-access.cn-north-4.myhuaweicloud.com/api/v2"
+	caGatewayConfigURL = "https://opengw.developer.huaweicloud.com/api/v1/gateway/config"
+	caBuiltinModelsURL = "https://snap-access.cn-north-4.myhuaweicloud.com/v1/model/builtin"
+	caUserAgent        = "codearts/1.0.0-1147257973136832"
+	caLoginPluginName  = "snap_AIIDE"
+	caLoginPluginVer   = "5.2.0"
+	caOAuthTheme       = "2"
+	caOAuthLocale      = "zh-cn"
+	caChatPath         = "/chat/completions"
+	caOAuthTimeout     = 180 * time.Second
+	caMinCallbackPort  = 10000
 
 	// 旧式 ticket 登录（浏览器授权后回跳 auth_callback_url，可指向服务器公网地址）。
 	// 新式 portal 把回调 host 硬编码成 127.0.0.1，只适合 IDE 桌面插件本机登录；
@@ -78,21 +78,23 @@ type ModelInfo struct {
 	Name     string `json:"name"`
 	Disabled bool   `json:"disabled"`
 	Dead     bool   `json:"dead"`
+	// Benefit 只由 opengw gateway/config 的原始模型 id 确认；不能按模型名猜。
+	Benefit bool `json:"benefit,omitempty"`
 }
 
 // CodeArtsCredential 是写进凭据库的 JSON 形状：前 6 字段来自 STS token，
 // 后 3 字段是旧 ticket 回退 / 展示用；签名只需要 AK/SK/security_token。
 type CodeArtsCredential struct {
-	AccessKeyID     string      `json:"access_key_id"`
-	SecretAccessKey string      `json:"secret_access_key"`
-	SecurityToken   string      `json:"security_token"`
-	ExpiresAt       string      `json:"expires_at"`
-	RefreshToken    string      `json:"refresh_token,omitempty"`
-	CodeVerifier    string      `json:"code_verifier,omitempty"`
-	DPoPPrivateJWK  *dpopJWK    `json:"dpop_private_key_jwk,omitempty"`
-	DomainID        string      `json:"domain_id,omitempty"`
-	UserID          string      `json:"user_id,omitempty"`
-	UserName        string      `json:"user_name,omitempty"`
+	AccessKeyID     string   `json:"access_key_id"`
+	SecretAccessKey string   `json:"secret_access_key"`
+	SecurityToken   string   `json:"security_token"`
+	ExpiresAt       string   `json:"expires_at"`
+	RefreshToken    string   `json:"refresh_token,omitempty"`
+	CodeVerifier    string   `json:"code_verifier,omitempty"`
+	DPoPPrivateJWK  *dpopJWK `json:"dpop_private_key_jwk,omitempty"`
+	DomainID        string   `json:"domain_id,omitempty"`
+	UserID          string   `json:"user_id,omitempty"`
+	UserName        string   `json:"user_name,omitempty"`
 }
 
 // dpopJWK 是 ES256 P-256 密钥的 JWK（含私钥 d 时即可重建签名密钥）。
@@ -110,8 +112,8 @@ type pkcePair struct {
 }
 
 type dpopKeyPair struct {
-	priv   *ecdsa.PrivateKey
-	pubJWK dpopJWK
+	priv    *ecdsa.PrivateKey
+	pubJWK  dpopJWK
 	privJWK dpopJWK
 }
 
@@ -542,10 +544,10 @@ func sdkHMACHeaders(ak, sk, st, method, rawURL string, body []byte, extra map[st
 	dateStamp := time.Now().UTC().Format("20060102T150405Z")
 	payloadHash := sha256Hex(body)
 	headers := map[string]string{
-		"host":                  u.Host,
-		"x-sdk-date":            dateStamp,
-		"x-sdk-content-sha256":  payloadHash,
-		"x-security-token":      st,
+		"host":                 u.Host,
+		"x-sdk-date":           dateStamp,
+		"x-sdk-content-sha256": payloadHash,
+		"x-security-token":     st,
 	}
 	for k, v := range extra {
 		headers[strings.ToLower(k)] = v
@@ -638,7 +640,7 @@ func FetchCodeArtsModels(ctx context.Context, client *http.Client, cred CodeArts
 	}
 	seen := map[string]bool{}
 	result := []ModelInfo{}
-	add := func(list []rawModel) {
+	add := func(list []rawModel, benefit bool) {
 		for _, m := range list {
 			id := m.ModelID
 			if id == "" || seen[id] || strings.Contains(id, "-VL-") || strings.HasSuffix(id, "-VL") {
@@ -652,19 +654,19 @@ func FetchCodeArtsModels(ctx context.Context, client *http.Client, cred CodeArts
 			if len(m.Credit) > 0 && m.Credit[0].RatioDisplay != "" {
 				name = name + " · x" + strings.TrimSuffix(m.Credit[0].RatioDisplay, "x")
 			}
-			result = append(result, ModelInfo{ID: id, Name: name})
+			result = append(result, ModelInfo{ID: id, Name: name, Benefit: benefit})
 		}
 	}
 	gatewayOK, builtinOK := false, false
 	if data, err := codeArtsSignedGet(ctx, client, cred, caGatewayConfigURL, nil, nil); err == nil {
 		gatewayOK = true
-		add(parse(data, "result", "models"))
+		add(parse(data, "result", "models"), true)
 	}
 	if data, err := codeArtsSignedGet(ctx, client, cred, caBuiltinModelsURL, nil, map[string]string{
 		"Content-Type": "application/json", "Agent-Type": "PromptCenter", "X-Language": "zh-cn",
 	}); err == nil {
 		builtinOK = true
-		add(parse(data, "builtinModels"))
+		add(parse(data, "builtinModels"), false)
 	}
 	complete := gatewayOK && builtinOK
 	if len(result) == 0 {
@@ -723,4 +725,3 @@ func codeArtsChatHeaders(cred CodeArtsCredential, body []byte, benefit bool) (ma
 	}
 	return sdkHMACHeaders(cred.AccessKeyID, cred.SecretAccessKey, cred.SecurityToken, "POST", codeArtsChatURL(), body, extra)
 }
-

@@ -61,7 +61,11 @@ func (s *Server) settingsLLMTest(w http.ResponseWriter, r *http.Request) {
 	}
 	content := strings.TrimSpace(result.Content)
 	if !strings.Contains(strings.ToUpper(content), llmProbeMarker) {
-		writeError(w, http.StatusBadGateway, "Agent 已启动，但模型未返回预期探针标记")
+		detail := truncateRunes(content, 200)
+		if detail == "" {
+			detail = "（空响应）"
+		}
+		writeError(w, http.StatusBadGateway, "Agent 已启动，但模型未返回预期探针标记："+detail)
 		return
 	}
 

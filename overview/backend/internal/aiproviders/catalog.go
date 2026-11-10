@@ -32,7 +32,7 @@ func (s *Store) SetProviderCatalog(providerID string, catalog []ModelInfo) error
 			if name == "" {
 				name = id
 			}
-			out = append(out, ModelInfo{ID: id, Name: name})
+			out = append(out, ModelInfo{ID: id, Name: name, Benefit: m.Benefit})
 		}
 		sort.Slice(out, func(a, b int) bool { return out[a].ID < out[b].ID })
 		s.providers[i].ModelCatalog = out
@@ -188,7 +188,7 @@ func (s *Store) ProviderModels(providerID string) []ModelInfo {
 			if name == "" {
 				name = m.ID
 			}
-			out = append(out, ModelInfo{ID: m.ID, Name: name, Disabled: disabled[m.ID]})
+			out = append(out, ModelInfo{ID: m.ID, Name: name, Disabled: disabled[m.ID], Benefit: m.Benefit})
 		}
 		for id := range disabled {
 			if !seen[id] {
@@ -245,4 +245,45 @@ func (s *Store) IsModelEnabled(providerID, modelID string) bool {
 		}
 	}
 	return false
+}
+
+// CodeArtsBenefitModel 只读远端目录或自愈学习到的精确模型 id 标记。
+func (s *Store) CodeArtsBenefitModel(providerID, modelID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, p := range s.providers {
+		if p.ID != providerID {
+			continue
+		}
+		for _, model := range p.ModelCatalog {
+			if model.ID == modelID {
+				return model.Benefit
+			}
+		}
+	}
+	return false
+}
+
+// LearnCodeArtsBenefit 在一次双向纠错成功后保存精确 id 的通道，避免每次重试。
+func (s *Store) LearnCodeArtsBenefit(providerID, modelID string, benefit bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.providers {
+		if s.providers[i].ID != providerID {
+			continue
+		}
+		for j := range s.providers[i].ModelCatalog {
+			if s.providers[i].ModelCatalog[j].ID == modelID {
+				if s.providers[i].ModelCatalog[j].Benefit == benefit {
+					return nil
+				}
+				s.providers[i].ModelCatalog[j].Benefit = benefit
+				return s.persistLocked()
+			}
+		}
+		s.providers[i].ModelCatalog = append(s.providers[i].ModelCatalog, ModelInfo{ID: modelID, Name: modelID, Benefit: benefit})
+		s.providers[i].CachedModels = normalizeModels(append(s.providers[i].CachedModels, modelID))
+		return s.persistLocked()
+	}
+	return fmt.Errorf("供应商不存在：%s", providerID)
 }

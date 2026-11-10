@@ -230,8 +230,13 @@ func (h *Hub) proxy(w http.ResponseWriter, r *http.Request, protocol string) {
 		}
 		lastStatus, lastMessage = status, message
 		kind := ClassifyStatus(status)
-		if kind == "ok" || kind == "invalid_request" {
-			h.store.RecordUsage(providerID, accountID, modelID, tokens, 0, status >= 400)
+		if kind == "ok" {
+			h.store.RecordUsage(providerID, accountID, modelID, tokens, 0, false)
+			return
+		}
+		if kind == "invalid_request" {
+			h.store.RecordUsage(providerID, accountID, modelID, tokens, 0, true)
+			writeHubError(w, status, message, "upstream_error")
 			return
 		}
 		if kind == "rate_limit" && selected.Account != nil {
@@ -247,55 +252,112 @@ func (h *Hub) proxy(w http.ResponseWriter, r *http.Request, protocol string) {
 	writeHubError(w, lastStatus, "所有订阅账号均不可用："+lastMessage, "accounts_exhausted")
 }
 
-// forward 发起一次上游请求并把响应写给客户端。streamed=true 表示已经写了字节。
+// forward 发起上游请求并把响应写给客户端。streamed=true 表示已经写了字节。
+// CodeArts 的 benefit 通道按目录中的精确 id 选择；遇到上游明确的通道错误或空 200，
+// 在尚未向客户端写字节时切换通道重试一次，成功后记住该模型的真实通道。
 func (h *Hub) forward(w http.ResponseWriter, r *http.Request, selected Selected, protocol string, body []byte, modelID string) (status int, message string, streamed bool, outputTokens int64) {
 	target, err := h.upstreamURL(selected.Provider, protocol)
 	if err != nil {
 		return http.StatusBadGateway, err.Error(), false, 0
 	}
 	ctx := r.Context()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
-	if err != nil {
-		return http.StatusBadGateway, err.Error(), false, 0
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", r.Header.Get("Accept"))
-	if req.Header.Get("Accept") == "" {
-		req.Header.Set("Accept", "application/json")
-	}
-	// CodeArts 登录型渠道：凭据是 AK/SK JSON，出站用 SDK-HMAC-SHA256 签名头 +
-	// 私有 /api/v2 chat 端点，而不是 AuthHeaders 的 Bearer。
-	if selected.Provider.LoginType == LoginTypeCodeArts {
-		cred, parseErr := ParseCodeArtsCredential(selected.Key)
-		if parseErr != nil {
-			return http.StatusUnauthorized, parseErr.Error(), false, 0
+	isCodeArts := selected.Provider.LoginType == LoginTypeCodeArts
+	var cred CodeArtsCredential
+	benefit := false
+	if isCodeArts {
+		cred, err = ParseCodeArtsCredential(selected.Key)
+		if err != nil {
+			return http.StatusUnauthorized, err.Error(), false, 0
 		}
-		benefit := strings.Contains(strings.ToLower(modelID), "glm")
-		headers, signErr := codeArtsChatHeaders(cred, body, benefit)
-		if signErr != nil {
-			return http.StatusBadGateway, signErr.Error(), false, 0
-		}
-		for k, v := range headers {
-			if strings.EqualFold(k, "host") || strings.EqualFold(k, "content-type") {
-				continue
-			}
-			req.Header.Set(k, v)
+		benefit = h.store.CodeArtsBenefitModel(selected.Provider.ID, modelID)
+	}
+
+	var resp *http.Response
+	benefitRetried := false
+	queueRetries := 0
+	chatID := strings.TrimSpace(r.Header.Get("Chat-Id"))
+	sessionID := strings.TrimSpace(r.Header.Get("Session-Id"))
+	if chatID == "" {
+		chatID = randomHex(16)
+	}
+	if sessionID == "" {
+		sessionID = randomHex(16)
+	}
+	for {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+		if reqErr != nil {
+			return http.StatusBadGateway, reqErr.Error(), false, 0
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("user-agent", caUserAgent)
-		req.Header.Set("lang", "en")
-	} else {
-		for k, v := range h.store.AuthHeaders(selected.Provider.ID, selected.Key) {
-			req.Header.Set(k, v)
+		req.Header.Set("Accept", r.Header.Get("Accept"))
+		if req.Header.Get("Accept") == "" {
+			req.Header.Set("Accept", "application/json")
 		}
-	}
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return 0, err.Error(), false, 0
+		if isCodeArts {
+			headers, signErr := codeArtsChatHeaders(cred, body, benefit)
+			if signErr != nil {
+				return http.StatusBadGateway, signErr.Error(), false, 0
+			}
+			for k, v := range headers {
+				if strings.EqualFold(k, "host") || strings.EqualFold(k, "content-type") {
+					continue
+				}
+				req.Header.Set(k, v)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("user-agent", caUserAgent)
+			req.Header.Set("lang", "en")
+			req.Header.Set("Chat-Id", chatID)
+			req.Header.Set("Session-Id", sessionID)
+		} else {
+			for k, v := range h.store.AuthHeaders(selected.Provider.ID, selected.Key) {
+				req.Header.Set(k, v)
+			}
+		}
+		resp, err = h.client.Do(req)
+		if err != nil {
+			return 0, err.Error(), false, 0
+		}
+		status = resp.StatusCode
+		if status >= 400 {
+			preview, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+			if isCodeArts && isCodeArtsQueueError(status, preview) && queueRetries < codeArtsQueueMaxRetries {
+				_ = resp.Body.Close()
+				queueRetries++
+				timer := time.NewTimer(codeArtsQueueRetryDelay)
+				select {
+				case <-ctx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return 0, ctx.Err().Error(), false, 0
+				case <-timer.C:
+				}
+				continue
+			}
+			if isCodeArts && !benefitRetried && shouldFlipCodeArtsBenefit(status, preview, benefit) {
+				_ = resp.Body.Close()
+				benefitRetried = true
+				benefit = !benefit
+				continue
+			}
+			return status, strings.TrimSpace(string(preview)), false, 0
+		}
+		// 华为在通道不匹配时也可能返回 Content-Length: 0 的 200，而非错误 JSON。
+		if isCodeArts && !benefitRetried && resp.ContentLength == 0 {
+			_ = resp.Body.Close()
+			benefitRetried = true
+			benefit = !benefit
+			continue
+		}
+		break
 	}
 	defer resp.Body.Close()
+	if isCodeArts && resp.ContentLength != 0 && h.store.CodeArtsBenefitModel(selected.Provider.ID, modelID) != benefit {
+		_ = h.store.LearnCodeArtsBenefit(selected.Provider.ID, modelID, benefit)
+	}
 
-	// 复制上游响应头（去掉 hop-by-hop 与 content-length，交给 net/http 重算）。
+	// 复制最终上游响应头（去掉 hop-by-hop 与 content-length，交给 net/http 重算）。
 	for k, values := range resp.Header {
 		lower := strings.ToLower(k)
 		if lower == "content-length" || lower == "transfer-encoding" || lower == "connection" {
@@ -306,13 +368,6 @@ func (h *Hub) forward(w http.ResponseWriter, r *http.Request, selected Selected,
 		}
 	}
 	status = resp.StatusCode
-
-	// 失败且尚未写字节时读回一小段错误信息，供换号/上报使用。
-	if status >= 400 {
-		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return status, strings.TrimSpace(string(preview)), false, 0
-	}
-
 	w.WriteHeader(status)
 	streamed = true
 	buf := make([]byte, 32<<10)
@@ -333,6 +388,29 @@ func (h *Hub) forward(w http.ResponseWriter, r *http.Request, selected Selected,
 		}
 	}
 	return status, "", true, outputTokens
+}
+
+const codeArtsQueueMaxRetries = 18 // 18 × 10 秒，覆盖常见的 1–2 分钟排队，且不越过 Hermes 总超时。
+
+var codeArtsQueueRetryDelay = 10 * time.Second
+
+func isCodeArtsQueueError(status int, preview []byte) bool {
+	if status != http.StatusBadRequest && status != http.StatusForbidden {
+		return false
+	}
+	text := string(preview)
+	lower := strings.ToLower(text)
+	return strings.Contains(text, "TM.00001041") || strings.Contains(text, "并发会话数已达上限") ||
+		strings.Contains(lower, "high demand") || strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "peak usage") || strings.Contains(lower, "try again after")
+}
+
+func shouldFlipCodeArtsBenefit(status int, preview []byte, benefit bool) bool {
+	text := string(preview)
+	if benefit {
+		return strings.Contains(text, "4004.200") || strings.Contains(strings.ToLower(text), "benefit not found")
+	}
+	return status == http.StatusNotFound || strings.Contains(text, "002002009") || strings.Contains(text, "MODEL_NOT_REGISTERED")
 }
 
 func (h *Hub) upstreamURL(p Provider, protocol string) (string, error) {
