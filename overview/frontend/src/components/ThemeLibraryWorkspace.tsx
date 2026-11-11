@@ -21,6 +21,7 @@ import type {
 	ThemeLibraryTheme,
 } from '../lib/backend';
 import { requestJSON } from '../lib/backend';
+import { useStockPeek } from './market/StockKLineModal';
 import './theme-library.css';
 
 type Props = {
@@ -54,6 +55,9 @@ export function ThemeLibraryWorkspace({ config, refreshKey }: Props) {
 	const [memberQuery, setMemberQuery] = useState('');
 	const [introOpen, setIntroOpen] = useState(false);
 	const listRequestID = useRef(0);
+	// 题材库整页被 MarketOverviewWorkspace 的 StockPeekProvider 包住，
+	// 点标的直接复用「近一年日 K」弹窗，不用自己再拉一遍行情。
+	const openStock = useStockPeek();
 
 	const loadLibrary = useCallback(async () => {
 		const requestID = listRequestID.current + 1;
@@ -324,13 +328,20 @@ export function ThemeLibraryWorkspace({ config, refreshKey }: Props) {
 														</div>
 													</div>
 													<div className="theme-library-group-stocks">
-														{stocks.map((stock, index) => (
-															<article className={`theme-library-stock-card ${stock.is_limit_up ? 'limit-up' : ''}`} key={`${stock.code}-${index}`} title={stockTitle(stock)}>
-																<strong>{stock.name}</strong>
-																<em className={toneClass(liveChange(stock))}>{formatPercent(liveChange(stock))}</em>
-																<small>{stock.code}</small>
-															</article>
-														))}
+													{stocks.map((stock, index) => (
+														<button
+															type="button"
+															className={`theme-library-stock-card ${stock.is_limit_up ? 'limit-up' : ''}`}
+															key={`${stock.code}-${index}`}
+															title={`${stockTitle(stock)} · 点击查看近一年走势`}
+															aria-label={`查看 ${stock.name} ${stock.code} 近一年走势`}
+															onClick={() => openStock(stock.code, stock.name)}
+														>
+															<strong>{stock.name}</strong>
+															<em className={toneClass(liveChange(stock))}>{formatPercent(liveChange(stock))}</em>
+															<small>{stock.code}</small>
+														</button>
+													))}
 													</div>
 												</article>
 											))}

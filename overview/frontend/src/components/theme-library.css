@@ -687,13 +687,25 @@
 	align-items: baseline;
 	gap: 1px 5px;
 	min-width: 0;
+	width: 100%;
 	padding: 6px 8px;
+	border: 0;
 	border-radius: 7px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
 }
 
 .theme-library-stock-card:hover {
 	background: var(--theme-surface, #ffffff);
 	box-shadow: 0 3px 10px var(--theme-shadow, rgba(31, 49, 70, 0.08));
+}
+
+.theme-library-stock-card:focus-visible {
+	outline: 2px solid var(--theme-blue, #2476d2);
+	outline-offset: 1px;
 }
 
 .theme-library-stock-card strong {
