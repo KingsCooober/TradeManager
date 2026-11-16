@@ -45,9 +45,58 @@
   }
 
   // ── 鉴权：本页不加载 sync.js，用本地 token 给 fetch 补 Authorization ──
+  function readToken() {
+    try { return localStorage.getItem('sync_token') || ''; } catch (e) { return ''; }
+  }
+
+  // 本页没有 syncModule，直接解 JWT payload 拿用户名/角色并判断过期。
+  // 其他页面都是 sync.js 的 syncModule 驱动 header 右侧，这里补一份等价的最小实现。
+  function readTokenUser() {
+    var token = readToken();
+    if (!token) return null;
+    try {
+      var part = token.split('.')[1] || '';
+      part = part.replace(/-/g, '+').replace(/_/g, '/');
+      while (part.length % 4) part += '=';
+      var binary = atob(part);
+      var bytes = [];
+      for (var i = 0; i < binary.length; i++) {
+        bytes.push('%' + ('0' + binary.charCodeAt(i).toString(16)).slice(-2));
+      }
+      var payload = JSON.parse(decodeURIComponent(bytes.join('')));
+      if (payload.exp && payload.exp * 1000 <= Date.now()) {
+        // 过期 token 留着只会让 API 一直 401，清掉并回到「登录同步」
+        try { localStorage.removeItem('sync_token'); } catch (e) {}
+        return null;
+      }
+      return payload;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function renderAuthState() {
+    var user = readTokenUser();
+    var signedInEl = $('headerSyncLoggedIn');
+    var signedOutEl = $('headerSyncLoggedOut');
+    var adminMenu = $('adminMenu');
+    var nameEl = $('headerUsername');
+    if (!signedInEl || !signedOutEl) return;
+    if (user) {
+      if (nameEl) nameEl.textContent = user.username || '已登录';
+      var isAdmin = user.role === 'admin';
+      signedInEl.style.display = isAdmin ? 'none' : 'flex';
+      signedOutEl.style.display = 'none';
+      if (adminMenu) adminMenu.style.display = isAdmin ? 'flex' : 'none';
+    } else {
+      signedInEl.style.display = 'none';
+      signedOutEl.style.display = 'flex';
+      if (adminMenu) adminMenu.style.display = 'none';
+    }
+  }
+
   function installAuthFetch() {
-    var token = '';
-    try { token = localStorage.getItem('sync_token') || ''; } catch (e) {}
+    var token = readToken();
     if (!window.authFetch) {
       window.authFetch = function (url, options) {
         options = options || {};
@@ -361,6 +410,7 @@
   async function boot() {
     installHeaderHooks();
     renderAppHeader('tutorial');
+    renderAuthState();
 
     $('tutTocToggle').addEventListener('click', openSidebar);
     $('tutTocClose').addEventListener('click', closeSidebar);
