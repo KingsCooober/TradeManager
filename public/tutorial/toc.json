@@ -1,0 +1,254 @@
+[
+{
+"id": "导语",
+"level": 2,
+"text": "导语",
+"chapter": false
+},
+{
+"id": "第一章-初识量化交易",
+"level": 2,
+"text": "第一章 初识量化交易",
+"chapter": true
+},
+{
+"id": "第二章-量化策略的基本框架",
+"level": 2,
+"text": "第二章 量化策略的基本框架",
+"chapter": true
+},
+{
+"id": "第三章-我的基本框架",
+"level": 2,
+"text": "第三章 我的基本框架",
+"chapter": true
+},
+{
+"id": "第四章-获取典型常用数据",
+"level": 2,
+"text": "第四章 获取典型常用数据",
+"chapter": true
+},
+{
+"id": "第四章-聚宽获取典型常用数据",
+"level": 1,
+"text": "第四章 聚宽获取典型常用数据",
+"chapter": true
+},
+{
+"id": "第五章-策略评价与建立模拟",
+"level": 2,
+"text": "第五章 策略评价与建立模拟",
+"chapter": true
+},
+{
+"id": "第六章-经典策略学习",
+"level": 2,
+"text": "第六章 经典策略学习",
+"chapter": true
+},
+{
+"id": "第七章-python编程",
+"level": 2,
+"text": "第七章 python编程",
+"chapter": true
+},
+{
+"id": "python学习资源-1",
+"level": 1,
+"text": "python学习资源：",
+"chapter": false
+},
+{
+"id": "python实用语句集",
+"level": 1,
+"text": "python实用语句集",
+"chapter": false
+},
+{
+"id": "谁来给我讲讲python",
+"level": 2,
+"text": "“谁来给我讲讲Python？”",
+"chapter": false
+},
+{
+"id": "一熟悉基本",
+"level": 2,
+"text": "一，熟悉基本",
+"chapter": false
+},
+{
+"id": "二容器",
+"level": 2,
+"text": "二，容器",
+"chapter": false
+},
+{
+"id": "三函数",
+"level": 2,
+"text": "三，函数",
+"chapter": false
+},
+{
+"id": "四循环与条件",
+"level": 2,
+"text": "四、循环与条件",
+"chapter": false
+},
+{
+"id": "六类",
+"level": 2,
+"text": "六、类",
+"chapter": false
+},
+{
+"id": "一numpy是什么",
+"level": 2,
+"text": "一、NumPy是什么？",
+"chapter": false
+},
+{
+"id": "二初窥numpy对象数组",
+"level": 2,
+"text": "二、初窥NumPy对象：数组",
+"chapter": false
+},
+{
+"id": "三创建数组",
+"level": 2,
+"text": "三、创建数组",
+"chapter": false
+},
+{
+"id": "四数组操作",
+"level": 2,
+"text": "四、数组操作",
+"chapter": false
+},
+{
+"id": "五数组元素访问",
+"level": 2,
+"text": "五、数组元素访问",
+"chapter": false
+},
+{
+"id": "六数组操作",
+"level": 2,
+"text": "六、数组操作",
+"chapter": false
+},
+{
+"id": "七缺失值",
+"level": 2,
+"text": "七、缺失值",
+"chapter": false
+},
+{
+"id": "一scipy概述",
+"level": 2,
+"text": "一、SciPy概述",
+"chapter": false
+},
+{
+"id": "二统计部分",
+"level": 2,
+"text": "二、统计部分",
+"chapter": false
+},
+{
+"id": "三优化部分",
+"level": 2,
+"text": "三、优化部分",
+"chapter": false
+},
+{
+"id": "第一篇基本数据结构介绍",
+"level": 2,
+"text": "第一篇：基本数据结构介绍",
+"chapter": false
+},
+{
+"id": "一pandas介绍",
+"level": 2,
+"text": "一、Pandas介绍",
+"chapter": false
+},
+{
+"id": "二pandas数据结构series",
+"level": 2,
+"text": "二、Pandas数据结构：Series",
+"chapter": false
+},
+{
+"id": "三pandas数据结构dataframe",
+"level": 2,
+"text": "三、Pandas数据结构：DataFrame",
+"chapter": false
+},
+{
+"id": "第二篇快速进阶",
+"level": 2,
+"text": "第二篇：快速进阶",
+"chapter": false
+},
+{
+"id": "一数据创建的其他方式",
+"level": 2,
+"text": "一、数据创建的其他方式",
+"chapter": false
+},
+{
+"id": "二数据的查看",
+"level": 2,
+"text": "二、数据的查看",
+"chapter": false
+},
+{
+"id": "三数据的访问和操作",
+"level": 2,
+"text": "三、数据的访问和操作",
+"chapter": false
+},
+{
+"id": "四数据可视化",
+"level": 2,
+"text": "四、数据可视化",
+"chapter": false
+},
+{
+"id": "第八章-实盘交易",
+"level": 2,
+"text": "第八章 实盘交易",
+"chapter": true
+},
+{
+"id": "实盘交易",
+"level": 1,
+"text": "实盘交易",
+"chapter": false
+},
+{
+"id": "修改代码",
+"level": 1,
+"text": "修改代码",
+"chapter": false
+},
+{
+"id": "方案一在自己电脑上安装qmt",
+"level": 1,
+"text": "方案一：在自己电脑上安装QMT",
+"chapter": false
+},
+{
+"id": "用csv修改策略资金的步骤",
+"level": 1,
+"text": "用CSV修改策略资金的步骤",
+"chapter": false
+},
+{
+"id": "替换代码的步骤",
+"level": 1,
+"text": "替换代码的步骤",
+"chapter": false
+}
+]

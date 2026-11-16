@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="量化教程 3.0 在线阅读：豆瓜的投资笔记，聚宽量化实战教程，自动记录阅读进度并跨设备同步">
+<title>量化教程 3.0 - Trade Manager</title>
+<link rel="stylesheet" href="css/main.css?v=23">
+<link rel="stylesheet" href="css/tutorial.css?v=1">
+</head>
+<body class="tut-page">
+
+<header class="app-header" id="appHeader"></header>
+<div class="tut-readbar" aria-hidden="true"><i id="tutReadFill"></i></div>
+
+<div class="tut-layout">
+  <aside class="tut-sidebar" id="tutSidebar" aria-label="教程目录">
+    <div class="tut-side-head">
+      <div>
+        <strong>量化教程 3.0</strong>
+        <small>豆瓜的投资笔记 · 聚宽实战</small>
+      </div>
+      <button type="button" class="tut-icon-btn" id="tutTocClose" aria-label="关闭目录">✕</button>
+    </div>
+
+    <div class="tut-progress-card">
+      <div class="tut-progress-top"><span>阅读进度</span><strong id="tutPercent">0%</strong></div>
+      <div class="tut-progress-track"><i id="tutProgressFill"></i></div>
+      <small id="tutProgressHint">尚未开始阅读</small>
+    </div>
+
+    <nav class="tut-toc" id="tutToc" aria-label="章节目录"></nav>
+
+    <div class="tut-side-foot">
+      <button type="button" class="tut-btn tut-btn-ghost" id="tutRestart">从头开始</button>
+    </div>
+  </aside>
+
+  <main class="tut-main">
+    <div class="tut-toolbar">
+      <button type="button" class="tut-btn tut-btn-ghost tut-toc-toggle" id="tutTocToggle" aria-label="打开目录">☰ 目录</button>
+      <div class="tut-toolbar-meta" id="tutNowReading">正在加载教程…</div>
+      <button type="button" class="tut-btn tut-btn-ghost" id="tutTopBtn">↑ 顶部</button>
+    </div>
+
+    <div class="tut-paper">
+      <div class="tut-loading" id="tutLoading"><i></i>正在加载教程正文…</div>
+      <div id="tutContent" hidden></div>
+    </div>
+  </main>
+</div>
+
+<div class="tut-resume" id="tutResume" hidden>
+  <span id="tutResumeText">已回到上次阅读位置</span>
+  <button type="button" id="tutResumeTop">从头开始</button>
+  <button type="button" class="tut-resume-close" id="tutResumeClose" aria-label="关闭提示">✕</button>
+</div>
+
+<div class="tut-lightbox" id="tutLightbox" hidden><img alt="放大的教程插图"></div>
+
+<script src="js/utils.js?v=12"></script>
+<script src="js/store.js?v=2"></script>
+<script src="js/header.js?v=20"></script>
+<script src="js/tutorial.js?v=1"></script>
+<script>
+  renderAppHeader('tutorial');
+</script>
+</body>
+</html>

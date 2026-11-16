@@ -250,6 +250,7 @@ body {
 .header-tab[data-page="backtest"] { background: #ef4444; }
 .header-tab[data-page="research"] { background: #7c3aed; }
 .header-tab[data-page="aihot"] { background: #0f766e; }
+.header-tab[data-page="tutorial"] { background: #8b5cf6; }
 
 /* 外部站点头（行情总览挂载的 easy-stock）：与站内 Tab 同尺寸同字形，
    但用虚线描边区分「点了会开新标签页」，避免用户误以为是本站内页 */
