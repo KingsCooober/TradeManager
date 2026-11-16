@@ -165,8 +165,10 @@
     var nav = $('tutToc');
     var html = '';
     toc.forEach(function (item) {
-      html += '<a href="#' + item.id + '" data-target="' + item.id + '" class="'
-        + (item.chapter ? 'is-chapter' : 'is-sub') + '">'
+      // 目录结构与原电子书一致：L1 章、L2 大节、L3 小节
+      var level = item.level || (item.chapter ? 1 : 2);
+      var cls = 'is-l' + level + (item.chapter ? ' is-chapter' : '');
+      html += '<a href="#' + item.id + '" data-target="' + item.id + '" class="' + cls + '">'
         + '<span class="dot"></span><span>' + escapeHtml(item.text) + '</span></a>';
     });
     nav.innerHTML = html;
@@ -270,7 +272,7 @@
     $('tutReadFill').style.width = pct + '%';
     $('tutProgressFill').style.width = pct + '%';
 
-    var readCount = Object.keys(readSet).length;
+    var readCount = chapterMeta.filter(function (chapter) { return !!readSet[chapter.id]; }).length;
     var hint = readCount ? ('已读 ' + readCount + '/' + chapterMeta.length + ' 章') : '尚未开始阅读';
     if (!loggedIn) hint += ' · 未登录仅存本机';
     $('tutProgressHint').textContent = hint;

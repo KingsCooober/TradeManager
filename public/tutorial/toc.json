@@ -1,254 +1,536 @@
 [
 {
 "id": "导语",
-"level": 2,
 "text": "导语",
+"level": 1,
 "chapter": false
 },
 {
 "id": "第一章-初识量化交易",
-"level": 2,
 "text": "第一章 初识量化交易",
+"level": 1,
 "chapter": true
 },
 {
 "id": "第二章-量化策略的基本框架",
-"level": 2,
 "text": "第二章 量化策略的基本框架",
+"level": 1,
 "chapter": true
 },
 {
 "id": "第三章-我的基本框架",
-"level": 2,
 "text": "第三章 我的基本框架",
+"level": 1,
 "chapter": true
+},
+{
+"id": "我的代码框架附源代码",
+"text": "我的代码框架（附源代码）",
+"level": 2,
+"chapter": false
+},
+{
+"id": "怎么使用我的代码框架",
+"text": "怎么使用我的代码框架",
+"level": 2,
+"chapter": false
+},
+{
+"id": "三份重要的作业",
+"text": "三份重要的作业",
+"level": 2,
+"chapter": false
+},
+{
+"id": "代码框架图解附录",
+"text": "代码框架图解（附录）",
+"level": 2,
+"chapter": false
+},
+{
+"id": "代码段详解附录",
+"text": "代码段详解（附录）",
+"level": 2,
+"chapter": false
 },
 {
 "id": "第四章-获取典型常用数据",
-"level": 2,
 "text": "第四章 获取典型常用数据",
-"chapter": true
-},
-{
-"id": "第四章-聚宽获取典型常用数据",
 "level": 1,
-"text": "第四章 聚宽获取典型常用数据",
 "chapter": true
 },
 {
 "id": "第五章-策略评价与建立模拟",
-"level": 2,
 "text": "第五章 策略评价与建立模拟",
+"level": 1,
 "chapter": true
 },
 {
 "id": "第六章-经典策略学习",
-"level": 2,
 "text": "第六章 经典策略学习",
+"level": 1,
 "chapter": true
+},
+{
+"id": "rsrs择时基本面选股",
+"text": "RSRS择时+基本面选股",
+"level": 2,
+"chapter": false
+},
+{
+"id": "网格交易",
+"text": "网格交易",
+"level": 2,
+"chapter": false
+},
+{
+"id": "彼得林奇peg策略",
+"text": "彼得林奇PEG策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "股指期货对冲策略",
+"text": "股指期货对冲策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "涨停回调短线策略",
+"text": "涨停回调短线策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "净利润断层策略",
+"text": "净利润断层策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "趋势形态策略",
+"text": "趋势形态策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "医药股策略",
+"text": "医药股策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "超跌次新股策略",
+"text": "超跌次新股策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "医药消费低估高增长策略",
+"text": "医药消费低估高增长策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "roa择时策略",
+"text": "ROA择时策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "科创板医疗医药股策略",
+"text": "科创板医疗医药股策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "净利润断层修正版-随机排序",
+"text": "净利润断层修正版-随机排序",
+"level": 2,
+"chapter": false
+},
+{
+"id": "动量简单",
+"text": "动量简单",
+"level": 2,
+"chapter": false
+},
+{
+"id": "st垃圾股策略",
+"text": "ST垃圾股策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "基本面小市值策略旧",
+"text": "基本面小市值策略（旧）",
+"level": 2,
+"chapter": false
+},
+{
+"id": "行业动量计算代码",
+"text": "行业动量计算代码",
+"level": 2,
+"chapter": false
+},
+{
+"id": "净利润断层修正版-roa排序",
+"text": "净利润断层修正版-ROA排序",
+"level": 2,
+"chapter": false
+},
+{
+"id": "净利润断层-一创聚宽版",
+"text": "净利润断层-一创聚宽版",
+"level": 2,
+"chapter": false
+},
+{
+"id": "最高板策略",
+"text": "最高板策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "中小板小市值策略",
+"text": "中小板小市值策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "高股息低价小市值策略",
+"text": "高股息低价小市值策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "股东数连续下降的股票列表",
+"text": "股东数连续下降的股票列表",
+"level": 2,
+"chapter": false
+},
+{
+"id": "北上每月净买入策略",
+"text": "北上每月净买入策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "二八轮动策略",
+"text": "二八轮动策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "etf动量轮动策略",
+"text": "ETF动量轮动策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "龙策略仅供学习",
+"text": "龙策略（仅供学习）",
+"level": 2,
+"chapter": false
+},
+{
+"id": "涨停后低开策略",
+"text": "涨停后低开策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "基本面小市值新",
+"text": "基本面小市值（新）",
+"level": 2,
+"chapter": false
+},
+{
+"id": "上证指数阶梯定投策略",
+"text": "上证指数阶梯定投策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "超跌次新短线策略",
+"text": "超跌次新短线策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "中小板小市值1月底和4月底清仓不买",
+"text": "中小板小市值(1月底和4月底清仓不买)",
+"level": 2,
+"chapter": false
+},
+{
+"id": "基本面小市值-周调仓-1月底和4月底空仓",
+"text": "基本面小市值-周调仓-1月底和4月底空仓",
+"level": 2,
+"chapter": false
+},
+{
+"id": "高股息小市值-1月底和4月底清仓-增加止损",
+"text": "高股息小市值-1月底和4月底清仓-增加止损",
+"level": 2,
+"chapter": false
+},
+{
+"id": "纯高股息基本面策略",
+"text": "纯高股息基本面策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "动态持仓中小板小市值国九条版",
+"text": "动态持仓中小板小市值国九条版",
+"level": 2,
+"chapter": false
+},
+{
+"id": "动态持仓创业板小市值",
+"text": "动态持仓创业板小市值",
+"level": 2,
+"chapter": false
+},
+{
+"id": "中小板小市值-国九升级版-1月和4月空仓-交易时间随机",
+"text": "中小板小市值-国九升级版-1月和4月空仓-交易时间随机",
+"level": 2,
+"chapter": false
+},
+{
+"id": "低资产回报小市值",
+"text": "低资产回报小市值",
+"level": 2,
+"chapter": false
+},
+{
+"id": "大类资产动态平衡策略",
+"text": "大类资产动态平衡策略",
+"level": 2,
+"chapter": false
 },
 {
 "id": "第七章-python编程",
-"level": 2,
 "text": "第七章 python编程",
+"level": 1,
 "chapter": true
 },
 {
-"id": "python学习资源-1",
-"level": 1,
-"text": "python学习资源：",
-"chapter": false
-},
-{
-"id": "python实用语句集",
-"level": 1,
-"text": "python实用语句集",
-"chapter": false
-},
-{
-"id": "谁来给我讲讲python",
+"id": "python学习资源",
+"text": "python学习资源",
 "level": 2,
-"text": "“谁来给我讲讲Python？”",
 "chapter": false
 },
 {
-"id": "一熟悉基本",
+"id": "python基础快速学习聚宽版",
+"text": "python基础（快速学习）聚宽版",
 "level": 2,
-"text": "一，熟悉基本",
 "chapter": false
 },
 {
-"id": "二容器",
+"id": "python使用语句集合聚宽",
+"text": "python使用语句集合（聚宽）",
 "level": 2,
-"text": "二，容器",
 "chapter": false
 },
 {
-"id": "三函数",
+"id": "python系统学习第一课",
+"text": "python系统学习【第一课】",
 "level": 2,
-"text": "三，函数",
 "chapter": false
 },
 {
-"id": "四循环与条件",
+"id": "python系统学习第二课",
+"text": "python系统学习【第二课】",
 "level": 2,
-"text": "四、循环与条件",
 "chapter": false
 },
 {
-"id": "六类",
+"id": "python系统学习第三课",
+"text": "python系统学习【第三课】",
 "level": 2,
-"text": "六、类",
 "chapter": false
 },
 {
-"id": "一numpy是什么",
+"id": "python系统学习第四课",
+"text": "python系统学习【第四课】",
 "level": 2,
-"text": "一、NumPy是什么？",
 "chapter": false
 },
 {
-"id": "二初窥numpy对象数组",
+"id": "python系统学习第五课",
+"text": "python系统学习【第五课】",
 "level": 2,
-"text": "二、初窥NumPy对象：数组",
 "chapter": false
 },
 {
-"id": "三创建数组",
+"id": "python系统学习第六课",
+"text": "python系统学习【第六课】",
 "level": 2,
-"text": "三、创建数组",
-"chapter": false
-},
-{
-"id": "四数组操作",
-"level": 2,
-"text": "四、数组操作",
-"chapter": false
-},
-{
-"id": "五数组元素访问",
-"level": 2,
-"text": "五、数组元素访问",
-"chapter": false
-},
-{
-"id": "六数组操作",
-"level": 2,
-"text": "六、数组操作",
-"chapter": false
-},
-{
-"id": "七缺失值",
-"level": 2,
-"text": "七、缺失值",
-"chapter": false
-},
-{
-"id": "一scipy概述",
-"level": 2,
-"text": "一、SciPy概述",
-"chapter": false
-},
-{
-"id": "二统计部分",
-"level": 2,
-"text": "二、统计部分",
-"chapter": false
-},
-{
-"id": "三优化部分",
-"level": 2,
-"text": "三、优化部分",
-"chapter": false
-},
-{
-"id": "第一篇基本数据结构介绍",
-"level": 2,
-"text": "第一篇：基本数据结构介绍",
-"chapter": false
-},
-{
-"id": "一pandas介绍",
-"level": 2,
-"text": "一、Pandas介绍",
-"chapter": false
-},
-{
-"id": "二pandas数据结构series",
-"level": 2,
-"text": "二、Pandas数据结构：Series",
-"chapter": false
-},
-{
-"id": "三pandas数据结构dataframe",
-"level": 2,
-"text": "三、Pandas数据结构：DataFrame",
-"chapter": false
-},
-{
-"id": "第二篇快速进阶",
-"level": 2,
-"text": "第二篇：快速进阶",
-"chapter": false
-},
-{
-"id": "一数据创建的其他方式",
-"level": 2,
-"text": "一、数据创建的其他方式",
-"chapter": false
-},
-{
-"id": "二数据的查看",
-"level": 2,
-"text": "二、数据的查看",
-"chapter": false
-},
-{
-"id": "三数据的访问和操作",
-"level": 2,
-"text": "三、数据的访问和操作",
-"chapter": false
-},
-{
-"id": "四数据可视化",
-"level": 2,
-"text": "四、数据可视化",
 "chapter": false
 },
 {
 "id": "第八章-实盘交易",
-"level": 2,
 "text": "第八章 实盘交易",
+"level": 1,
 "chapter": true
 },
 {
-"id": "实盘交易",
-"level": 1,
-"text": "实盘交易",
+"id": "手动跟踪微信通知手动跟踪",
+"text": "手动跟踪：微信通知(手动跟踪)",
+"level": 2,
 "chapter": false
 },
 {
-"id": "修改代码",
-"level": 1,
-"text": "修改代码",
+"id": "自动交易ptrade聚宽实时模拟通过ptrade自动下单",
+"text": "自动交易Ptrade：聚宽实时模拟，通过ptrade自动下单",
+"level": 2,
 "chapter": false
 },
 {
-"id": "方案一在自己电脑上安装qmt",
-"level": 1,
-"text": "方案一：在自己电脑上安装QMT",
+"id": "国盛信创版ptrade自动交易代码",
+"text": "国盛（信创版）ptrade自动交易代码",
+"level": 3,
 "chapter": false
 },
 {
-"id": "用csv修改策略资金的步骤",
-"level": 1,
-"text": "用CSV修改策略资金的步骤",
+"id": "国盛ptrade自动交易代码",
+"text": "国盛ptrade自动交易代码",
+"level": 3,
 "chapter": false
 },
 {
-"id": "替换代码的步骤",
-"level": 1,
-"text": "替换代码的步骤",
+"id": "国金ptrade自动交易代码",
+"text": "国金ptrade自动交易代码",
+"level": 3,
+"chapter": false
+},
+{
+"id": "修改数据库账号密码步骤",
+"text": "修改数据库账号密码步骤",
+"level": 3,
+"chapter": false
+},
+{
+"id": "pt修改代码1",
+"text": "PT修改代码1",
+"level": 3,
+"chapter": false
+},
+{
+"id": "自动申购新股和逆回购ptrade版",
+"text": "自动申购新股和逆回购（Ptrade版）",
+"level": 3,
+"chapter": false
+},
+{
+"id": "自动交易qmt聚宽实时模拟通过qmt自动下单",
+"text": "自动交易QMT：聚宽实时模拟，通过QMT自动下单",
+"level": 2,
+"chapter": false
+},
+{
+"id": "方案一在自家电脑上安装qmt",
+"text": "方案一：在自家电脑上安装QMT",
+"level": 3,
+"chapter": false
+},
+{
+"id": "方案二在腾讯云上安装qmt",
+"text": "方案二：在腾讯云上安装QMT",
+"level": 3,
+"chapter": false
+},
+{
+"id": "国金qmt自动交易代码",
+"text": "国金QMT自动交易代码",
+"level": 3,
+"chapter": false
+},
+{
+"id": "聚宽实盘示例策略",
+"text": "聚宽实盘示例策略",
+"level": 2,
+"chapter": false
+},
+{
+"id": "用csv文件修改策略资金",
+"text": "用CSV文件修改策略资金",
+"level": 3,
+"chapter": false
+},
+{
+"id": "替换代码",
+"text": "替换代码",
+"level": 3,
+"chapter": false
+},
+{
+"id": "高股息小市值自动交易",
+"text": "高股息小市值（自动交易）",
+"level": 3,
+"chapter": false
+},
+{
+"id": "高股息小市值-增加了1底和4月底择时-增加了止损自动交易",
+"text": "高股息小市值-增加了1底和4月底择时-增加了止损（自动交易）",
+"level": 3,
+"chapter": false
+},
+{
+"id": "中小板小市值自动交易",
+"text": "中小板小市值（自动交易）",
+"level": 3,
+"chapter": false
+},
+{
+"id": "中小板小市值-1月底和4月底不买入自动交易",
+"text": "中小板小市值-1月底和4月底不买入(自动交易)",
+"level": 3,
+"chapter": false
+},
+{
+"id": "中小板小市值-国九升级版-1月4月空仓-调仓时间随机自动交易",
+"text": "中小板小市值-国九升级版-1月4月空仓-调仓时间随机(自动交易)",
+"level": 3,
+"chapter": false
+},
+{
+"id": "基本面小市值自动交易",
+"text": "基本面小市值（自动交易）",
+"level": 3,
+"chapter": false
+},
+{
+"id": "基本面小市值-周调仓-1月底和4月底空仓自动交易",
+"text": "基本面小市值-周调仓-1月底和4月底空仓（自动交易）",
+"level": 3,
+"chapter": false
+},
+{
+"id": "动态持仓中小板小市值国九条版自动交易",
+"text": "动态持仓中小板小市值国九条版（自动交易）",
+"level": 3,
+"chapter": false
+},
+{
+"id": "动态持仓创业板小市值自动交易",
+"text": "动态持仓创业板小市值（自动交易）",
+"level": 3,
+"chapter": false
+},
+{
+"id": "低资产回报小市值策略自动交易",
+"text": "低资产回报小市值策略（自动交易）",
+"level": 3,
+"chapter": false
+},
+{
+"id": "纯高股息基本面策略自动交易",
+"text": "纯高股息基本面策略(自动交易)",
+"level": 3,
 "chapter": false
 }
 ]
