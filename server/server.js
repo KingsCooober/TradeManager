@@ -1115,9 +1115,9 @@ app.get('/api/market/sentiment', auth.authMiddleware, async (req, res) => {
 });
 
 // 市场数据历史快照：用于绘制两融余额 / 成交额 / 涨跌停折线图
-// 入参：days - 最近 N 天（默认 30，最大 730 ≈ 2 年）
+// 入参：days - 最近 N 天（默认 30，最大 2600 ≈ 2020 年以来全量）
 app.get('/api/market/history', auth.authMiddleware, async (req, res) => {
-  const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 730);
+  const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 2600);
   try {
     // ★ 关键：进入历史接口时先 await 拉取资金面 + 情绪面，写入 market_history 后再查库
     //   这样保证"用户进入页面调 history"时，今天的最新数据必然已落库，

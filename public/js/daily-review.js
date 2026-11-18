@@ -1022,22 +1022,23 @@ function applyMarketDataToIndices() {
 // 涨跌停 / 涨跌家数 等数据仍通过 /api/market/history 在历史趋势图中展示。
 
 // ==================== 历史趋势折线图 ====================
-// 数据源：/api/market/history?days=730（后端从 market_history 表读取近 2 年全量数据）
+// 数据源：/api/market/history?days=2600（后端从 market_history 表读取 2020 年以来全量数据）
 // 渲染策略：
 //   - 图表折线：仅显示最近 N 天（默认 60，可选 60/90/120/250/500；涨跌停/涨跌家数最多 90 天）
-//   - 历史百分位：基于近 2 年全量数据计算（确保分位数稳定、不受显示范围影响）
+//   - 历史百分位：基于 2020-01-01 以来全量数据计算（确保分位数稳定、不受显示范围影响，
+//     并与 easy-stock 行情总览的「2020 年起、截至当日」口径一致——当前点即全样本）
 // 三张折线图：
 //   1) 两融余额（亿元）       = 每日 rzrqye
 //   2) 两市总成交额（亿元）   = 每日 amount_total_yi
 //   3) 涨跌停比例（涨/跌/差）  = zt_count/dt_count/zt_dt_diff
 // 注：涨跌停历史从今天开始累积，之前的日期为 0（公开 API 无历史涨跌停数据）
 
-var drHistoryData = null;          // 全量历史数据缓存（近 2 年）
+var drHistoryData = null;          // 全量历史数据缓存（2020 年以来）
 var drHistoryLoadTime = 0;         // 上次加载时间（用于自动过期）
 var drDisplayDays = 60;            // 图表显示天数（默认 60）
 var drHistoryECharts = { margin: null, amount: null, ldd: null, upDown: null };  // ECharts 实例缓存
 var DR_HISTORY_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
-var DR_HISTORY_API_DAYS = 730;     // 后端最大可查询天数（≈ 2 年）
+var DR_HISTORY_API_DAYS = 2600;    // 后端最大可查询天数（2020-01-01 至今 ≈ 1700 个交易日，留余量）
 
 // 拉取并渲染历史趋势图（始终拉全量，渲染时按 drDisplayDays 切片）
 function loadDRHistoryCharts(force) {
@@ -1053,7 +1054,7 @@ function loadDRHistoryCharts(force) {
   if (hintEl) hintEl.textContent = '正在加载…';
   // 标题同步所选天数（避免切到 90/120/250 天后标题仍写 60 天）
   var titleEl = document.querySelector('.dr-history-title');
-  if (titleEl) titleEl.textContent = '📈 历史趋势（图表显示近 ' + displayDays + ' 天，百分位基于近 2 年）';
+  if (titleEl) titleEl.textContent = '📈 历史趋势（图表显示近 ' + displayDays + ' 天，百分位基于 2020 年以来）';
 
   return authFetch('/api/market/history?days=' + DR_HISTORY_API_DAYS, { method: 'GET' })
     .then(function(r) {
@@ -1065,7 +1066,7 @@ function loadDRHistoryCharts(force) {
       drHistoryLoadTime = Date.now();
       if (hintEl) {
         var lowerNote = displayDays > 90 ? '；涨跌停/涨跌家数最多显示近 90 天' : '';
-        hintEl.textContent = '图表显示近 ' + displayDays + ' 天（共 ' + (data.count || 0) + ' 天历史数据，百分位基于近 2 年' + lowerNote + '）';
+        hintEl.textContent = '图表显示近 ' + displayDays + ' 天（共 ' + (data.count || 0) + ' 天历史数据，百分位基于 2020 年以来' + lowerNote + '）';
       }
       renderDRHistoryCharts();
       // 风险提示系统：历史数据加载后检查成交额/两融余额百分位
@@ -1140,8 +1141,8 @@ function calcPercentile(arr, currentVal) {
   var valid = arr.filter(function(v) { return typeof v === 'number' && !isNaN(v); });
   if (valid.length === 0) return null;
   var below = 0;
-  for (var i = 0; i < valid.length; i++) { if (valid[i] < currentVal) below++; }
-  // 含当前值自身的 rank 百分位：below / N * 100
+  // ≤ 口径（含当前值自身），与 easy-stock 行情总览的历史百分位一致
+  for (var i = 0; i < valid.length; i++) { if (valid[i] <= currentVal) below++; }
   return Math.round((below / valid.length) * 100);
 }
 
@@ -1198,7 +1199,7 @@ function getDRCurrentDateMarkLine(idx) {
 
 // 1) 两融余额（亿元）—— 含历史百分位
 // displayData: 全量（未过滤）60 天窗口，让 4 张图时间轴对齐；缺失日期设为 null（折线断点）
-// fullData:    用于计算百分位（近 2 年全量）
+// fullData:    用于计算百分位（2020 年以来全量）
 function drawDRMarginChart(echarts, displayData, fullData) {
   var el = document.getElementById('drHistoryMarginChart');
   if (!el) return;
@@ -1423,7 +1424,7 @@ function drawDRMarginChart(echarts, displayData, fullData) {
 
 // 2) 两市总成交额（亿元）+ 5 日均线 —— 含历史百分位
 // displayData: 用于绘制折线（最近 N 天）
-// fullData:    用于计算百分位（近 2 年全量）
+// fullData:    用于计算百分位（2020 年以来全量）
 function drawDRAmountChart(echarts, displayData, fullData) {
   var el = document.getElementById('drHistoryAmountChart');
   if (!el) return;
@@ -3505,14 +3506,14 @@ function updateDRIndexQuote(idx, data) {
 //   1) 技术面：监控四大指数 MACD 水上死叉（DIFF 下穿 DEA 且两者均 > 0）
 //      — 复用后端 /api/market/indices 已计算的 macdState 字段（detectMacdState）
 //      — MACD 参数标准 12/26/9，由后端 calcMACD() 统一计算
-//   2) 情绪面：监控市场总成交额 / 两融余额是否达到近 500 天 95 百分位
-//      — 复用 drHistoryData（近 2 年）+ calcPercentile()
+//   2) 情绪面：监控市场总成交额 / 两融余额是否达到 2020 年以来 95 百分位
+//      — 复用 drHistoryData（2020 年以来）+ calcPercentile()
 //      — 异常交易日（0 值 / 缺失）自动过滤
 //   3) 缓存：跟随现有 drMarketData / drHistoryData 的 5 分钟 TTL，不额外请求
 //   4) 已读：按「日期 + 类型」存 localStorage，当日不再弹（次日自动重置）
 
 var DR_RISK_ALERT = {
-  PERCENTILE_WINDOW: 500,       // 百分位计算窗口（天）
+  PERCENTILE_WINDOW: 2600,      // 百分位计算窗口（天）—— 覆盖 2020 年以来全量（与历史趋势图口径一致）
   PERCENTILE_THRESHOLD: 95,     // 百分位阈值
   ALERT_SEVERITY: {             // 严重程度（影响是否可标记已读）
     macd: 'urgent',             // MACD 水上死叉 = 紧急（可关但当日不再重复弹）
@@ -3583,8 +3584,8 @@ function detectMacdDeadCrossAlerts() {
 }
 
 // ===== 2) 市场情绪百分位检测 =====
-// 数据源：drHistoryData.data（近 2 年，含 rzrqye / amount_total_yi）
-// 触发条件：当前值 ≥ 近 500 天 95 百分位
+// 数据源：drHistoryData.data（2020 年以来，含 rzrqye / amount_total_yi）
+// 触发条件：当前值 ≥ 2020 年以来 95 百分位
 // 异常过滤：0 值 / null / 负值（缺失数据）
 // 返回：[{ key, metric, label, currentVal, percentile, threshold, unit }] 或空数组
 function detectSentimentPercentileAlerts() {
@@ -3718,12 +3719,12 @@ function renderDRRiskAlerts(alerts) {
       text = '<b>' + esc(a.indexName) + '</b> 出现 MACD 水上死叉（DIFF 下穿 DEA，两者均位于零轴上方）';
     } else if (a.type === 'margin') {
       tag = '情绪面';
-      text = '<b>两融余额 ' + a.currentVal.toFixed(0) + ' ' + a.unit + '</b> 达近 ' + a.sampleSize
-           + ' 天 <b>P' + a.percentile + '</b>（≥ P' + a.threshold + ' 高位）';
+      text = '<b>两融余额 ' + a.currentVal.toFixed(0) + ' ' + a.unit + '</b> 达 2020 年以来（'
+           + a.sampleSize + ' 天样本）<b>P' + a.percentile + '</b>（≥ P' + a.threshold + ' 高位）';
     } else if (a.type === 'turnover') {
       tag = '情绪面';
-      text = '<b>两市总成交额 ' + a.currentVal.toFixed(0) + ' ' + a.unit + '</b> 达近 ' + a.sampleSize
-           + ' 天 <b>P' + a.percentile + '</b>（≥ P' + a.threshold + ' 高位）';
+      text = '<b>两市总成交额 ' + a.currentVal.toFixed(0) + ' ' + a.unit + '</b> 达 2020 年以来（'
+           + a.sampleSize + ' 天样本）<b>P' + a.percentile + '</b>（≥ P' + a.threshold + ' 高位）';
     }
     html += '<div class="dr-trend-risk-item">'
           + '<span class="dr-trend-risk-item-icon" aria-hidden="true">⚠</span>'
