@@ -810,7 +810,8 @@ func appendFallbackReason(current string, addition string) string {
 }
 
 func (s *Server) marketMarginBalanceHandler(w http.ResponseWriter, r *http.Request) {
-	limit, err := marketLimitQuery(r, 120, 500)
+	// 上限 1300：近5年（约1215个交易日）+ 余量，供融资融券图展示5年区间。
+	limit, err := marketLimitQuery(r, 120, 1300)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

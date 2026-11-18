@@ -419,8 +419,9 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 	if limit <= 0 {
 		limit = 120
 	}
-	if limit > 500 {
-		limit = 500
+	// 上限 1300 ≈ 近5年（1215 个交易日）+ 余量；handler 侧同口径。
+	if limit > 1300 {
+		limit = 1300
 	}
 	// 除显示区间外，还要为最早的显示点多拉一个 5 年窗口用于滚动百分位统计。
 	fetchDays := limit + marginPercentileWindowDays
@@ -429,7 +430,8 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 	start := time.Now()
 	pointsByDate := make(map[string]*foundation.MarketMarginPoint, fetchDays+1)
 	lastRequestURL := ""
-	for page := 1; page <= 12; page++ {
+	// 5年显示+5年统计窗口 ≈ 2560 交易日 × 3 市场 ≈ 7700 行 ≈ 16 页，留余量到 20 页。
+	for page := 1; page <= 20; page++ {
 		params := url.Values{}
 		params.Set("reportName", "RPTA_WEB_RZRQ_LSSH")
 		params.Set("columns", "DIM_DATE,SCDM,XOB_MARKET_0001,RZYE,RQYE,RZRQYE,RZMRE,RZCHE,RZJME,RQMCL,RQCHL")

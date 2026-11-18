@@ -209,7 +209,7 @@ export function MarginBalanceView({ items, limit, onLimit, meta }: {
 		<SourceNotice meta={meta} />
 		<div className="market-margin-toolbar">
 			<div><strong>全市场两融余额</strong><span>沪市、深市、北交所合并口径，交易日收盘后更新</span></div>
-			<nav aria-label="融资融券图表周期">{[60, 120, 250, 500].map((value) => <button type="button" className={limit === value ? 'active' : ''} onClick={() => onLimit(value)} key={value}>{value === 500 ? '近2年' : value === 250 ? '近1年' : `${value}日`}</button>)}</nav>
+			<nav aria-label="融资融券图表周期">{[60, 120, 250, 500, 1215].map((value) => <button type="button" className={limit === value ? 'active' : ''} onClick={() => onLimit(value)} key={value}>{value === 1215 ? '近5年' : value === 500 ? '近2年' : value === 250 ? '近1年' : `${value}日`}</button>)}</nav>
 		</div>
 		<section className="market-flow-summary market-margin-summary">
 			<SummaryMetric icon={<WalletCards size={17} />} label="两融余额" value={latest ? formatHundredMillion(latest.margin_balance) : '--'} detail={latest?.trade_date || '等待交易日'} />
@@ -218,9 +218,9 @@ export function MarginBalanceView({ items, limit, onLimit, meta }: {
 			<SummaryMetric icon={<Activity size={17} />} label="当日余额变化" value={latest ? formatSignedHundredMillion(latest.margin_balance_change) : '--'} detail={latest ? `融资净买入 ${formatSignedHundredMillion(latest.financing_net_buy_amount)}` : '等待数据'} tone={toneClass(latest?.margin_balance_change || 0)} />
 		</section>
 		<section className="market-margin-panel">
-			<header><div><span>MARGIN BALANCE TREND</span><h3>融资融券余额趋势</h3></div><div className="market-margin-legend"><span className="total">两融余额</span><span className="financing">融资余额</span><span className="lending">融券余额（右轴）</span><span className="percentile">5年百分位：两融</span><span className="percentile percentile-financing">融资</span><span className="percentile percentile-lending">融券</span></div></header>
+			<header><div><span>MARGIN BALANCE TREND</span><h3>融资融券余额趋势</h3></div><div className="market-margin-legend"><span className="financing">融资余额（左轴）</span><span className="lending">融券余额（右轴）</span><span className="percentile percentile-financing">融资5年百分位</span><span className="percentile percentile-lending">融券5年百分位</span></div></header>
 			<MarginBalanceChart items={items} />
-			<footer>单位：亿元 · 两融余额 = 融资余额 + 融券余额；5年百分位 = 两融/融资/融券各自余额在近5年窗口内的历史分位；数据为交易所汇总后的东方财富历史口径。</footer>
+			<footer>单位：亿元 · 5年百分位 = 融资/融券各自余额在近5年窗口内的历史分位；数据为交易所汇总后的东方财富历史口径。</footer>
 		</section>
 	</div>;
 }
@@ -278,9 +278,8 @@ function MarginBalanceChart({ items }: { items: MarketMarginPoint[] }) {
 	const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 	if (items.length < 2) return <div className="market-chart-loading">暂无足够的融资融券历史数据</div>;
 	const points = [...items].sort((left, right) => left.trade_date.localeCompare(right.trade_date));
-	// 三条百分位曲线：两融 / 融资 / 融券，各自独立统计
+	// 两条百分位曲线：融资 / 融券，各自独立统计（两融≈融资的影子，不单独画）
 	const percentileSeries = [
-		{ key: 'total', label: '两融', valueOf: (point: MarketMarginPoint) => point.margin_balance_percentile },
 		{ key: 'financing', label: '融资', valueOf: (point: MarketMarginPoint) => point.financing_balance_percentile },
 		{ key: 'lending', label: '融券', valueOf: (point: MarketMarginPoint) => point.securities_lending_percentile },
 	] as const;
@@ -293,7 +292,7 @@ function MarginBalanceChart({ items }: { items: MarketMarginPoint[] }) {
 	const bottom = 320;
 	const plotWidth = width - left - right;
 	const plotHeight = bottom - top;
-	const mainExtent = paddedExtent(points.flatMap((point) => [point.margin_balance, point.financing_balance]));
+	const mainExtent = paddedExtent(points.map((point) => point.financing_balance));
 	const lendingExtent = paddedExtent(points.map((point) => point.securities_lending_balance));
 	const x = (index: number) => left + index / (points.length - 1) * plotWidth;
 	const mainY = (value: number) => top + (mainExtent.max - value) / (mainExtent.max - mainExtent.min) * plotHeight;
@@ -301,7 +300,6 @@ function MarginBalanceChart({ items }: { items: MarketMarginPoint[] }) {
 	// 百分位曲线固定 0-100 映射到主绘图区高度（100 在顶部）
 	const percentileY = (value: number) => top + (100 - Math.max(0, Math.min(100, value))) / 100 * plotHeight;
 	const linePath = (value: (point: MarketMarginPoint) => number, y: (value: number) => number) => points.map((point, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(2)} ${y(value(point)).toFixed(2)}`).join(' ');
-	const totalPath = linePath((point) => point.margin_balance, mainY);
 	const financingPath = linePath((point) => point.financing_balance, mainY);
 	const lendingPath = linePath((point) => point.securities_lending_balance, lendingY);
 	// 各序列只连有值的点（同一序列内部相邻值相连，缺值处断开）
@@ -338,24 +336,20 @@ function MarginBalanceChart({ items }: { items: MarketMarginPoint[] }) {
 				const lendingValue = lendingExtent.max - ratio * (lendingExtent.max - lendingExtent.min);
 				return <g key={index}><line className="market-margin-grid" x1={left} x2={width - right} y1={y} y2={y} /><text className="market-margin-axis" x={left - 10} y={y + 4} textAnchor="end">{formatAxisHundredMillion(mainValue)}</text><text className="market-margin-axis right" x={width - right + 10} y={y + 4}>{formatAxisHundredMillion(lendingValue)}</text></g>;
 			})}
-			<path className="market-margin-area" d={`${totalPath} L ${x(points.length - 1).toFixed(2)} ${bottom} L ${left} ${bottom} Z`} />
-			<path className="market-margin-line total" d={totalPath} />
+			<path className="market-margin-area" d={`${financingPath} L ${x(points.length - 1).toFixed(2)} ${bottom} L ${left} ${bottom} Z`} />
 			<path className="market-margin-line financing" d={financingPath} />
 			<path className="market-margin-line lending" d={lendingPath} />
 			{percentilePaths.map((series) => <path className={`market-margin-line percentile ${series.key}`} d={series.path} key={series.key} />)}
 			{hasPercentile && [25, 50, 75].map((value) => <line className="market-margin-percentile-grid" x1={left} x2={width - right} y1={percentileY(value)} y2={percentileY(value)} key={value} />)}
 			{labelIndexes.map((index) => <text className="market-margin-date" x={x(index)} y={height - 25} textAnchor={index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle'} key={points[index].trade_date}>{formatMonthDay(points[index].trade_date)}</text>)}
-			{hovered && hoveredIndex != null && hoveredX != null && <g className="market-margin-crosshair"><line x1={hoveredX} x2={hoveredX} y1={top} y2={bottom} /><circle className="total" cx={hoveredX} cy={mainY(hovered.margin_balance)} r="4" /><circle className="financing" cx={hoveredX} cy={mainY(hovered.financing_balance)} r="4" /><circle className="lending" cx={hoveredX} cy={lendingY(hovered.securities_lending_balance)} r="4" />{percentileSeries.map((series) => { const value = series.valueOf(hovered); return typeof value === 'number' ? <circle className={`percentile ${series.key}`} cx={hoveredX} cy={percentileY(value)} r="4" key={series.key} /> : null; })}</g>}
+			{hovered && hoveredIndex != null && hoveredX != null && <g className="market-margin-crosshair"><line x1={hoveredX} x2={hoveredX} y1={top} y2={bottom} /><circle className="financing" cx={hoveredX} cy={mainY(hovered.financing_balance)} r="4" /><circle className="lending" cx={hoveredX} cy={lendingY(hovered.securities_lending_balance)} r="4" />{percentileSeries.map((series) => { const value = series.valueOf(hovered); return typeof value === 'number' ? <circle className={`percentile ${series.key}`} cx={hoveredX} cy={percentileY(value)} r="4" key={series.key} /> : null; })}</g>}
 			<rect className="market-margin-hover-layer" x={left} y={top} width={plotWidth} height={plotHeight} onMouseMove={handleMove} onMouseLeave={() => setHoveredIndex(null)} />
 		</svg>
 		{hovered && hoveredIndex != null && <div className={`market-margin-tooltip ${hoveredIndex > points.length / 2 ? 'left' : 'right'}`}>
 			<strong>{hovered.trade_date}</strong>
-			<div><span>两融余额</span><b>{formatHundredMillion(hovered.margin_balance)}</b></div>
 			<div><span>融资余额</span><b>{formatHundredMillion(hovered.financing_balance)}</b></div>
 			<div><span>融券余额</span><b>{formatHundredMillion(hovered.securities_lending_balance)}</b></div>
-			<div><span>余额变化</span><b className={toneClass(hovered.margin_balance_change)}>{formatSignedHundredMillion(hovered.margin_balance_change)}</b></div>
 			<div><span>融资净买入</span><b className={toneClass(hovered.financing_net_buy_amount)}>{formatSignedHundredMillion(hovered.financing_net_buy_amount)}</b></div>
-			{typeof hovered.margin_balance_percentile === 'number' && <div><span>两融5年百分位</span><b className={toneClass(hovered.margin_balance_percentile - 50)}>{hovered.margin_balance_percentile.toFixed(1)}%</b></div>}
 			{typeof hovered.financing_balance_percentile === 'number' && <div><span>融资5年百分位</span><b className={toneClass(hovered.financing_balance_percentile - 50)}>{hovered.financing_balance_percentile.toFixed(1)}%</b></div>}
 			{typeof hovered.securities_lending_percentile === 'number' && <div><span>融券5年百分位</span><b className={toneClass(hovered.securities_lending_percentile - 50)}>{hovered.securities_lending_percentile.toFixed(1)}%</b></div>}
 		</div>}
