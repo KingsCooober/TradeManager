@@ -123,7 +123,7 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 	const [industries, setIndustries] = useState<MarketIndustryMomentum[]>([]);
 	const [flows, setFlows] = useState<MarketFundFlow[]>([]);
 	const [margins, setMargins] = useState<MarketMarginPoint[]>([]);
-	const [marginLimit, setMarginLimit] = useState(120);
+	const [marginLimit, setMarginLimit] = useState(500);
 	const [futuresPosition, setFuturesPosition] = useState<MarketFuturesPositionSeries | null>(null);
 	const [futuresMembers, setFuturesMembers] = useState<MarketFuturesMembers | null>(null);
 	const [futuresVariety, setFuturesVariety] = useState('IF');

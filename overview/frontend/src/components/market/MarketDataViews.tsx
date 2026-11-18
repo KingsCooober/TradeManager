@@ -209,7 +209,7 @@ export function MarginBalanceView({ items, limit, onLimit, meta }: {
 		<SourceNotice meta={meta} />
 		<div className="market-margin-toolbar">
 			<div><strong>全市场两融余额</strong><span>沪市、深市、北交所合并口径，交易日收盘后更新</span></div>
-			<nav aria-label="融资融券图表周期">{[30, 60, 120, 250].map((value) => <button type="button" className={limit === value ? 'active' : ''} onClick={() => onLimit(value)} key={value}>{value === 250 ? '近1年' : `${value}日`}</button>)}</nav>
+			<nav aria-label="融资融券图表周期">{[60, 120, 250, 500].map((value) => <button type="button" className={limit === value ? 'active' : ''} onClick={() => onLimit(value)} key={value}>{value === 500 ? '近2年' : value === 250 ? '近1年' : `${value}日`}</button>)}</nav>
 		</div>
 		<section className="market-flow-summary market-margin-summary">
 			<SummaryMetric icon={<WalletCards size={17} />} label="两融余额" value={latest ? formatHundredMillion(latest.margin_balance) : '--'} detail={latest?.trade_date || '等待交易日'} />
