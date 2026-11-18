@@ -7439,6 +7439,7 @@ a:focus-visible {
 .market-margin-legend .total { color: var(--theme-blue, #2476d2); }
 .market-margin-legend .financing { color: var(--theme-red, #df6b63); }
 .market-margin-legend .lending { color: var(--theme-green, #269b76); }
+.market-margin-legend .percentile { color: var(--theme-amber, #946c18); }
 .market-margin-chart-wrap { position: relative; min-height: 380px; padding: 8px 12px 0; }
 .market-margin-chart { display: block; width: 100%; height: 380px; overflow: visible; }
 .market-margin-grid { stroke: var(--theme-subtle, #e8edf3); stroke-width: 1; }
@@ -7448,12 +7449,15 @@ a:focus-visible {
 .market-margin-line.total { stroke: var(--theme-blue, #2476d2); }
 .market-margin-line.financing { stroke: var(--theme-red, #df6b63); stroke-width: 1.7; }
 .market-margin-line.lending { stroke: var(--theme-green, #269b76); stroke-width: 1.7; }
+.market-margin-line.percentile { stroke: var(--theme-amber, #946c18); stroke-width: 1.6; stroke-dasharray: 5 4; }
+.market-margin-percentile-grid { stroke: var(--theme-amber, #946c18); stroke-width: 1; stroke-dasharray: 2 6; stroke-opacity: .35; }
 .market-margin-date { fill: var(--theme-muted, #8290a0); font-family: var(--font-num); font-size: var(--fs-desc); }
 .market-margin-crosshair line { stroke: var(--theme-subtle, #91a3b6); stroke-dasharray: 4 4; stroke-width: 1; }
 .market-margin-crosshair circle { fill: var(--theme-on-emphasis, #ffffff); stroke-width: 2; }
 .market-margin-crosshair circle.total { stroke: var(--theme-blue, #2476d2); }
 .market-margin-crosshair circle.financing { stroke: var(--theme-red, #df6b63); }
 .market-margin-crosshair circle.lending { stroke: var(--theme-green, #269b76); }
+.market-margin-crosshair circle.percentile { stroke: var(--theme-amber, #946c18); }
 .market-margin-hover-layer { fill: transparent; cursor: crosshair; }
 .market-margin-tooltip { position: absolute; top: 28px; z-index: 2; display: grid; gap: 4px; width: 178px; padding: 12px 12px; border: 1px solid var(--theme-line, #cbd8e5); border-radius: 8px; background: var(--theme-glass, rgba(255, 255, 255, .96)); box-shadow: 0 12px 28px var(--theme-shadow, rgba(41, 65, 90, .15)); pointer-events: none; }
 .market-margin-tooltip.left { left: 92px; }

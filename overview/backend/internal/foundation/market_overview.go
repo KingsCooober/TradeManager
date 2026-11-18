@@ -93,7 +93,8 @@ type MarketMarginPoint struct {
 	FinancingBalance             float64    `json:"financing_balance"`
 	SecuritiesLendingBalance     float64    `json:"securities_lending_balance"`
 	MarginBalance                float64    `json:"margin_balance"`
-	MarginBalanceChange          float64    `json:"margin_balance_change"`
+	MarginBalanceChange           float64    `json:"margin_balance_change"`
+	MarginBalancePercentile      float64    `json:"margin_balance_percentile,omitempty"`
 	FinancingBuyAmount           float64    `json:"financing_buy_amount"`
 	FinancingRepayAmount         float64    `json:"financing_repay_amount"`
 	FinancingNetBuyAmount        float64    `json:"financing_net_buy_amount"`

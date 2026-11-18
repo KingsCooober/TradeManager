@@ -534,6 +534,7 @@ export type MarketMarginPoint = {
 	securities_lending_balance: number;
 	margin_balance: number;
 	margin_balance_change: number;
+	margin_balance_percentile?: number;
 	financing_buy_amount: number;
 	financing_repay_amount: number;
 	financing_net_buy_amount: number;

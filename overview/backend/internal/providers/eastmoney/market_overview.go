@@ -412,6 +412,9 @@ func (c *Client) MarketFundFlows(ctx context.Context, dimension string, sortKey 
 	return items, meta, nil
 }
 
+// marginPercentileWindowDays 滚动百分位统计窗口：近 5 年（约 1250 个交易日，留缓冲）。
+const marginPercentileWindowDays = 1260
+
 func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundation.MarketMarginPoint, foundation.SourceMeta, error) {
 	if limit <= 0 {
 		limit = 120
@@ -419,12 +422,14 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 	if limit > 500 {
 		limit = 500
 	}
+	// 除显示区间外，还要为最早的显示点多拉一个 5 年窗口用于滚动百分位统计。
+	fetchDays := limit + marginPercentileWindowDays
 
 	endpoint := c.datacenterBaseURL + "/api/data/v1/get"
 	start := time.Now()
-	pointsByDate := make(map[string]*foundation.MarketMarginPoint, limit+1)
+	pointsByDate := make(map[string]*foundation.MarketMarginPoint, fetchDays+1)
 	lastRequestURL := ""
-	for page := 1; page <= 6; page++ {
+	for page := 1; page <= 12; page++ {
 		params := url.Values{}
 		params.Set("reportName", "RPTA_WEB_RZRQ_LSSH")
 		params.Set("columns", "DIM_DATE,SCDM,XOB_MARKET_0001,RZYE,RQYE,RZRQYE,RZMRE,RZCHE,RZJME,RQMCL,RQCHL")
@@ -479,7 +484,7 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 			point.SecuritiesLendingSellVolume += raw.SecuritiesLendingSellVolume
 			point.SecuritiesLendingRepayVolume += raw.SecuritiesLendingRepayVolume
 		}
-		if len(pointsByDate) >= limit+1 || len(payload.Result.Data) < 500 || (payload.Result.Pages > 0 && page >= payload.Result.Pages) {
+		if len(pointsByDate) >= fetchDays+1 || len(payload.Result.Data) < 500 || (payload.Result.Pages > 0 && page >= payload.Result.Pages) {
 			break
 		}
 	}
@@ -494,7 +499,7 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 	sort.Strings(tradeDates)
 	meta := foundation.SourceMeta{
 		Source: "eastmoney:margin-balance", SourceURL: lastRequestURL,
-		AvailableFields: []string{"financing_balance", "securities_lending_balance", "margin_balance", "margin_balance_change", "financing_buy_amount", "financing_repay_amount", "financing_net_buy_amount", "securities_lending_sell_volume", "securities_lending_repay_volume"},
+		AvailableFields: []string{"financing_balance", "securities_lending_balance", "margin_balance", "margin_balance_change", "margin_balance_percentile", "financing_buy_amount", "financing_repay_amount", "financing_net_buy_amount", "securities_lending_sell_volume", "securities_lending_repay_volume"},
 		FetchedAt:       time.Now(), LatencyMS: time.Since(start).Milliseconds(), TradeDate: tradeDates[len(tradeDates)-1],
 	}
 	points := make([]foundation.MarketMarginPoint, 0, len(tradeDates))
@@ -506,10 +511,41 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 		point.Meta = meta
 		points = append(points, point)
 	}
+	annotateMarginPercentiles(points)
 	if len(points) > limit {
 		points = points[len(points)-limit:]
 	}
 	return points, meta, nil
+}
+
+// annotateMarginPercentiles 为每个交易日计算两融余额在其前 5 年窗口内的历史百分位
+// （窗口不足 30 个样本时省略，留给 omitempty 兜底）。points 需按 trade_date 升序。
+func annotateMarginPercentiles(points []foundation.MarketMarginPoint) {
+	if len(points) < 30 {
+		return
+	}
+	windowStart := 0
+	for index := range points {
+		current, err := time.Parse("2006-01-02", points[index].TradeDate)
+		if err != nil {
+			continue
+		}
+		cutoff := current.AddDate(-5, 0, 0).Format("2006-01-02")
+		for points[windowStart].TradeDate < cutoff && windowStart < index {
+			windowStart++
+		}
+		window := points[windowStart : index+1]
+		if len(window) < 30 {
+			continue
+		}
+		less := 0
+		for _, item := range window {
+			if item.MarginBalance <= points[index].MarginBalance {
+				less++
+			}
+		}
+		points[index].MarginBalancePercentile = float64(less) * 100 / float64(len(window))
+	}
 }
 
 func (c *Client) MarketBillboard(ctx context.Context, tradeDate string, limit int) ([]foundation.MarketBillboardItem, foundation.SourceMeta, error) {
