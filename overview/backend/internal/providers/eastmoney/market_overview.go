@@ -412,9 +412,14 @@ func (c *Client) MarketFundFlows(ctx context.Context, dimension string, sortKey 
 	return items, meta, nil
 }
 
-// marginPercentileSinceDate 百分位统计基准起点：2020-01-01 之后的全部历史
-// （不是滚动窗口——每个点都对「2020 年以来总数据」算分位）。
-const marginPercentileSinceDate = "2020-01-01"
+// marginPercentileSinceDate 百分位统计样本起点：2020-01-01 起的全部历史。
+// marginPercentileDisplaySinceDate 百分位计算/输出起点：2025-01-01 之前的点不输出百分位。
+// 口径：expanding（截至当日）——index i 的百分位只统计 points[0..i]（2020 年起）中
+// ≤ 当日值的占比，绝不使用未来数据；固定基准起点 2020，样本随时间自然增长。
+const (
+	marginPercentileSinceDate        = "2020-01-01"
+	marginPercentileDisplaySinceDate = "2025-01-01"
+)
 
 func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundation.MarketMarginPoint, foundation.SourceMeta, error) {
 	if limit <= 0 {
@@ -526,9 +531,9 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 	return points, meta, nil
 }
 
-// annotateMarginPercentiles 为每个交易日计算两融/融资/融券三个余额序列在
-// 「2020-01-01 以来全部数据」内的历史百分位（非滚动窗口：所有点共用同一总样本，
-// 样本不足 30 时省略，留给 omitempty 兜底）。points 需按 trade_date 升序。
+// annotateMarginPercentiles 为两融/融资/融券三个余额序列计算「2020 年起、截至当日」
+// 的 expanding 历史百分位；只有 2025-01-01 及之后的点输出（更早的留给 omitempty）。
+// points 需按 trade_date 升序。
 func annotateMarginPercentiles(points []foundation.MarketMarginPoint) {
 	if len(points) < 30 {
 		return
@@ -550,26 +555,33 @@ func annotateMarginPercentiles(points []foundation.MarketMarginPoint) {
 	})
 }
 
-// annotateMarginPercentileSeries 对单一余额序列在 2020 年以来的总样本上做百分位
-// （每个点：总样本中 ≤ 该点值的占比 × 100，含该点自身）。固定样本，不滚动。
+// annotateMarginPercentileSeries 对单一余额序列做 expanding 百分位：
+// 前缀样本 = 2020-01-01 起截至当日的全部点（含当日），百分位 = 前缀中 ≤ 当日值的
+// 占比 × 100。2025-01-01 之前的点不输出。维护一个有序前缀数组做二分插入与计数。
 func annotateMarginPercentileSeries(points []foundation.MarketMarginPoint, valueOf func(*foundation.MarketMarginPoint) float64, setValue func(*foundation.MarketMarginPoint, float64)) {
-	total := len(points)
-	if total < 30 {
+	if len(points) < 30 {
 		return
 	}
-	sorted := make([]float64, 0, total)
+	prefix := make([]float64, 0, len(points))
 	for index := range points {
-		sorted = append(sorted, valueOf(&points[index]))
-	}
-	sort.Float64s(sorted)
-	for index := range points {
-		threshold := valueOf(&points[index])
-		// 二分：≤ threshold 的样本数（upper bound）
-		less := sort.SearchFloat64s(sorted, threshold)
-		for less < total && sorted[less] <= threshold {
+		value := valueOf(&points[index])
+		// 二分插入有序前缀
+		pos := sort.SearchFloat64s(prefix, value)
+		prefix = append(prefix, 0)
+		copy(prefix[pos+1:], prefix[pos:])
+		prefix[pos] = value
+		if points[index].TradeDate < marginPercentileDisplaySinceDate {
+			continue
+		}
+		if len(prefix) < 30 {
+			continue
+		}
+		// ≤ value 的样本数（upper bound，含当日自身）
+		less := sort.SearchFloat64s(prefix, value)
+		for less < len(prefix) && prefix[less] <= value {
 			less++
 		}
-		setValue(&points[index], float64(less)*100/float64(total))
+		setValue(&points[index], float64(less)*100/float64(len(prefix)))
 	}
 }
 

@@ -220,7 +220,7 @@ export function MarginBalanceView({ items, limit, onLimit, meta }: {
 		<section className="market-margin-panel">
 			<header><div><span>MARGIN BALANCE TREND</span><h3>融资融券余额趋势</h3></div><div className="market-margin-legend"><span className="financing">融资余额（左轴）</span><span className="lending">融券余额（右轴）</span><span className="percentile percentile-financing">融资历史百分位</span><span className="percentile percentile-lending">融券历史百分位</span></div></header>
 			<MarginBalanceChart items={items} />
-			<footer>单位：亿元 · 历史百分位 = 融资/融券各自余额在 2020 年以来总数据中的历史分位；数据为交易所汇总后的东方财富历史口径。</footer>
+			<footer>单位：亿元 · 历史百分位 = 各自余额在 2020 年以来截至当日数据中的分位（2025 年起显示）；数据为交易所汇总后的东方财富历史口径。</footer>
 		</section>
 	</div>;
 }
