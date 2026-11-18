@@ -499,7 +499,7 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 	sort.Strings(tradeDates)
 	meta := foundation.SourceMeta{
 		Source: "eastmoney:margin-balance", SourceURL: lastRequestURL,
-		AvailableFields: []string{"financing_balance", "securities_lending_balance", "margin_balance", "margin_balance_change", "margin_balance_percentile", "financing_buy_amount", "financing_repay_amount", "financing_net_buy_amount", "securities_lending_sell_volume", "securities_lending_repay_volume"},
+		AvailableFields: []string{"financing_balance", "securities_lending_balance", "margin_balance", "margin_balance_change", "margin_balance_percentile", "financing_balance_percentile", "securities_lending_percentile", "financing_buy_amount", "financing_repay_amount", "financing_net_buy_amount", "securities_lending_sell_volume", "securities_lending_repay_volume"},
 		FetchedAt:       time.Now(), LatencyMS: time.Since(start).Milliseconds(), TradeDate: tradeDates[len(tradeDates)-1],
 	}
 	points := make([]foundation.MarketMarginPoint, 0, len(tradeDates))
@@ -518,12 +518,31 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 	return points, meta, nil
 }
 
-// annotateMarginPercentiles 为每个交易日计算两融余额在其前 5 年窗口内的历史百分位
-// （窗口不足 30 个样本时省略，留给 omitempty 兜底）。points 需按 trade_date 升序。
+// annotateMarginPercentiles 为每个交易日计算两融/融资/融券三个余额序列各自在其前 5 年
+// 窗口内的历史百分位（窗口不足 30 个样本时省略，留给 omitempty 兜底）。points 需按 trade_date 升序。
 func annotateMarginPercentiles(points []foundation.MarketMarginPoint) {
 	if len(points) < 30 {
 		return
 	}
+	annotateMarginPercentileSeries(points, func(point *foundation.MarketMarginPoint) float64 {
+		return point.MarginBalance
+	}, func(point *foundation.MarketMarginPoint, value float64) {
+		point.MarginBalancePercentile = value
+	})
+	annotateMarginPercentileSeries(points, func(point *foundation.MarketMarginPoint) float64 {
+		return point.FinancingBalance
+	}, func(point *foundation.MarketMarginPoint, value float64) {
+		point.FinancingBalancePercentile = value
+	})
+	annotateMarginPercentileSeries(points, func(point *foundation.MarketMarginPoint) float64 {
+		return point.SecuritiesLendingBalance
+	}, func(point *foundation.MarketMarginPoint, value float64) {
+		point.SecuritiesLendingPercentile = value
+	})
+}
+
+// annotateMarginPercentileSeries 对单一余额序列做滚动 5 年窗口百分位（≤当前值占比 × 100）。
+func annotateMarginPercentileSeries(points []foundation.MarketMarginPoint, valueOf func(*foundation.MarketMarginPoint) float64, setValue func(*foundation.MarketMarginPoint, float64)) {
 	windowStart := 0
 	for index := range points {
 		current, err := time.Parse("2006-01-02", points[index].TradeDate)
@@ -538,13 +557,14 @@ func annotateMarginPercentiles(points []foundation.MarketMarginPoint) {
 		if len(window) < 30 {
 			continue
 		}
+		threshold := valueOf(&points[index])
 		less := 0
-		for _, item := range window {
-			if item.MarginBalance <= points[index].MarginBalance {
+		for offset := windowStart; offset <= index; offset++ {
+			if valueOf(&points[offset]) <= threshold {
 				less++
 			}
 		}
-		points[index].MarginBalancePercentile = float64(less) * 100 / float64(len(window))
+		setValue(&points[index], float64(less)*100/float64(len(window)))
 	}
 }
 

@@ -89,18 +89,20 @@ type MarketFundFlow struct {
 }
 
 type MarketMarginPoint struct {
-	TradeDate                    string     `json:"trade_date"`
-	FinancingBalance             float64    `json:"financing_balance"`
-	SecuritiesLendingBalance     float64    `json:"securities_lending_balance"`
-	MarginBalance                float64    `json:"margin_balance"`
-	MarginBalanceChange           float64    `json:"margin_balance_change"`
-	MarginBalancePercentile      float64    `json:"margin_balance_percentile,omitempty"`
-	FinancingBuyAmount           float64    `json:"financing_buy_amount"`
-	FinancingRepayAmount         float64    `json:"financing_repay_amount"`
-	FinancingNetBuyAmount        float64    `json:"financing_net_buy_amount"`
-	SecuritiesLendingSellVolume  float64    `json:"securities_lending_sell_volume"`
+	TradeDate                   string     `json:"trade_date"`
+	FinancingBalance            float64    `json:"financing_balance"`
+	SecuritiesLendingBalance    float64    `json:"securities_lending_balance"`
+	MarginBalance               float64    `json:"margin_balance"`
+	MarginBalanceChange         float64    `json:"margin_balance_change"`
+	MarginBalancePercentile     float64    `json:"margin_balance_percentile,omitempty"`
+	FinancingBalancePercentile  float64    `json:"financing_balance_percentile,omitempty"`
+	SecuritiesLendingPercentile float64    `json:"securities_lending_percentile,omitempty"`
+	FinancingBuyAmount          float64    `json:"financing_buy_amount"`
+	FinancingRepayAmount        float64    `json:"financing_repay_amount"`
+	FinancingNetBuyAmount       float64    `json:"financing_net_buy_amount"`
+	SecuritiesLendingSellVolume float64    `json:"securities_lending_sell_volume"`
 	SecuritiesLendingRepayVolume float64    `json:"securities_lending_repay_volume"`
-	Meta                         SourceMeta `json:"meta"`
+	Meta                        SourceMeta `json:"meta"`
 }
 
 type MarketBillboardItem struct {
