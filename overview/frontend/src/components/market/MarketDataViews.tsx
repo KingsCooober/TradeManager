@@ -102,7 +102,7 @@ export function CoreIndexView({ indexes, selectedID, onSelect, series, seriesLoa
 	meta: SourceMeta | null;
 }) {
 	const selected = indexes.find((item) => item.id === selectedID) || indexes[0];
-	// 区间固定看近一年；要看更长/更短直接滚轮缩放、拖动平移（klinecharts 内置）
+	// 区间固定看近两年（500 根，index-series 后端上限）；要看更长/更短直接滚轮缩放、拖动平移（klinecharts 内置）
 	const lines = series?.lines || [];
 	const first = lines[0]?.close || 0;
 	const latest = lines.at(-1)?.close || selected?.price || 0;
@@ -119,7 +119,7 @@ export function CoreIndexView({ indexes, selectedID, onSelect, series, seriesLoa
 			</button>)}</div>
 		</section>)}</div>
 		{selected ? <section className="market-index-detail">
-			<header><div><span>{selected.region} · {selected.market}</span><h3>{selected.name}</h3><small>{lines.length >= 200 ? '近一年' : '最近'} {lines.length || '--'} 个交易日 · {statusLabel(selected.status)}</small></div><div><strong>{formatPrice(selected.price)}</strong><em className={toneClass(selected.change_percent)}>{formatPercent(selected.change_percent)}</em></div></header>
+			<header><div><span>{selected.region} · {selected.market}</span><h3>{selected.name}</h3><small>{lines.length >= 400 ? '近两年' : '最近'} {lines.length || '--'} 个交易日 · {statusLabel(selected.status)}</small></div><div><strong>{formatPrice(selected.price)}</strong><em className={toneClass(selected.change_percent)}>{formatPercent(selected.change_percent)}</em></div></header>
 			<div className="market-index-chart-wrap">
 				{seriesLoading ? <div className="market-chart-loading">走势图加载中…</div> : <KLinePanel lines={lines} height={330} />}
 				<aside>
@@ -370,7 +370,7 @@ function SectorFundFlowTable({ items, meta }: { items: MarketFundFlow[]; meta: S
 			<em className={availableTone(item.net_inflow_ratio, hasField(meta, 'net_inflow_ratio'))}>{formatAvailable(item.net_inflow_ratio, hasField(meta, 'net_inflow_ratio'), formatPercent)}</em>
 			<span className="market-flow-leader">{hasField(meta, 'leader_name') ? (item.leader_name && item.leader_symbol
 				// 行业榜里的领涨标的也是个股，点开能直接看它走势
-				? <button type="button" className="stock-peek-name inline" title={`查看 ${item.leader_name} 近一年走势`} onClick={() => openStock(item.leader_symbol || '', item.leader_name)}><strong>{item.leader_name}</strong><small>{item.leader_symbol} · {formatPercent(item.leader_change_percent)}</small></button>
+				? <button type="button" className="stock-peek-name inline" title={`查看 ${item.leader_name} 近两年走势`} onClick={() => openStock(item.leader_symbol || '', item.leader_name)}><strong>{item.leader_name}</strong><small>{item.leader_symbol} · {formatPercent(item.leader_change_percent)}</small></button>
 				: <><strong>{item.leader_name || '--'}</strong><small>{item.leader_symbol || ''}{item.leader_name ? ` · ${formatPercent(item.leader_change_percent)}` : ''}</small></>) : <small>--</small>}</span>
 		</article>;
 	})}</div>;
@@ -415,7 +415,7 @@ function FlowIdentity({ item, index }: { item: MarketFundFlow; index: number }) 
 	const clickable = item.dimension === 'stock' && Boolean(symbol);
 	return <span><i>{String(index + 1).padStart(2, '0')}</i><span>
 		{clickable
-			? <button type="button" className="stock-peek-name" title={`查看 ${item.name} 近一年走势`} onClick={() => openStock(symbol, item.name)}><strong>{item.name}</strong><small>{symbol}</small></button>
+			? <button type="button" className="stock-peek-name" title={`查看 ${item.name} 近两年走势`} onClick={() => openStock(symbol, item.name)}><strong>{item.name}</strong><small>{symbol}</small></button>
 			: <><strong>{item.name}</strong><small>{item.symbol || item.code}</small></>}
 	</span></span>;
 }
@@ -460,7 +460,7 @@ export function BillboardView({ items, tradeDate, onTradeDate, meta, details, on
 			const detailID = `billboard-seats-${index}`;
 			return <article className={expanded ? 'expanded' : ''} key={key} data-stock-row="billboard" data-symbol={item.symbol} data-name={item.name}>
 				<header className="market-billboard-card-header"><span>{item.symbol
-					? <button type="button" className="stock-peek-name" title={`查看 ${item.name} 近一年走势`} onClick={() => openStock(item.symbol, item.name)}><strong>{item.name}</strong><small>{item.symbol} · {item.trade_date}</small></button>
+					? <button type="button" className="stock-peek-name" title={`查看 ${item.name} 近两年走势`} onClick={() => openStock(item.symbol, item.name)}><strong>{item.name}</strong><small>{item.symbol} · {item.trade_date}</small></button>
 					: <><strong>{item.name}</strong><small>{item.symbol} · {item.trade_date}</small></>}</span><em className={toneClass(item.change_percent)}>{formatPercent(item.change_percent)}</em></header>
 				<p>{item.reason || '未提供上榜原因'}</p>{item.summary && <blockquote>{item.summary}</blockquote>}
 				<footer><span>买入 <strong>{moneyCell(item.buy_amount)}</strong></span><span>卖出 <strong>{moneyCell(item.sell_amount)}</strong></span><span>净额 <strong className={toneClass(item.net_amount)}>{moneyCell(item.net_amount)}</strong></span><span>机构买方 <strong>{item.institution_buyers}</strong></span><span>换手 <strong>{formatPercent(item.turnover_rate)}</strong></span></footer>
@@ -604,7 +604,7 @@ export function ResearchView({ items, kind, queryDraft, onQueryDraft, onSearch, 
 								role="button"
 								tabIndex={0}
 								className={`market-research-chip ${chip.tone} stock-peek-trigger`}
-								title={`查看 ${chip.label} 近一年走势`}
+								title={`查看 ${chip.label} 近两年走势`}
 								onClick={(event) => { event.stopPropagation(); openStock(stockCode, chip.label); }}
 								onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); openStock(stockCode, chip.label); } }}
 							>{chip.label}</span>

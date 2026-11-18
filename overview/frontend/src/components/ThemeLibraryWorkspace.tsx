@@ -56,7 +56,7 @@ export function ThemeLibraryWorkspace({ config, refreshKey }: Props) {
 	const [introOpen, setIntroOpen] = useState(false);
 	const listRequestID = useRef(0);
 	// 题材库整页被 MarketOverviewWorkspace 的 StockPeekProvider 包住，
-	// 点标的直接复用「近一年日 K」弹窗，不用自己再拉一遍行情。
+	// 点标的直接复用「近两年日 K」弹窗，不用自己再拉一遍行情。
 	const openStock = useStockPeek();
 
 	const loadLibrary = useCallback(async () => {
@@ -333,8 +333,8 @@ export function ThemeLibraryWorkspace({ config, refreshKey }: Props) {
 															type="button"
 															className={`theme-library-stock-card ${stock.is_limit_up ? 'limit-up' : ''}`}
 															key={`${stock.code}-${index}`}
-															title={`${stockTitle(stock)} · 点击查看近一年走势`}
-															aria-label={`查看 ${stock.name} ${stock.code} 近一年走势`}
+															title={`${stockTitle(stock)} · 点击查看近两年走势`}
+															aria-label={`查看 ${stock.name} ${stock.code} 近两年走势`}
 															onClick={() => openStock(stock.code, stock.name)}
 														>
 															<strong>{stock.name}</strong>

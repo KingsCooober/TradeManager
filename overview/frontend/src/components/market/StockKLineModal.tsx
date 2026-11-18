@@ -9,7 +9,7 @@ import { KLinePanel } from './KLinePanel';
  *
  * 行情总览里到处是「个股标签」（研报标的、龙虎榜、资金流榜单），
  * 看到不认识的票想确认走势，原来只能切去题材雷达重新搜一遍。
- * 这里给标签套一层点击：就地弹出近一年日 K（MA10/MA20 + 成交量副图）。
+ * 这里给标签套一层点击：就地弹出近两年日 K（MA10/MA20 + 成交量副图）。
  *
  * 用 context 而不是逐层传 props —— MarketDataViews 里有好几个视图函数，
  * 每个都往下加一对 onOpenStock 会污染一长串函数签名。
@@ -24,8 +24,8 @@ export function useStockPeek() {
 	return useContext(StockPeekContext);
 }
 
-/** 近一年 ≈ 243 个交易日，取 250 覆盖整年 */
-const peekLimit = 250;
+/** 近两年 ≈ 486 个交易日，取 500；quotes/kline 后端无上限，500 与 index-series 的最大 limit 对齐 */
+const peekLimit = 500;
 
 // 同一只票反复开关不重复拉行情（5 分钟）
 const peekCache = new Map<string, { lines: KLine[]; at: number }>();
@@ -110,12 +110,12 @@ function StockKLineModal({ config, target, onClose }: { config: BackendConfig | 
 			className="stock-peek-dialog"
 			role="dialog"
 			aria-modal="true"
-			aria-label={`${label} 近一年日线走势`}
+			aria-label={`${label} 近两年日线走势`}
 			onClick={(event) => event.stopPropagation()}
 		>
 			<header>
 				<div className="stock-peek-title">
-					<span>个股走势 · 近一年</span>
+					<span>个股走势 · 近两年</span>
 					<h3>{label}<small>{target.symbol}</small></h3>
 				</div>
 				{state === 'ready' && last ? <div className="stock-peek-quote">
@@ -128,11 +128,11 @@ function StockKLineModal({ config, target, onClose }: { config: BackendConfig | 
 				<button type="button" className="stock-peek-close" onClick={onClose} aria-label="关闭"><X size={18} /></button>
 			</header>
 			<div className="stock-peek-body">
-				{state === 'loading' ? <div className="stock-peek-state"><LoaderCircle className="spin" size={20} /><span>正在读取近一年日线…</span></div> : null}
+				{state === 'loading' ? <div className="stock-peek-state"><LoaderCircle className="spin" size={20} /><span>正在读取近两年日线…</span></div> : null}
 				{state === 'error' ? <div className="stock-peek-state error"><AlertTriangle size={20} /><span>{error}</span></div> : null}
 				{state === 'ready' ? <KLinePanel lines={lines} height={400} /> : null}
 			</div>
-			<footer>近一年 {lines.length || '--'} 个交易日{lines.length ? ` · 区间 ${rangeLow.toFixed(2)} ~ ${rangeHigh.toFixed(2)}` : ''} · MA10 / MA20 · 成交量（无均线）· 滚轮缩放、拖动平移</footer>
+			<footer>近两年 {lines.length || '--'} 个交易日{lines.length ? ` · 区间 ${rangeLow.toFixed(2)} ~ ${rangeHigh.toFixed(2)}` : ''} · MA10 / MA20 · 成交量（无均线）· 滚轮缩放、拖动平移</footer>
 		</section>
 	</div>, document.body);
 }

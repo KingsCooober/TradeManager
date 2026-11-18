@@ -318,7 +318,7 @@ export function MarketOverviewWorkspace({ config, refreshKey, onAskAI }: Props) 
 		if (!config || activeView !== 'core-indexes' || !selectedIndexID) return;
 		let cancelled = false;
 		setSeriesLoading(true);
-		requestJSON<{ data: MarketIndexSeries }>(config, `/api/v1/market/index-series?id=${encodeURIComponent(selectedIndexID)}&period=day&limit=250`)
+		requestJSON<{ data: MarketIndexSeries }>(config, `/api/v1/market/index-series?id=${encodeURIComponent(selectedIndexID)}&period=day&limit=500`)
 			.then((payload) => { if (!cancelled) setIndexSeries(payload.data); })
 			.catch((error) => { if (!cancelled) { setIndexSeries(null); setModuleError(errorMessage(error, '指数走势加载失败')); } })
 			.finally(() => { if (!cancelled) setSeriesLoading(false); });

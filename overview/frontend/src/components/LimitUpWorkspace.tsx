@@ -56,7 +56,7 @@ type KLinePeriod = {
 const KLINE_PERIODS: KLinePeriod[] = [
 	{ key: 'intraday', label: '分时', apiPeriod: '1', limit: 240, mode: 'intraday' },
 	{ key: 'five-day', label: '5日', apiPeriod: '5', limit: 240, mode: 'intraday' },
-	{ key: 'day', label: '日K', apiPeriod: 'day', limit: 250, mode: 'daily' },
+	{ key: 'day', label: '日K', apiPeriod: 'day', limit: 500, mode: 'daily' },
 	{ key: 'week', label: '周K', apiPeriod: 'week', limit: 160, mode: 'daily' },
 	{ key: 'month', label: '月K', apiPeriod: 'month', limit: 90, mode: 'daily' },
 ];
