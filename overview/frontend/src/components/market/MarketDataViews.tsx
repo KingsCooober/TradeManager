@@ -218,9 +218,9 @@ export function MarginBalanceView({ items, limit, onLimit, meta }: {
 			<SummaryMetric icon={<Activity size={17} />} label="当日余额变化" value={latest ? formatSignedHundredMillion(latest.margin_balance_change) : '--'} detail={latest ? `融资净买入 ${formatSignedHundredMillion(latest.financing_net_buy_amount)}` : '等待数据'} tone={toneClass(latest?.margin_balance_change || 0)} />
 		</section>
 		<section className="market-margin-panel">
-			<header><div><span>MARGIN BALANCE TREND</span><h3>融资融券余额趋势</h3></div><div className="market-margin-legend"><span className="financing">融资余额（左轴）</span><span className="lending">融券余额（右轴）</span><span className="percentile percentile-financing">融资5年百分位</span><span className="percentile percentile-lending">融券5年百分位</span></div></header>
+			<header><div><span>MARGIN BALANCE TREND</span><h3>融资融券余额趋势</h3></div><div className="market-margin-legend"><span className="financing">融资余额（左轴）</span><span className="lending">融券余额（右轴）</span><span className="percentile percentile-financing">融资历史百分位</span><span className="percentile percentile-lending">融券历史百分位</span></div></header>
 			<MarginBalanceChart items={items} />
-			<footer>单位：亿元 · 5年百分位 = 融资/融券各自余额在近5年窗口内的历史分位；数据为交易所汇总后的东方财富历史口径。</footer>
+			<footer>单位：亿元 · 历史百分位 = 融资/融券各自余额在 2020 年以来总数据中的历史分位；数据为交易所汇总后的东方财富历史口径。</footer>
 		</section>
 	</div>;
 }
@@ -350,8 +350,8 @@ function MarginBalanceChart({ items }: { items: MarketMarginPoint[] }) {
 			<div><span>融资余额</span><b>{formatHundredMillion(hovered.financing_balance)}</b></div>
 			<div><span>融券余额</span><b>{formatHundredMillion(hovered.securities_lending_balance)}</b></div>
 			<div><span>融资净买入</span><b className={toneClass(hovered.financing_net_buy_amount)}>{formatSignedHundredMillion(hovered.financing_net_buy_amount)}</b></div>
-			{typeof hovered.financing_balance_percentile === 'number' && <div><span>融资5年百分位</span><b className={toneClass(hovered.financing_balance_percentile - 50)}>{hovered.financing_balance_percentile.toFixed(1)}%</b></div>}
-			{typeof hovered.securities_lending_percentile === 'number' && <div><span>融券5年百分位</span><b className={toneClass(hovered.securities_lending_percentile - 50)}>{hovered.securities_lending_percentile.toFixed(1)}%</b></div>}
+			{typeof hovered.financing_balance_percentile === 'number' && <div><span>融资历史百分位</span><b className={toneClass(hovered.financing_balance_percentile - 50)}>{hovered.financing_balance_percentile.toFixed(1)}%</b></div>}
+			{typeof hovered.securities_lending_percentile === 'number' && <div><span>融券历史百分位</span><b className={toneClass(hovered.securities_lending_percentile - 50)}>{hovered.securities_lending_percentile.toFixed(1)}%</b></div>}
 		</div>}
 	</div>;
 }

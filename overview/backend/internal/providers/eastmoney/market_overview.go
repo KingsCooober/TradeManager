@@ -412,8 +412,9 @@ func (c *Client) MarketFundFlows(ctx context.Context, dimension string, sortKey 
 	return items, meta, nil
 }
 
-// marginPercentileWindowDays 滚动百分位统计窗口：近 5 年（约 1250 个交易日，留缓冲）。
-const marginPercentileWindowDays = 1260
+// marginPercentileSinceDate 百分位统计基准起点：2020-01-01 之后的全部历史
+// （不是滚动窗口——每个点都对「2020 年以来总数据」算分位）。
+const marginPercentileSinceDate = "2020-01-01"
 
 func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundation.MarketMarginPoint, foundation.SourceMeta, error) {
 	if limit <= 0 {
@@ -423,14 +424,15 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 	if limit > 1300 {
 		limit = 1300
 	}
-	// 除显示区间外，还要为最早的显示点多拉一个 5 年窗口用于滚动百分位统计。
-	fetchDays := limit + marginPercentileWindowDays
+	// 百分位改为「2020 年以来全量」口径：需要拉全历史（东财该报表 2010 年起，
+	// 2020 年至今 ≈ 1690 个交易日 × 3 市场 ≈ 5100 行 ≈ 11 页，仍留 20 页余量）。
 
 	endpoint := c.datacenterBaseURL + "/api/data/v1/get"
 	start := time.Now()
-	pointsByDate := make(map[string]*foundation.MarketMarginPoint, fetchDays+1)
+	pointsByDate := make(map[string]*foundation.MarketMarginPoint, 1700)
 	lastRequestURL := ""
-	// 5年显示+5年统计窗口 ≈ 2560 交易日 × 3 市场 ≈ 7700 行 ≈ 16 页，留余量到 20 页。
+	// 2020 年至今的全历史 ≈ 1690 交易日 × 3 市场 ≈ 5100 行 ≈ 11 页；东财全量 18 页，
+	// 循环带「2020 之前的数据到达即停」截断，页数留 20 页余量。
 	for page := 1; page <= 20; page++ {
 		params := url.Values{}
 		params.Set("reportName", "RPTA_WEB_RZRQ_LSSH")
@@ -472,6 +474,10 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 			if tradeDate == "" {
 				continue
 			}
+			// 2020 年之前的历史不参与百分位，也不需要保留。
+			if tradeDate < marginPercentileSinceDate {
+				continue
+			}
 			point := pointsByDate[tradeDate]
 			if point == nil {
 				point = &foundation.MarketMarginPoint{TradeDate: tradeDate}
@@ -486,7 +492,7 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 			point.SecuritiesLendingSellVolume += raw.SecuritiesLendingSellVolume
 			point.SecuritiesLendingRepayVolume += raw.SecuritiesLendingRepayVolume
 		}
-		if len(pointsByDate) >= fetchDays+1 || len(payload.Result.Data) < 500 || (payload.Result.Pages > 0 && page >= payload.Result.Pages) {
+		if len(payload.Result.Data) < 500 || (payload.Result.Pages > 0 && page >= payload.Result.Pages) {
 			break
 		}
 	}
@@ -520,8 +526,9 @@ func (c *Client) MarketMarginSeries(ctx context.Context, limit int) ([]foundatio
 	return points, meta, nil
 }
 
-// annotateMarginPercentiles 为每个交易日计算两融/融资/融券三个余额序列各自在其前 5 年
-// 窗口内的历史百分位（窗口不足 30 个样本时省略，留给 omitempty 兜底）。points 需按 trade_date 升序。
+// annotateMarginPercentiles 为每个交易日计算两融/融资/融券三个余额序列在
+// 「2020-01-01 以来全部数据」内的历史百分位（非滚动窗口：所有点共用同一总样本，
+// 样本不足 30 时省略，留给 omitempty 兜底）。points 需按 trade_date 升序。
 func annotateMarginPercentiles(points []foundation.MarketMarginPoint) {
 	if len(points) < 30 {
 		return
@@ -543,30 +550,26 @@ func annotateMarginPercentiles(points []foundation.MarketMarginPoint) {
 	})
 }
 
-// annotateMarginPercentileSeries 对单一余额序列做滚动 5 年窗口百分位（≤当前值占比 × 100）。
+// annotateMarginPercentileSeries 对单一余额序列在 2020 年以来的总样本上做百分位
+// （每个点：总样本中 ≤ 该点值的占比 × 100，含该点自身）。固定样本，不滚动。
 func annotateMarginPercentileSeries(points []foundation.MarketMarginPoint, valueOf func(*foundation.MarketMarginPoint) float64, setValue func(*foundation.MarketMarginPoint, float64)) {
-	windowStart := 0
+	total := len(points)
+	if total < 30 {
+		return
+	}
+	sorted := make([]float64, 0, total)
 	for index := range points {
-		current, err := time.Parse("2006-01-02", points[index].TradeDate)
-		if err != nil {
-			continue
-		}
-		cutoff := current.AddDate(-5, 0, 0).Format("2006-01-02")
-		for points[windowStart].TradeDate < cutoff && windowStart < index {
-			windowStart++
-		}
-		window := points[windowStart : index+1]
-		if len(window) < 30 {
-			continue
-		}
+		sorted = append(sorted, valueOf(&points[index]))
+	}
+	sort.Float64s(sorted)
+	for index := range points {
 		threshold := valueOf(&points[index])
-		less := 0
-		for offset := windowStart; offset <= index; offset++ {
-			if valueOf(&points[offset]) <= threshold {
-				less++
-			}
+		// 二分：≤ threshold 的样本数（upper bound）
+		less := sort.SearchFloat64s(sorted, threshold)
+		for less < total && sorted[less] <= threshold {
+			less++
 		}
-		setValue(&points[index], float64(less)*100/float64(len(window)))
+		setValue(&points[index], float64(less)*100/float64(total))
 	}
 }
 
