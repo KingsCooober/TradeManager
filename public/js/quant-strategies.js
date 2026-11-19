@@ -1,57 +1,14 @@
 /**
- * 量化策略卡片页
+ * 量化策略卡片视图（并入教程页 tutorial.html）
  * 数据来自 quant-strategies-data.js（QS_FAMILIES / QS_STRATEGIES，生成自《量化教程3.0》）。
- * 卡片网格 + 族筛选 + 搜索 + 排序；点击卡片弹出详情（原理/规则/回测/风险/插图/完整聚宽代码）。
+ * 通过工具栏「📖 正文 / 🃏 策略卡片」切换；?view=strategies 直接进入卡片视图。
+ * header 钩子（登录/登出/设置）由 tutorial.js 提供，本文件不再重复定义。
  */
 (function () {
   'use strict';
 
   var FAMS = QS_FAMILIES;
   var STRATS = QS_STRATEGIES;
-
-  // ── header 钩子：本页不加载 sync.js（同 tutorial 页处理）──
-  function readToken() {
-    try { return localStorage.getItem('sync_token') || ''; } catch (e) { return ''; }
-  }
-  window.handleLogout = function () {
-    if (!window.confirm('退出登录？')) return;
-    try { localStorage.removeItem('sync_token'); } catch (e) {}
-    location.href = 'index.html';
-  };
-  window.openLoginModal = function () { location.href = 'index.html'; };
-  window.openAppSettings = function () { location.href = 'index.html'; };
-
-  (function renderAuth() {
-    var user = null;
-    var token = readToken();
-    if (token) {
-      try {
-        var part = token.split('.')[1] || '';
-        part = part.replace(/-/g, '+').replace(/_/g, '/');
-        while (part.length % 4) part += '=';
-        user = JSON.parse(decodeURIComponent(atob(part).split('').map(function (c) {
-          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-        }).join('')));
-        if (user.exp && user.exp * 1000 <= Date.now()) user = null;
-      } catch (e) { user = null; }
-    }
-    var inEl = document.getElementById('headerSyncLoggedIn');
-    var outEl = document.getElementById('headerSyncLoggedOut');
-    var adminEl = document.getElementById('adminMenu');
-    var nameEl = document.getElementById('headerUsername');
-    if (!inEl || !outEl) return;
-    if (user) {
-      if (nameEl) nameEl.textContent = user.username || '已登录';
-      var isAdmin = user.role === 'admin';
-      inEl.style.display = isAdmin ? 'none' : 'flex';
-      outEl.style.display = 'none';
-      if (adminEl) adminEl.style.display = isAdmin ? 'flex' : 'none';
-    } else {
-      inEl.style.display = 'none';
-      outEl.style.display = 'flex';
-      if (adminEl) adminEl.style.display = 'none';
-    }
-  })();
 
   // ── 工具 ──
   function esc(s) {
@@ -60,7 +17,7 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  // 从回测文本里抽展示用的数字（粗提取，仅用于卡片角标）
+  // 从回测文本里抽展示用的年化（粗提取，仅用于卡片角标/排序）
   var CAGR_CACHE = {};
   function cagrOf(s) {
     if (CAGR_CACHE[s.idx] !== undefined) return CAGR_CACHE[s.idx];
@@ -77,6 +34,7 @@
 
   // ── 状态 ──
   var state = { fam: 'ALL', q: '', sort: 'order' };
+  var inited = false;
 
   // ── 顶部统计 ──
   function renderHero() {
@@ -160,9 +118,7 @@
   }
 
   // ── 详情浮层 ──
-  var modal = document.getElementById('qsModal');
-  var modalBody = document.getElementById('qsModalBody');
-  var current = null;
+  var modal, modalBody;
 
   function rulesList(rules) {
     return String(rules || '').split('；').filter(function (x) { return x.trim(); }).map(function (x) {
@@ -222,7 +178,6 @@
     var s = null;
     for (var i = 0; i < STRATS.length; i++) if (STRATS[i].idx === idx) { s = STRATS[i]; break; }
     if (!s) return;
-    current = s;
     modalBody.innerHTML = modalHtml(s);
     modalBody.scrollTop = 0;
     modal.hidden = false;
@@ -231,68 +186,110 @@
   function closeModal() {
     modal.hidden = true;
     document.body.style.overflow = '';
-    current = null;
   }
 
   // ── 灯箱 ──
-  var lightbox = document.getElementById('qsLightbox');
-  var lightboxImg = lightbox.querySelector('img');
-  lightbox.addEventListener('click', function () { lightbox.hidden = true; });
+  var lightbox, lightboxImg;
 
-  // ── 事件绑定 ──
-  document.getElementById('qsFamChips').addEventListener('click', function (e) {
-    var chip = e.target.closest('.qs-chip');
-    if (!chip) return;
-    state.fam = chip.getAttribute('data-fam');
-    renderChips();
-    renderGrid();
-  });
-
-  var searchTimer = null;
-  document.getElementById('qsSearch').addEventListener('input', function (e) {
-    var v = e.target.value.trim();
-    if (searchTimer) clearTimeout(searchTimer);
-    searchTimer = setTimeout(function () { state.q = v; renderGrid(); }, 150);
-  });
-
-  document.getElementById('qsSort').addEventListener('change', function (e) {
-    state.sort = e.target.value;
-    renderGrid();
-  });
-
-  document.getElementById('qsGrid').addEventListener('click', function (e) {
-    var card = e.target.closest('.qs-card');
-    if (card) openModal(parseInt(card.getAttribute('data-idx'), 10));
-  });
-  document.getElementById('qsGrid').addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    var card = e.target.closest('.qs-card');
-    if (card) { e.preventDefault(); openModal(parseInt(card.getAttribute('data-idx'), 10)); }
-  });
-
-  modal.addEventListener('click', function (e) {
-    if (e.target.closest('[data-qs-close]')) { closeModal(); return; }
-    var img = e.target.closest('.qsm-img img');
-    if (img) { lightboxImg.src = img.src; lightboxImg.alt = img.alt; lightbox.hidden = false; return; }
-    var toggle = e.target.closest('[data-act="toggle"]');
-    if (toggle) {
-      var box = toggle.closest('.qsm-code-box');
-      var collapsed = box.classList.toggle('collapsed');
-      toggle.textContent = collapsed ? '展开全部' : '收起代码';
-      return;
+  // ── 视图切换（正文 ⇄ 策略卡片）──
+  function setView(cards) {
+    var view = document.getElementById('qsView');
+    var btnRead = document.getElementById('tutViewRead');
+    var btnCards = document.getElementById('tutViewCards');
+    if (!view || !btnRead || !btnCards) return;
+    if (cards) {
+      document.body.classList.add('qs-active');
+      view.hidden = false;
+      btnRead.classList.remove('active');
+      btnCards.classList.add('active');
+      btnRead.setAttribute('aria-selected', 'false');
+      btnCards.setAttribute('aria-selected', 'true');
+    } else {
+      document.body.classList.remove('qs-active');
+      view.hidden = true;
+      btnRead.classList.add('active');
+      btnCards.classList.remove('active');
+      btnRead.setAttribute('aria-selected', 'true');
+      btnCards.setAttribute('aria-selected', 'false');
+      closeModal();
     }
-    var copy = e.target.closest('[data-act="copy"]');
-    if (copy) {
-      var codeEl = copy.closest('.qsm-code-box').querySelector('pre code');
-      var text = codeEl.textContent;
-      var done = function () { copy.textContent = '✅ 已复制'; setTimeout(function () { copy.textContent = '📋 复制'; }, 1600); };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
-      } else {
-        fallbackCopy(text, done);
+    window.scrollTo(0, 0);
+  }
+
+  // ── 事件绑定（一次）──
+  function bind() {
+    document.getElementById('qsFamChips').addEventListener('click', function (e) {
+      var chip = e.target.closest('.qs-chip');
+      if (!chip) return;
+      state.fam = chip.getAttribute('data-fam');
+      renderChips();
+      renderGrid();
+    });
+
+    var searchTimer = null;
+    document.getElementById('qsSearch').addEventListener('input', function (e) {
+      var v = e.target.value.trim();
+      if (searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(function () { state.q = v; renderGrid(); }, 150);
+    });
+
+    document.getElementById('qsSort').addEventListener('change', function (e) {
+      state.sort = e.target.value;
+      renderGrid();
+    });
+
+    document.getElementById('qsGrid').addEventListener('click', function (e) {
+      var card = e.target.closest('.qs-card');
+      if (card) openModal(parseInt(card.getAttribute('data-idx'), 10));
+    });
+    document.getElementById('qsGrid').addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      var card = e.target.closest('.qs-card');
+      if (card) { e.preventDefault(); openModal(parseInt(card.getAttribute('data-idx'), 10)); }
+    });
+
+    modal.addEventListener('click', function (e) {
+      if (e.target.closest('[data-qs-close]')) { closeModal(); return; }
+      var img = e.target.closest('.qsm-img img');
+      if (img) { lightboxImg.src = img.src; lightboxImg.alt = img.alt; lightbox.hidden = false; return; }
+      var toggle = e.target.closest('[data-act="toggle"]');
+      if (toggle) {
+        var box = toggle.closest('.qsm-code-box');
+        var collapsed = box.classList.toggle('collapsed');
+        toggle.textContent = collapsed ? '展开全部' : '收起代码';
+        return;
       }
-    }
-  });
+      var copy = e.target.closest('[data-act="copy"]');
+      if (copy) {
+        var codeEl = copy.closest('.qsm-code-box').querySelector('pre code');
+        var text = codeEl.textContent;
+        var done = function () { copy.textContent = '✅ 已复制'; setTimeout(function () { copy.textContent = '📋 复制'; }, 1600); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+        } else {
+          fallbackCopy(text, done);
+        }
+      }
+    });
+
+    lightbox.addEventListener('click', function () { lightbox.hidden = true; });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        if (!lightbox.hidden) lightbox.hidden = true;
+        else if (!modal.hidden) closeModal();
+      }
+    });
+
+    // 视图切换按钮
+    document.getElementById('tutViewRead').addEventListener('click', function () { setView(false); });
+    document.getElementById('tutViewCards').addEventListener('click', function () { setView(true); });
+    var sideBtn = document.getElementById('tutViewCardsSide');
+    if (sideBtn) sideBtn.addEventListener('click', function () {
+      setView(true);
+      document.getElementById('tutSidebar').classList.remove('open'); // 移动端收起侧栏
+    });
+  }
 
   function fallbackCopy(text, done) {
     var ta = document.createElement('textarea');
@@ -304,17 +301,32 @@
     document.body.removeChild(ta);
   }
 
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') {
-      if (!lightbox.hidden) lightbox.hidden = true;
-      else if (!modal.hidden) closeModal();
-    }
-  });
-
   // ── 启动 ──
-  var total = document.getElementById('qsTotalCount');
-  if (total) total.textContent = String(STRATS.length);
-  renderHero();
-  renderChips();
-  renderGrid();
+  function init() {
+    if (inited) return;
+    inited = true;
+    modal = document.getElementById('qsModal');
+    modalBody = document.getElementById('qsModalBody');
+    lightbox = document.getElementById('qsLightbox');
+    lightboxImg = lightbox.querySelector('img');
+
+    var total = document.getElementById('qsTotalCount');
+    if (total) total.textContent = String(STRATS.length);
+    renderHero();
+    renderChips();
+    renderGrid();
+    bind();
+
+    // ?view=strategies 直接进入卡片视图（quant-strategies.html 旧链接跳转过来）
+    if (/[?&]view=strategies\b/.test(location.search)) setView(true);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  // 供外部（如 tutorial.js）切换
+  window.QSViewSet = setView;
 })();

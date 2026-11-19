@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="量化教程 3.0 在线阅读：豆瓜的投资笔记，聚宽量化实战教程，自动记录阅读进度并跨设备同步">
+<meta name="description" content="量化教程 3.0 在线阅读：豆瓜的投资笔记，聚宽量化实战教程，自动记录阅读进度并跨设备同步；内置 40 个策略卡片">
 <title>量化教程 3.0 - Trade Manager</title>
 <link rel="stylesheet" href="css/main.css?v=23">
 <link rel="stylesheet" href="css/tutorial.css?v=2">
+<link rel="stylesheet" href="css/quant-strategies.css?v=2">
 </head>
 <body class="tut-page">
 
@@ -33,12 +34,17 @@
 
     <div class="tut-side-foot">
       <button type="button" class="tut-btn tut-btn-ghost" id="tutRestart">从头开始</button>
+      <button type="button" class="tut-btn tut-btn-ghost" id="tutViewCardsSide">🃏 策略卡片</button>
     </div>
   </aside>
 
   <main class="tut-main">
     <div class="tut-toolbar">
       <button type="button" class="tut-btn tut-btn-ghost tut-toc-toggle" id="tutTocToggle" aria-label="打开目录">☰ 目录</button>
+      <div class="tut-view-switch" role="tablist" aria-label="视图切换">
+        <button type="button" class="tut-view-btn active" id="tutViewRead" role="tab" aria-selected="true">📖 正文</button>
+        <button type="button" class="tut-view-btn" id="tutViewCards" role="tab" aria-selected="false">🃏 策略卡片</button>
+      </div>
       <div class="tut-toolbar-meta" id="tutNowReading">正在加载教程…</div>
       <button type="button" class="tut-btn tut-btn-ghost" id="tutTopBtn">↑ 顶部</button>
     </div>
@@ -46,6 +52,32 @@
     <div class="tut-paper">
       <div class="tut-loading" id="tutLoading"><i></i>正在加载教程正文…</div>
       <div id="tutContent" hidden></div>
+    </div>
+
+    <!-- 🃏 策略卡片视图（默认隐藏，工具栏切换） -->
+    <div class="qs-view" id="qsView" hidden>
+      <section class="qs-hero">
+        <div class="qs-hero-main">
+          <h2>🃏 量化策略卡片</h2>
+          <p>《量化教程 3.0》（豆瓜的投资笔记 · 聚宽实战）第六章全部 <strong id="qsTotalCount">40</strong> 个策略，按族分组。点击卡片查看原理、规则、回测、原文代码与插图。</p>
+        </div>
+        <div class="qs-hero-stats" id="qsHeroStats"></div>
+      </section>
+
+      <section class="qs-toolbar">
+        <div class="qs-chips" id="qsFamChips"></div>
+        <div class="qs-toolbar-right">
+          <input type="text" id="qsSearch" class="qs-search" placeholder="🔍 搜索策略名称 / 原理 / 规则..." autocomplete="off" aria-label="搜索策略">
+          <select id="qsSort" class="qs-sort" aria-label="排序方式">
+            <option value="order">教程顺序</option>
+            <option value="cagr">年化收益 ↓</option>
+            <option value="dd">最大回撤 ↑</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="qs-grid" id="qsGrid" aria-live="polite"></section>
+      <div class="qs-empty" id="qsEmpty" hidden>没有匹配的策略</div>
     </div>
   </main>
 </div>
@@ -58,10 +90,22 @@
 
 <div class="tut-lightbox" id="tutLightbox" hidden><img alt="放大的教程插图"></div>
 
+<!-- 策略详情浮层 + 插图灯箱 -->
+<div class="qs-modal" id="qsModal" hidden>
+  <div class="qs-modal-mask" data-qs-close></div>
+  <div class="qs-modal-card" role="dialog" aria-modal="true" aria-labelledby="qsModalTitle">
+    <button type="button" class="qs-modal-close" data-qs-close aria-label="关闭">✕</button>
+    <div class="qs-modal-body" id="qsModalBody"></div>
+  </div>
+</div>
+<div class="qs-lightbox" id="qsLightbox" hidden><img alt="放大的策略插图"></div>
+
 <script src="js/utils.js?v=12"></script>
 <script src="js/store.js?v=2"></script>
-<script src="js/header.js?v=21"></script>
-<script src="js/tutorial.js?v=3"></script>
+<script src="js/header.js?v=22"></script>
+<script src="js/tutorial.js?v=4"></script>
+<script src="js/quant-strategies-data.js?v=1"></script>
+<script src="js/quant-strategies.js?v=2"></script>
 <script>
   renderAppHeader('tutorial');
 </script>

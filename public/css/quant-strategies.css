@@ -1,4 +1,19 @@
-/* ===== 量化策略卡片页 ===== */
+/* ===== 量化策略卡片视图（挂在教程页 tut-main 内） ===== */
+
+/* 视图切换按钮（教程工具栏内） */
+.tut-view-switch { display: flex; gap: 2px; background: var(--bg-input, #f2f3f5); border-radius: 8px; padding: 2px; }
+.tut-view-btn {
+  border: 0; background: transparent; color: var(--text-secondary, #666);
+  font: inherit; font-size: 13px; padding: 5px 14px; border-radius: 6px; cursor: pointer;
+  transition: all .15s; white-space: nowrap;
+}
+.tut-view-btn:hover { color: var(--text-primary, #222); }
+.tut-view-btn.active { background: var(--bg-card, #fff); color: var(--text-primary, #222); font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+
+/* 策略视图激活时：隐藏正文纸张和顶部阅读进度条 */
+body.qs-active .tut-paper { display: none; }
+body.qs-active .tut-readbar { display: none; }
+.qs-view { max-width: 1280px; }
 
 .qs-page { min-height: 100vh; background: var(--bg-page, #f5f6f8); }
 .qs-wrap { max-width: 1280px; margin: 0 auto; padding: 24px 20px 60px; }
@@ -187,4 +202,6 @@
   .qs-modal { padding: 10px; }
   .qs-modal-body { padding: 20px 18px 28px; }
   .qsm-head { margin: -20px -18px 16px; padding: 16px 18px 14px; border-radius: 14px 14px 0 0; }
+  /* 教程工具栏窄屏：隐藏“正在阅读”腾位置给视图切换 */
+  .tut-toolbar-meta { display: none; }
 }

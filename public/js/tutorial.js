@@ -309,6 +309,8 @@
   }
 
   function handleScroll() {
+    // 策略卡片视图激活时不统计阅读进度（正文被隐藏，滚动比会失真）
+    if (document.body.classList.contains('qs-active')) return;
     var y = window.scrollY || document.documentElement.scrollTop || 0;
     var max = maxScroll();
     var ratio = max > 0 ? clamp(y / max, 0, 1) : 0;

@@ -47,8 +47,7 @@ function renderAppHeader(page) {
         '<a href="daily-review.html" class="header-tab' + (page === 'daily' ? ' active' : '') + '" data-page="daily" title="每日盘后总结：纪律 / 大盘 / 心态 / 复盘笔记">📋 每日复盘</a>' +
         '<a href="diary2.html" class="header-tab' + (page === 'diary' ? ' active' : '') + '" data-page="diary" title="历史交易深度复盘：筛选 / 排序 / 单笔分析">📖 复盘总结</a>' +
         '<a href="backtest.html" class="header-tab' + (page === 'backtest' ? ' active' : '') + '" data-page="backtest" title="看着历史 K 线手动模拟买卖的练习工具">🎯 回测练习</a>' +
-        '<a href="tutorial.html" class="header-tab' + (page === 'tutorial' ? ' active' : '') + '" data-page="tutorial" title="量化教程 3.0 在线阅读：自动记录进度，登录后跨设备续读">📚 量化教程</a>' +
-        '<a href="quant-strategies.html" class="header-tab' + (page === 'strategies' ? ' active' : '') + '" data-page="strategies" title="量化教程 3.0 策略卡片：40 个策略的原理 / 规则 / 回测 / 原文代码与插图">🃏 策略卡片</a>' +
+        '<a href="tutorial.html" class="header-tab' + (page === 'tutorial' ? ' active' : '') + '" data-page="tutorial" title="量化教程 3.0 在线阅读 + 策略卡片：阅读进度同步，40 个策略原理/代码/回测">📚 量化教程</a>' +
         // 研报库界面已于 2026-10-20 下线：研报抓取与全文检索并入行情总览（easy-stock）的 AI 助手，
         // 数据仍在 research-hub/data/research.db，通过 MCP 工具检索。这里不再提供导航入口。
         '<a href="aihot.html" class="header-tab' + (page === 'aihot' ? ' active' : '') + '" data-page="aihot" title="AIHOT：精选资讯、全部动态、热点榜与 AI 日报">🤖 AIHOT</a>' +
