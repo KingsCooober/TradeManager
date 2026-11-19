@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="量化教程 3.0 策略卡片：40 个量化策略的原理、规则、回测、原文代码与插图，按策略族筛选浏览">
+<title>策略卡片 - Trade Manager</title>
+<link rel="stylesheet" href="css/main.css?v=23">
+<link rel="stylesheet" href="css/quant-strategies.css?v=1">
+</head>
+<body class="qs-page">
+
+<header class="app-header" id="appHeader"></header>
+
+<div class="qs-wrap">
+  <section class="qs-hero">
+    <div class="qs-hero-main">
+      <h2>🃏 量化策略卡片</h2>
+      <p>《量化教程 3.0》（豆瓜的投资笔记 · 聚宽实战）第六章全部 <strong id="qsTotalCount">40</strong> 个策略，按族分组。点击卡片查看原理、规则、回测、原文代码与插图。</p>
+    </div>
+    <div class="qs-hero-stats" id="qsHeroStats"></div>
+  </section>
+
+  <section class="qs-toolbar">
+    <div class="qs-chips" id="qsFamChips"></div>
+    <div class="qs-toolbar-right">
+      <input type="text" id="qsSearch" class="qs-search" placeholder="🔍 搜索策略名称 / 原理 / 规则..." autocomplete="off" aria-label="搜索策略">
+      <select id="qsSort" class="qs-sort" aria-label="排序方式">
+        <option value="order">教程顺序</option>
+        <option value="cagr">年化收益 ↓</option>
+        <option value="dd">最大回撤 ↑</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="qs-grid" id="qsGrid" aria-live="polite"></section>
+  <div class="qs-empty" id="qsEmpty" hidden>没有匹配的策略</div>
+</div>
+
+<!-- 策略详情浮层 -->
+<div class="qs-modal" id="qsModal" hidden>
+  <div class="qs-modal-mask" data-qs-close></div>
+  <div class="qs-modal-card" role="dialog" aria-modal="true" aria-labelledby="qsModalTitle">
+    <button type="button" class="qs-modal-close" data-qs-close aria-label="关闭">✕</button>
+    <div class="qs-modal-body" id="qsModalBody"></div>
+  </div>
+</div>
+
+<!-- 插图灯箱 -->
+<div class="qs-lightbox" id="qsLightbox" hidden><img alt="放大的策略插图"></div>
+
+<script src="js/utils.js?v=12"></script>
+<script src="js/store.js?v=2"></script>
+<script src="js/header.js?v=21"></script>
+<script src="js/quant-strategies-data.js?v=1"></script>
+<script src="js/quant-strategies.js?v=1"></script>
+<script>
+  renderAppHeader('strategies');
+</script>
+</body>
+</html>

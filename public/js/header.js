@@ -48,6 +48,7 @@ function renderAppHeader(page) {
         '<a href="diary2.html" class="header-tab' + (page === 'diary' ? ' active' : '') + '" data-page="diary" title="历史交易深度复盘：筛选 / 排序 / 单笔分析">📖 复盘总结</a>' +
         '<a href="backtest.html" class="header-tab' + (page === 'backtest' ? ' active' : '') + '" data-page="backtest" title="看着历史 K 线手动模拟买卖的练习工具">🎯 回测练习</a>' +
         '<a href="tutorial.html" class="header-tab' + (page === 'tutorial' ? ' active' : '') + '" data-page="tutorial" title="量化教程 3.0 在线阅读：自动记录进度，登录后跨设备续读">📚 量化教程</a>' +
+        '<a href="quant-strategies.html" class="header-tab' + (page === 'strategies' ? ' active' : '') + '" data-page="strategies" title="量化教程 3.0 策略卡片：40 个策略的原理 / 规则 / 回测 / 原文代码与插图">🃏 策略卡片</a>' +
         // 研报库界面已于 2026-10-20 下线：研报抓取与全文检索并入行情总览（easy-stock）的 AI 助手，
         // 数据仍在 research-hub/data/research.db，通过 MCP 工具检索。这里不再提供导航入口。
         '<a href="aihot.html" class="header-tab' + (page === 'aihot' ? ' active' : '') + '" data-page="aihot" title="AIHOT：精选资讯、全部动态、热点榜与 AI 日报">🤖 AIHOT</a>' +
@@ -63,14 +64,14 @@ function renderAppHeader(page) {
     '</div>' +
     '<div class="header-right">' +
       // 同步指示灯/状态条只在加载了 sync.js 的页面有意义：
-      // research / tutorial 页未加载 sync.js，渲染成永久 idle 的死点只会误导
-      ((page === 'research' || page === 'tutorial') ? '' :
+      // research / tutorial / strategies 页未加载 sync.js，渲染成永久 idle 的死点只会误导
+      ((page === 'research' || page === 'tutorial' || page === 'strategies') ? '' :
         '<span id="syncIndicator" class="sync-indicator sync-indicator-idle" title="从未同步" aria-label="同步状态">●</span>' +
         '<div id="syncStatus" class="sync-status-inline" aria-live="polite"></div>') +
       // 搜索框只在实现了 window.performGlobalSearch 的页面渲染
       // （index=交易记录 / daily-review / diary2 / backtest=历史回测）；
       // research（内容在 iframe 内）与 aihot（服务端搜索未实现）渲染出来只会永远"未找到匹配项"
-      (page === 'research' || page === 'aihot' || page === 'tutorial' ? '' :
+      (page === 'research' || page === 'aihot' || page === 'tutorial' || page === 'strategies' ? '' :
         '<div class="header-search-wrapper">' +
           '<input type="text" id="globalSearchInput" class="header-search-input" placeholder="🔍 搜索..." autocomplete="off" aria-label="全局搜索" />' +
           '<div id="globalSearchResults" class="header-search-results" style="display:none;"></div>' +
@@ -79,7 +80,7 @@ function renderAppHeader(page) {
         '<span class="header-user-badge">👤 <span id="headerUsername">-</span></span>' +
         // 同步/自动同步按钮依赖 sync.js 的 handleFullSync/handleToggleAutoSync——
         // research 页未加载 sync.js，渲染出来点击即 ReferenceError，按页裁剪
-        (page === 'research' || page === 'tutorial' ? '' :
+        (page === 'research' || page === 'tutorial' || page === 'strategies' ? '' :
           '<button type="button" class="btn btn-sm btn-primary" onclick="handleFullSync()" aria-label="立即同步">🔄 同步</button>' +
           '<button type="button" class="btn btn-sm btn-ghost" onclick="handleToggleAutoSync()" id="headerBtnAutoSync" aria-label="切换自动同步">自动: 关</button>') +
         '<button type="button" class="btn btn-sm btn-ghost" onclick="openAppSettings()" aria-label="设置">⚙️ 设置</button>' +
