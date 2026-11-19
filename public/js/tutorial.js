@@ -176,6 +176,10 @@
       var link = event.target.closest('a[data-target]');
       if (!link) return;
       event.preventDefault();
+      // 卡片视图下点目录：先切回正文视图再跳转
+      if (document.body.classList.contains('qs-active') && window.QSViewSet) {
+        window.QSViewSet(false);
+      }
       scrollToAnchor(link.getAttribute('data-target'));
       closeSidebar();
     });
@@ -330,11 +334,45 @@
   }
 
   // ── 恢复 / 重置 ──
+  // 正文 328 张图全部懒加载：滚动途中图片陆续加载会不断改变文档高度，
+  // 一次性 smooth 滚动会停在点击瞬间算出的过时坐标。这里先直接跳到目标，
+  // 再持续跟随锚点真实位置校正，直到稳定、超时或用户手动滚动打断。
+  var anchorFollowRAF = 0;
+  function stopAnchorFollow() {
+    if (anchorFollowRAF) { cancelAnimationFrame(anchorFollowRAF); anchorFollowRAF = 0; }
+  }
+  function anchorTargetTop(el) {
+    return Math.max(0, absoluteTop(el) - 110);
+  }
   function scrollToAnchor(id) {
     var el = document.getElementById(id);
     if (!el) return;
-    window.scrollTo({ top: Math.max(0, absoluteTop(el) - 110), behavior: 'smooth' });
+    stopAnchorFollow();
+    window.scrollTo({ top: anchorTargetTop(el) });
+    var startedAt = Date.now();
+    var stableMs = 0;
+    var lastTick = 0;
+    var tick = function (now) {
+      anchorFollowRAF = 0;
+      var target = anchorTargetTop(el);
+      var cur = window.scrollY || document.documentElement.scrollTop;
+      if (Math.abs(target - cur) > 4) {
+        window.scrollTo({ top: target });
+        stableMs = 0;
+      } else {
+        stableMs += (now - lastTick);
+      }
+      lastTick = now;
+      if (stableMs >= 700 || Date.now() - startedAt > 8000) return; // 已稳定或超时
+      anchorFollowRAF = requestAnimationFrame(tick);
+    };
+    lastTick = performance.now();
+    anchorFollowRAF = requestAnimationFrame(tick);
   }
+  // 用户主动滚动/滚轮/按键时中断跟随，避免抢占滚动权
+  ['wheel', 'touchmove', 'keydown'].forEach(function (evt) {
+    window.addEventListener(evt, stopAnchorFollow, { passive: true });
+  });
 
   function showResume(data) {
     var pct = Math.round((Number(data.maxRatio) || Number(data.ratio) || 0) * 100);
